@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  默认只允许 HTTPS。明文 HTTP 只放行给：
+  - 本机回环（Termux 里的 Hermes，SSH 隧道的本地端口）
+  - 局域网和 Tailscale/ZeroTier 地址。这类地址无法在这里按网段列出，
+    所以由连接层在运行时检查目标地址（见计划 3.1），这里先整体放开明文，
+    等真实网络层接入后再收紧。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,435 @@
+package com.hermes.mobile.ui.chat
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.AccountTree
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.ImageRef
+import com.hermes.mobile.data.model.Role
+import com.hermes.mobile.data.model.RunPhase
+import com.hermes.mobile.data.model.Session
+import com.hermes.mobile.ui.LocalShowMessage
+import com.hermes.mobile.ui.chats.ActionSheet
+import com.hermes.mobile.ui.chats.RenameDialog
+import com.hermes.mobile.ui.chats.SheetAction
+import com.hermes.mobile.ui.components.EmptyState
+import com.hermes.mobile.ui.components.NoInsets
+import com.hermes.mobile.ui.components.SessionAvatar
+import com.hermes.mobile.ui.components.dayLabel
+import com.hermes.mobile.ui.components.sameDay
+import com.hermes.mobile.ui.rememberPlaceholder
+import kotlinx.coroutines.launch
+
+/** 聊天列表里的一行：日期分隔、一条消息/卡片、正在输入、正在逐字生成。 */
+private sealed interface ChatRow {
+    val key: String
+
+    data class Date(val label: String) : ChatRow { override val key = "date-$label" }
+    data class Item(val item: ChatItem, val first: Boolean, val last: Boolean) : ChatRow { override val key = item.id }
+    data object Typing : ChatRow { override val key = "typing" }
+    data class Streaming(val text: String) : ChatRow { override val key = "streaming" }
+}
+
+private const val GROUP_WINDOW_MS = 3 * 60_000L
+
+private fun buildRows(items: List<ChatItem>, phase: RunPhase, streaming: String?, showTyping: Boolean): List<ChatRow> {
+    val rows = mutableListOf<ChatRow>()
+    items.forEachIndexed { index, item ->
+        val prev = items.getOrNull(index - 1)
+        val next = items.getOrNull(index + 1)
+        if (prev == null || !sameDay(prev.time, item.time)) rows += ChatRow.Date(dayLabel(item.time))
+        fun sameGroup(a: ChatItem?, b: ChatItem?): Boolean =
+            a is ChatItem.Message && b is ChatItem.Message && a.role == b.role &&
+                kotlin.math.abs(a.time - b.time) < GROUP_WINDOW_MS && sameDay(a.time, b.time)
+        rows += ChatRow.Item(item, first = !sameGroup(prev, item), last = !sameGroup(item, next))
+    }
+    when {
+        streaming != null -> rows += ChatRow.Streaming(streaming)
+        phase == RunPhase.Working && showTyping -> rows += ChatRow.Typing
+    }
+    return rows
+}
+
+@Composable
+fun ChatScreen(
+    repository: HermesRepository,
+    sessionId: String,
+    onBack: () -> Unit,
+    onOpenChat: (String) -> Unit,
+) {
+    val session by remember(sessionId) { repository.session(sessionId) }.collectAsState(initial = null)
+    val items by remember(sessionId) { repository.chatItems(sessionId) }.collectAsState(initial = emptyList())
+    val phase by remember(sessionId) { repository.runPhase(sessionId) }.collectAsState(initial = RunPhase.Idle)
+    val streaming by remember(sessionId) { repository.streamingText(sessionId) }.collectAsState(initial = null)
+    val settings by repository.settings.collectAsState()
+    val models by repository.models.collectAsState()
+
+    var draft by rememberSaveable(sessionId) { mutableStateOf("") }
+    var attachments by remember(sessionId) { mutableStateOf(listOf<ImageRef>()) }
+    var showModels by remember { mutableStateOf(false) }
+    var showAttach by remember { mutableStateOf(false) }
+    var showRename by remember { mutableStateOf(false) }
+    var actionTarget by remember { mutableStateOf<ChatItem.Message?>(null) }
+
+    val showMessage = LocalShowMessage.current
+    val placeholder = rememberPlaceholder()
+    @Suppress("DEPRECATION")
+    val clipboard = LocalClipboardManager.current
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+
+    val rows = remember(items, phase, streaming, settings.showTyping) {
+        buildRows(items, phase, streaming, settings.showTyping).asReversed()
+    }
+
+    fun send() {
+        repository.sendMessage(sessionId, draft.trim(), attachments)
+        draft = ""
+        attachments = emptyList()
+        scope.launch { listState.animateScrollToItem(0) }
+    }
+
+    Scaffold(
+        contentWindowInsets = NoInsets,
+        topBar = {
+            ChatTopBar(
+                session = session,
+                phase = phase,
+                onBack = onBack,
+                onModelClick = { if (session?.readOnly == false) showModels = true },
+                onRename = { showRename = true },
+                onFork = { onOpenChat(repository.forkSession(sessionId, null)) },
+                onSearch = { placeholder("会话内搜索") },
+                onDiagnostics = { placeholder("查看原始事件（诊断模式）") },
+                onDelete = {
+                    repository.deleteSession(sessionId)
+                    onBack()
+                },
+            )
+        },
+        bottomBar = {
+            val current = session
+            if (current != null && current.readOnly) {
+                ReadOnlyBar(current.source.label, onFork = { onOpenChat(repository.forkSession(sessionId, null)) })
+            } else {
+                ChatInputBar(
+                    text = draft,
+                    onTextChange = { draft = it },
+                    attachments = attachments,
+                    onRemoveAttachment = { image -> attachments = attachments - image },
+                    onAttach = { showAttach = true },
+                    mode = if (phase == RunPhase.Working) SendButtonMode.Stop else SendButtonMode.Send,
+                    onSend = ::send,
+                    onStop = { repository.stop(sessionId) },
+                    enterToSend = settings.enterToSend,
+                )
+            }
+        },
+    ) { padding ->
+        BoxWithConstraints(
+            Modifier
+                .padding(padding)
+                .fillMaxSize(),
+        ) {
+            val bubbleWidth = maxWidth
+            if (items.isEmpty() && phase == RunPhase.Idle) {
+                NewChatHint(Modifier.align(Alignment.Center))
+            }
+            MessageList(
+                rows = rows,
+                listState = listState,
+                maxWidth = bubbleWidth,
+                onLongPress = { actionTarget = it },
+                onRetry = { repository.retryMessage(sessionId, it.id) },
+                onCopyCode = { showMessage("代码已复制") },
+                onApprove = { item, choice -> repository.resolveApproval(sessionId, item.id, choice) },
+                onAnswer = { item, answer -> repository.answerClarify(sessionId, item.id, answer) },
+            )
+            JumpToBottom(listState, Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
+                scope.launch { listState.animateScrollToItem(0) }
+            }
+        }
+    }
+
+    if (showModels) {
+        ModelPickerSheet(
+            models = models,
+            selectedName = session?.model,
+            onSelect = {
+                repository.setSessionModel(sessionId, it.id)
+                showModels = false
+            },
+            onDismiss = { showModels = false },
+        )
+    }
+
+    if (showAttach) {
+        AttachSheet(
+            onPickPhotos = {
+                showAttach = false
+                // 占位：真实实现用系统 Photo Picker
+                attachments = attachments + listOf(
+                    ImageRef("pick-${attachments.size}-a", (0..360).random().toFloat(), 1.3f),
+                    ImageRef("pick-${attachments.size}-b", (0..360).random().toFloat(), 0.8f),
+                )
+            },
+            onCamera = {
+                showAttach = false
+                placeholder("拍照")
+            },
+            onDismiss = { showAttach = false },
+        )
+    }
+
+    if (showRename) {
+        RenameDialog(
+            initial = session?.title.orEmpty(),
+            onDismiss = { showRename = false },
+            onConfirm = {
+                repository.renameSession(sessionId, it)
+                showRename = false
+            },
+        )
+    }
+
+    actionTarget?.let { message ->
+        val readOnly = session?.readOnly == true
+        ActionSheet(
+            title = null,
+            onDismiss = { actionTarget = null },
+            actions = buildList {
+                add(SheetAction("复制", Icons.Rounded.ContentCopy, {
+                    clipboard.setText(AnnotatedString(message.text))
+                    showMessage("已复制")
+                }))
+                if (message.role == Role.Assistant && !readOnly) {
+                    add(SheetAction("重新生成", Icons.Rounded.Refresh, { repository.regenerate(sessionId, message.id) }))
+                }
+                add(SheetAction("从这里分叉", Icons.Rounded.AccountTree, { onOpenChat(repository.forkSession(sessionId, message.id)) }))
+                if (!readOnly) {
+                    add(SheetAction("删除", Icons.Rounded.Delete, { repository.deleteItem(sessionId, message.id) }, destructive = true))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun MessageList(
+    rows: List<ChatRow>,
+    listState: LazyListState,
+    maxWidth: Dp,
+    onLongPress: (ChatItem.Message) -> Unit,
+    onRetry: (ChatItem.Message) -> Unit,
+    onCopyCode: (String) -> Unit,
+    onApprove: (ChatItem.Approval, String) -> Unit,
+    onAnswer: (ChatItem.Clarify, String) -> Unit,
+) {
+    // reverseLayout：最新的消息在底部，新消息进来时自然贴底
+    LazyColumn(
+        state = listState,
+        reverseLayout = true,
+        contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        items(rows, key = { it.key }, contentType = { it::class }) { row ->
+            Box(Modifier.animateItem()) {
+                when (row) {
+                    is ChatRow.Date -> DateSeparator(row.label)
+                    is ChatRow.Typing -> TypingRow()
+                    is ChatRow.Streaming -> StreamingRow(row.text, maxWidth)
+                    is ChatRow.Item -> when (val item = row.item) {
+                        is ChatItem.Message -> MessageBubble(
+                            message = item,
+                            first = row.first,
+                            last = row.last,
+                            maxWidth = maxWidth,
+                            onLongPress = { onLongPress(item) },
+                            onRetry = { onRetry(item) },
+                            onCopyCode = onCopyCode,
+                        )
+                        is ChatItem.Approval -> ApprovalCard(item) { onApprove(item, it) }
+                        is ChatItem.Clarify -> ClarifyCard(item) { onAnswer(item, it) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun JumpToBottom(listState: LazyListState, modifier: Modifier, onClick: () -> Unit) {
+    val show by remember { derivedStateOf { listState.firstVisibleItemIndex > 2 } }
+    AnimatedVisibility(show, modifier = modifier, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
+        SmallFloatingActionButton(
+            onClick = onClick,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "回到最新")
+        }
+    }
+}
+
+@Composable
+private fun NewChatHint(modifier: Modifier = Modifier) {
+    EmptyState(
+        Icons.Rounded.AutoAwesome,
+        "开始新对话",
+        "像发消息一样告诉 Hermes 你要做什么。\n它只会把结果发给你，需要你确认时会弹出卡片。",
+        modifier = modifier,
+    )
+}
+
+@Composable
+private fun ChatTopBar(
+    session: Session?,
+    phase: RunPhase,
+    onBack: () -> Unit,
+    onModelClick: () -> Unit,
+    onRename: () -> Unit,
+    onFork: () -> Unit,
+    onSearch: () -> Unit,
+    onDiagnostics: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Column {
+        TopAppBar(
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+            navigationIcon = {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回") }
+            },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SessionAvatar(session?.title ?: "", size = 38.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.clickable(onClick = onModelClick)) {
+                        Text(
+                            session?.title ?: "",
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        AnimatedContent(
+                            targetState = phase,
+                            transitionSpec = { fadeIn() togetherWith fadeOut() },
+                            label = "subtitle",
+                        ) { current ->
+                            when {
+                                current == RunPhase.Working -> Subtitle("正在输入…", MaterialTheme.colorScheme.primary)
+                                current == RunPhase.AwaitingInput -> Subtitle("等待你的确认", MaterialTheme.colorScheme.tertiary)
+                                session?.readOnly == true -> Subtitle("${session?.source?.label} 会话 · 只读", MaterialTheme.colorScheme.onSurfaceVariant)
+                                else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Subtitle(session?.model ?: "默认模型", MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Icon(
+                                        Icons.Rounded.ExpandMore,
+                                        contentDescription = "切换模型",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            actions = {
+                IconButton(onClick = onSearch) { Icon(Icons.Rounded.Search, contentDescription = "搜索") }
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, contentDescription = "更多") }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        val readOnly = session?.readOnly == true
+                        DropdownMenuItem(
+                            text = { Text("重命名") },
+                            leadingIcon = { Icon(Icons.Rounded.Edit, null) },
+                            enabled = !readOnly,
+                            onClick = { menu = false; onRename() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("分叉会话") },
+                            leadingIcon = { Icon(Icons.Rounded.AccountTree, null) },
+                            onClick = { menu = false; onFork() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("查看原始事件") },
+                            leadingIcon = { Icon(Icons.Rounded.BugReport, null) },
+                            onClick = { menu = false; onDiagnostics() },
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("删除会话", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = { Icon(Icons.Rounded.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                            onClick = { menu = false; onDelete() },
+                        )
+                    }
+                }
+            },
+        )
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+    }
+}
+
+@Composable
+private fun Subtitle(text: String, color: androidx.compose.ui.graphics.Color) {
+    Text(text, style = MaterialTheme.typography.labelMedium, color = color, maxLines = 1)
+}
