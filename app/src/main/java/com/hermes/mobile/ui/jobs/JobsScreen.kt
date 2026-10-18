@@ -1,5 +1,6 @@
 package com.hermes.mobile.ui.jobs
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,7 +14,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Error
@@ -23,7 +23,6 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
@@ -52,32 +51,43 @@ import com.hermes.mobile.ui.LocalShowMessage
 import com.hermes.mobile.ui.components.EmptyState
 import com.hermes.mobile.ui.components.IconBadge
 import com.hermes.mobile.ui.components.NoInsets
+import com.hermes.mobile.ui.glass.GlassTopBar
+import com.hermes.mobile.ui.glass.TransparentBarColors
+import com.hermes.mobile.ui.main.LocalBottomBarSpace
 import com.hermes.mobile.ui.theme.LocalHermesColors
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 @Composable
 fun JobsScreen(repository: HermesRepository, onEditJob: (String?) -> Unit) {
     val jobs by repository.jobs.collectAsState()
     val showMessage = LocalShowMessage.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val backdrop = rememberLayerBackdrop()
+    val bottomSpace = LocalBottomBarSpace.current
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         contentWindowInsets = NoInsets,
-        topBar = { LargeTopAppBar(title = { Text("定时任务") }, scrollBehavior = scrollBehavior) },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { onEditJob(null) },
-                icon = { Icon(Icons.Rounded.Add, null) },
-                text = { Text("新建任务") },
-            )
+        containerColor = Color.Transparent,
+        topBar = {
+            GlassTopBar(backdrop) {
+                LargeTopAppBar(title = { Text("定时任务") }, colors = TransparentBarColors(), scrollBehavior = scrollBehavior)
+            }
         },
     ) { padding ->
         LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = padding.calculateTopPadding() + 4.dp,
+                bottom = bottomSpace + 16.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
-                .padding(padding)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .layerBackdrop(backdrop)
+                .background(MaterialTheme.colorScheme.background),
         ) {
             item(key = "summary") { JobsSummary(jobs) }
             if (jobs.isEmpty()) {

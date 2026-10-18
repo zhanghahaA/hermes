@@ -2,6 +2,8 @@ package com.hermes.mobile.ui.chat
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -39,7 +41,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -49,11 +50,21 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.model.ImageRef
+import com.hermes.mobile.ui.glass.GlassCircleButton
+import com.hermes.mobile.ui.glass.GlassSurface
+import com.kyant.backdrop.Backdrop
 
 enum class SendButtonMode { Send, Stop }
 
+private val InputShape = RoundedCornerShape(26.dp)
+
+/**
+ * 悬浮的液态玻璃输入栏：左边圆形“+”按钮，右边是输入胶囊（发送/停止按钮嵌在胶囊里）。
+ * 跟随键盘上移，消息列表在它下面滚动。
+ */
 @Composable
 fun ChatInputBar(
+    backdrop: Backdrop,
     text: String,
     onTextChange: (String) -> Unit,
     attachments: List<ImageRef>,
@@ -66,55 +77,42 @@ fun ChatInputBar(
     placeholder: String = "给 Hermes 发消息",
 ) {
     val canSend = text.isNotBlank() || attachments.isNotEmpty()
-    Surface(color = MaterialTheme.colorScheme.surface) {
-        Column(
-            Modifier
-                .navigationBarsPadding()
-                .imePadding()
-                .padding(start = 8.dp, end = 8.dp, top = 6.dp, bottom = 8.dp),
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .imePadding()
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        GlassCircleButton(
+            backdrop = backdrop,
+            icon = Icons.Rounded.Add,
+            contentDescription = "添加图片",
+            onClick = onAttach,
+            size = 52.dp,
+            tint = MaterialTheme.colorScheme.onSurface,
+        )
+        GlassSurface(
+            backdrop = backdrop,
+            shape = InputShape,
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = 52.dp),
         ) {
-            AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(start = 48.dp, bottom = 8.dp),
-                ) {
-                    items(attachments, key = { it.id }) { image ->
-                        Box {
-                            ImagePlaceholder(image, Modifier.size(64.dp), RoundedCornerShape(12.dp))
-                            Box(
-                                Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(3.dp)
-                                    .size(20.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.75f)),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                IconButton(onClick = { onRemoveAttachment(image) }, modifier = Modifier.size(20.dp)) {
-                                    Icon(
-                                        Icons.Rounded.Close,
-                                        contentDescription = "移除图片",
-                                        tint = MaterialTheme.colorScheme.inverseOnSurface,
-                                        modifier = Modifier.size(14.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
+            // animateContentSize 会按矩形裁剪，放在玻璃里面，避免把玻璃的投影裁成方角
+            Column(Modifier.animateContentSize(spring(dampingRatio = 0.8f, stiffness = 500f))) {
+                AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                    AttachmentRow(attachments, onRemoveAttachment)
                 }
-            }
-            Row(verticalAlignment = Alignment.Bottom) {
-                IconButton(onClick = onAttach, modifier = Modifier.padding(bottom = 4.dp)) {
-                    Icon(Icons.Rounded.Add, contentDescription = "添加图片")
-                }
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp),
-                ) {
-                    Box(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), contentAlignment = Alignment.CenterStart) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .padding(start = 18.dp, end = 8.dp, top = 14.dp, bottom = 14.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
                         if (text.isEmpty()) {
                             Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -129,32 +127,71 @@ fun ChatInputBar(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
+                    SendStopButton(mode, canSend, onSend, onStop, Modifier.padding(end = 6.dp, bottom = 6.dp))
                 }
-                Box(Modifier.padding(start = 6.dp, bottom = 0.dp)) {
-                    AnimatedContent(
-                        targetState = mode,
-                        transitionSpec = { (scaleIn() + fadeIn()) togetherWith (scaleOut() + fadeOut()) },
-                        label = "send-stop",
-                    ) { current ->
-                        when (current) {
-                            SendButtonMode.Send -> FilledIconButton(
-                                onClick = onSend,
-                                enabled = canSend,
-                                modifier = Modifier.size(48.dp),
-                            ) {
-                                Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "发送")
-                            }
-                            SendButtonMode.Stop -> FilledIconButton(
-                                onClick = onStop,
-                                colors = IconButtonDefaults.filledIconButtonColors(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                ),
-                                modifier = Modifier.size(48.dp),
-                            ) {
-                                Icon(Icons.Rounded.Stop, contentDescription = "停止")
-                            }
-                        }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SendStopButton(mode: SendButtonMode, canSend: Boolean, onSend: () -> Unit, onStop: () -> Unit, modifier: Modifier) {
+    AnimatedContent(
+        targetState = mode,
+        transitionSpec = { (scaleIn(spring(dampingRatio = 0.55f)) + fadeIn()) togetherWith (scaleOut() + fadeOut()) },
+        modifier = modifier,
+        label = "send-stop",
+    ) { current ->
+        when (current) {
+            SendButtonMode.Send -> FilledIconButton(
+                onClick = onSend,
+                enabled = canSend,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    disabledContainerColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                ),
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "发送", modifier = Modifier.size(20.dp))
+            }
+            SendButtonMode.Stop -> FilledIconButton(
+                onClick = onStop,
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.onSurface,
+                    contentColor = MaterialTheme.colorScheme.surface,
+                ),
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(Icons.Rounded.Stop, contentDescription = "停止", modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentRow(attachments: List<ImageRef>, onRemove: (ImageRef) -> Unit) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 10.dp),
+    ) {
+        items(attachments, key = { it.id }) { image ->
+            Box {
+                ImagePlaceholder(image, Modifier.size(64.dp), RoundedCornerShape(16.dp))
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(3.dp)
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.75f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    IconButton(onClick = { onRemove(image) }, modifier = Modifier.size(20.dp)) {
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = "移除图片",
+                            tint = MaterialTheme.colorScheme.inverseOnSurface,
+                            modifier = Modifier.size(14.dp),
+                        )
                     }
                 }
             }
@@ -162,25 +199,26 @@ fun ChatInputBar(
     }
 }
 
-/** 只读会话（CLI/TUI/Telegram 创建）底部替代输入栏的提示。 */
+/** 只读会话（CLI/TUI/Telegram 创建）：悬浮玻璃提示条，替代输入栏。 */
 @Composable
-fun ReadOnlyBar(sourceLabel: String, onFork: () -> Unit) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(start = 20.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+fun ReadOnlyBar(backdrop: Backdrop, sourceLabel: String, onFork: () -> Unit) {
+    GlassSurface(
+        backdrop = backdrop,
+        shape = CircleShape,
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+    ) {
+        Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Rounded.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
             Text(
-                "这个会话来自 $sourceLabel，手机上只能查看",
+                "来自 $sourceLabel，只能查看",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 10.dp),
             )
             FilledTonalButton(onClick = onFork) { Text("分叉后继续") }
         }

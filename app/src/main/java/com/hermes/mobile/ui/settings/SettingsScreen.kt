@@ -51,6 +51,13 @@ import com.hermes.mobile.ui.components.StatusDot
 import com.hermes.mobile.ui.components.connectionLabel
 import com.hermes.mobile.ui.components.icon
 import com.hermes.mobile.ui.rememberPlaceholder
+import com.hermes.mobile.ui.glass.GlassTopBar
+import com.hermes.mobile.ui.glass.TransparentBarColors
+import com.hermes.mobile.ui.main.LocalBottomBarSpace
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Color
 
 @Composable
 fun SettingsScreen(
@@ -64,18 +71,26 @@ fun SettingsScreen(
     val state by repository.connectionState.collectAsState()
     val placeholder = rememberPlaceholder()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val backdrop = rememberLayerBackdrop()
+    val bottomSpace = LocalBottomBarSpace.current
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         contentWindowInsets = NoInsets,
-        topBar = { LargeTopAppBar(title = { Text("设置") }, scrollBehavior = scrollBehavior) },
+        containerColor = Color.Transparent,
+        topBar = {
+            GlassTopBar(backdrop) {
+                LargeTopAppBar(title = { Text("设置") }, colors = TransparentBarColors(), scrollBehavior = scrollBehavior)
+            }
+        },
     ) { padding ->
         Column(
             Modifier
-                .padding(padding)
                 .fillMaxSize()
+                .layerBackdrop(backdrop)
+                .background(MaterialTheme.colorScheme.background)
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 32.dp),
+                .padding(top = padding.calculateTopPadding(), bottom = bottomSpace + 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             SettingsGroup("连接") {

@@ -42,10 +42,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -78,6 +76,16 @@ import com.hermes.mobile.ui.components.SessionAvatar
 import com.hermes.mobile.ui.components.dayLabel
 import com.hermes.mobile.ui.components.sameDay
 import com.hermes.mobile.ui.rememberPlaceholder
+import com.hermes.mobile.ui.glass.GlassCircleButton
+import com.hermes.mobile.ui.glass.GlassTopBar
+import com.hermes.mobile.ui.glass.TransparentBarColors
+import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import androidx.compose.foundation.background
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.launch
 
 /** 聊天列表里的一行：日期分隔、一条消息/卡片、正在输入、正在逐字生成。 */
@@ -149,63 +157,86 @@ fun ChatScreen(
         scope.launch { listState.animateScrollToItem(0) }
     }
 
+    val backdrop = rememberLayerBackdrop()
+    val density = LocalDensity.current
+    var bottomBarHeight by remember { mutableIntStateOf(0) }
+    val bottomBarSpace = with(density) { bottomBarHeight.toDp() }
+
     Scaffold(
         contentWindowInsets = NoInsets,
         topBar = {
-            ChatTopBar(
-                session = session,
-                phase = phase,
-                onBack = onBack,
-                onModelClick = { if (session?.readOnly == false) showModels = true },
-                onRename = { showRename = true },
-                onFork = { onOpenChat(repository.forkSession(sessionId, null)) },
-                onSearch = { placeholder("会话内搜索") },
-                onDiagnostics = { placeholder("查看原始事件（诊断模式）") },
-                onDelete = {
-                    repository.deleteSession(sessionId)
-                    onBack()
-                },
-            )
-        },
-        bottomBar = {
-            val current = session
-            if (current != null && current.readOnly) {
-                ReadOnlyBar(current.source.label, onFork = { onOpenChat(repository.forkSession(sessionId, null)) })
-            } else {
-                ChatInputBar(
-                    text = draft,
-                    onTextChange = { draft = it },
-                    attachments = attachments,
-                    onRemoveAttachment = { image -> attachments = attachments - image },
-                    onAttach = { showAttach = true },
-                    mode = if (phase == RunPhase.Working) SendButtonMode.Stop else SendButtonMode.Send,
-                    onSend = ::send,
-                    onStop = { repository.stop(sessionId) },
-                    enterToSend = settings.enterToSend,
+            GlassTopBar(backdrop) {
+                ChatTopBar(
+                    session = session,
+                    phase = phase,
+                    onBack = onBack,
+                    onModelClick = { if (session?.readOnly == false) showModels = true },
+                    onRename = { showRename = true },
+                    onFork = { onOpenChat(repository.forkSession(sessionId, null)) },
+                    onSearch = { placeholder("会话内搜索") },
+                    onDiagnostics = { placeholder("查看原始事件（诊断模式）") },
+                    onDelete = {
+                        repository.deleteSession(sessionId)
+                        onBack()
+                    },
                 )
             }
         },
     ) { padding ->
-        BoxWithConstraints(
-            Modifier
-                .padding(padding)
-                .fillMaxSize(),
-        ) {
-            val bubbleWidth = maxWidth
-            if (items.isEmpty() && phase == RunPhase.Idle) {
-                NewChatHint(Modifier.align(Alignment.Center))
+        Box(Modifier.fillMaxSize()) {
+            // 消息列表铺满整屏，滚到顶栏和悬浮输入框下面，两者从这里取样做玻璃
+            BoxWithConstraints(
+                Modifier
+                    .fillMaxSize()
+                    .layerBackdrop(backdrop)
+                    .background(MaterialTheme.colorScheme.background),
+            ) {
+                val bubbleWidth = maxWidth
+                if (items.isEmpty() && phase == RunPhase.Idle) {
+                    NewChatHint(Modifier.align(Alignment.Center))
+                }
+                MessageList(
+                    rows = rows,
+                    listState = listState,
+                    maxWidth = bubbleWidth,
+                    contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = bottomBarSpace + 12.dp),
+                    onLongPress = { actionTarget = it },
+                    onRetry = { repository.retryMessage(sessionId, it.id) },
+                    onCopyCode = { showMessage("代码已复制") },
+                    onApprove = { item, choice -> repository.resolveApproval(sessionId, item.id, choice) },
+                    onAnswer = { item, answer -> repository.answerClarify(sessionId, item.id, answer) },
+                )
             }
-            MessageList(
-                rows = rows,
-                listState = listState,
-                maxWidth = bubbleWidth,
-                onLongPress = { actionTarget = it },
-                onRetry = { repository.retryMessage(sessionId, it.id) },
-                onCopyCode = { showMessage("代码已复制") },
-                onApprove = { item, choice -> repository.resolveApproval(sessionId, item.id, choice) },
-                onAnswer = { item, answer -> repository.answerClarify(sessionId, item.id, answer) },
-            )
-            JumpToBottom(listState, Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .onSizeChanged { bottomBarHeight = it.height },
+            ) {
+                val current = session
+                if (current != null && current.readOnly) {
+                    ReadOnlyBar(backdrop, current.source.label, onFork = { onOpenChat(repository.forkSession(sessionId, null)) })
+                } else {
+                    ChatInputBar(
+                        backdrop = backdrop,
+                        text = draft,
+                        onTextChange = { draft = it },
+                        attachments = attachments,
+                        onRemoveAttachment = { image -> attachments = attachments - image },
+                        onAttach = { showAttach = true },
+                        mode = if (phase == RunPhase.Working) SendButtonMode.Stop else SendButtonMode.Send,
+                        onSend = ::send,
+                        onStop = { repository.stop(sessionId) },
+                        enterToSend = settings.enterToSend,
+                    )
+                }
+            }
+            JumpToBottom(
+                backdrop,
+                listState,
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = bottomBarSpace + 8.dp),
+            ) {
                 scope.launch { listState.animateScrollToItem(0) }
             }
         }
@@ -279,6 +310,7 @@ private fun MessageList(
     rows: List<ChatRow>,
     listState: LazyListState,
     maxWidth: Dp,
+    contentPadding: PaddingValues,
     onLongPress: (ChatItem.Message) -> Unit,
     onRetry: (ChatItem.Message) -> Unit,
     onCopyCode: (String) -> Unit,
@@ -289,7 +321,7 @@ private fun MessageList(
     LazyColumn(
         state = listState,
         reverseLayout = true,
-        contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp),
+        contentPadding = contentPadding,
         modifier = Modifier.fillMaxSize(),
     ) {
         items(rows, key = { it.key }, contentType = { it::class }) { row ->
@@ -318,15 +350,17 @@ private fun MessageList(
 }
 
 @Composable
-private fun JumpToBottom(listState: LazyListState, modifier: Modifier, onClick: () -> Unit) {
+private fun JumpToBottom(backdrop: Backdrop, listState: LazyListState, modifier: Modifier, onClick: () -> Unit) {
     val show by remember { derivedStateOf { listState.firstVisibleItemIndex > 2 } }
     AnimatedVisibility(show, modifier = modifier, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut()) {
-        SmallFloatingActionButton(
+        GlassCircleButton(
+            backdrop = backdrop,
+            icon = Icons.Rounded.KeyboardArrowDown,
+            contentDescription = "回到最新",
             onClick = onClick,
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        ) {
-            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "回到最新")
-        }
+            size = 44.dp,
+            tint = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
@@ -355,7 +389,7 @@ private fun ChatTopBar(
     var menu by remember { mutableStateOf(false) }
     Column {
         TopAppBar(
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = TransparentBarColors(),
             navigationIcon = {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回") }
             },
@@ -378,7 +412,7 @@ private fun ChatTopBar(
                             when {
                                 current == RunPhase.Working -> Subtitle("正在输入…", MaterialTheme.colorScheme.primary)
                                 current == RunPhase.AwaitingInput -> Subtitle("等待你的确认", MaterialTheme.colorScheme.tertiary)
-                                session?.readOnly == true -> Subtitle("${session?.source?.label} 会话 · 只读", MaterialTheme.colorScheme.onSurfaceVariant)
+                                session?.readOnly == true -> Subtitle("${session.source.label} 会话 · 只读", MaterialTheme.colorScheme.onSurfaceVariant)
                                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
                                     Subtitle(session?.model ?: "默认模型", MaterialTheme.colorScheme.onSurfaceVariant)
                                     Icon(
@@ -425,7 +459,6 @@ private fun ChatTopBar(
                 }
             },
         )
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
     }
 }
 

@@ -17,6 +17,13 @@
 | 连接编辑 | `ui/settings/ConnectionEditorScreen.kt` | 直连 / HTTPS / SSH 隧道 / 本机 Termux 四种方式，逐项“测试连接” |
 | 欢迎页 | `ui/welcome/WelcomeScreen.kt` | 首次使用时选择 Hermes 在哪里运行 |
 
+## 视觉与交互
+
+- **液态玻璃**（`ui/glass/`，基于 [Kyant0/backdrop](https://github.com/Kyant0/AndroidLiquidGlass)）：悬浮底栏、底栏右侧的圆形操作按钮、聊天输入框、回到最新按钮是带折射和高光的玻璃；各页顶栏是磨砂玻璃，内容会滚到它们下面。
+  - Android 13+：折射 + 模糊；Android 12：只有模糊；更早的系统退化为半透明底色。
+- **悬浮底栏**（`ui/main/FloatingTabBar.kt`）：切换 Tab 时选中块会像液体一样拉长再回弹；右侧圆形按钮随页面变化（聊天页是“新对话”，任务页是“新建任务”）。
+- **跟手返回动画**（`ui/navigation/Transitions.kt`）：系统返回手势拖动时，当前页缩小成圆角卡片并跟着手指移动，上一页从左侧滑回；松手完成返回，取消则弹回。
+
 ## 代码结构
 
 ```
@@ -39,7 +46,7 @@ app/src/main/java/com/hermes/mobile/
 
 ## 构建
 
-需要 JDK 17 和 Android SDK（API 36）。
+需要 JDK 17+ 和 Android SDK（API 37）。
 
 ```bash
 ./gradlew assembleDebug     # 调试包：app/build/outputs/apk/debug/app-debug.apk（约 19 MB）

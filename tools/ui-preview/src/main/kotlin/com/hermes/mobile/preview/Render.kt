@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.fake.FakeHermesRepository
@@ -129,9 +130,47 @@ private val scenes = listOf(
     Scene("18-settings-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
+    Scene("23-predictive-back") { repo, _ -> PredictiveBackStill(repo, progress = 0.4f) },
     Scene("21-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
     Scene("22-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
 )
+
+/**
+ * 预测性返回手势进行到一半的静帧（示意）。数值和 ui/navigation/Transitions.kt 里的
+ * backEnter / backExit / PredictiveBackCard 保持一致：当前页缩小、圆角、右移，上一页从左侧视差滑回。
+ */
+@Composable
+private fun PredictiveBackStill(repo: HermesRepository, progress: Float) {
+    val eased = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0f, 0f, 1f).transform(progress)
+    val late = androidx.compose.animation.core.CubicBezierEasing(0.55f, 0f, 1f, 1f).transform(progress)
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationX = -size.width / 4f * (1f - eased)
+                    val s = 0.96f + 0.04f * eased
+                    scaleX = s
+                    scaleY = s
+                    alpha = 0.6f + 0.4f * progress
+                },
+        ) { mainScreen(repo, MainTab.Chats)() }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    val s = 1f - 0.14f * eased
+                    scaleX = s
+                    scaleY = s
+                    translationX = size.width * late
+                    shape = RoundedCornerShape((32 * progress).dp)
+                    clip = true
+                    shadowElevation = 24.dp.toPx() * progress
+                }
+                .background(MaterialTheme.colorScheme.background),
+        ) { ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) }
+    }
+}
 
 /** 模拟一个展开的底部面板：底下是页面 + 半透明遮罩。 */
 @Composable

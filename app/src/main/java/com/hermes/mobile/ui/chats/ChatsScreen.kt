@@ -24,7 +24,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -34,7 +33,6 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Badge
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,11 +50,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import com.hermes.mobile.ui.glass.GlassTopBar
+import com.hermes.mobile.ui.glass.TransparentBarColors
+import com.hermes.mobile.ui.main.LocalBottomBarSpace
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -89,7 +93,6 @@ private enum class ChatFilter(val label: String) { All("全部"), Unread("未读
 fun ChatsScreen(
     repository: HermesRepository,
     onOpenChat: (String) -> Unit,
-    onNewChat: () -> Unit,
     onManageConnections: () -> Unit,
 ) {
     val sessions by repository.sessions.collectAsState()
@@ -109,7 +112,9 @@ fun ChatsScreen(
     val snackbar = remember { SnackbarHostState() }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val listState = rememberLazyListState()
-    val fabExpanded by remember { derivedStateOf { listState.firstVisibleItemIndex == 0 } }
+    val backdrop = rememberLayerBackdrop()
+    val bottomSpace = LocalBottomBarSpace.current
+    val pullState = rememberPullToRefreshState()
 
     val visible = sessions
         .filter { query.isBlank() || it.title.contains(query, true) || it.preview.contains(query, true) }
@@ -135,28 +140,24 @@ fun ChatsScreen(
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         contentWindowInsets = NoInsets,
-        snackbarHost = { SnackbarHost(snackbar) },
+        containerColor = Color.Transparent,
+        snackbarHost = { SnackbarHost(snackbar, Modifier.padding(bottom = bottomSpace)) },
         topBar = {
-            LargeTopAppBar(
-                title = { Text("聊天") },
-                actions = {
-                    ConnectionPill(
-                        name = active?.name ?: "未连接",
-                        state = connectionState,
-                        onClick = { showSwitcher = true },
-                        modifier = Modifier.padding(end = 12.dp),
-                    )
-                },
-                scrollBehavior = scrollBehavior,
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onNewChat,
-                expanded = fabExpanded,
-                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("新对话") },
-            )
+            GlassTopBar(backdrop) {
+                LargeTopAppBar(
+                    title = { Text("聊天") },
+                    actions = {
+                        ConnectionPill(
+                            name = active?.name ?: "未连接",
+                            state = connectionState,
+                            onClick = { showSwitcher = true },
+                            modifier = Modifier.padding(end = 12.dp),
+                        )
+                    },
+                    colors = TransparentBarColors(),
+                    scrollBehavior = scrollBehavior,
+                )
+            }
         },
     ) { padding ->
         PullToRefreshBox(
@@ -168,13 +169,24 @@ fun ChatsScreen(
                     refreshing = false
                 }
             },
+            state = pullState,
+            indicator = {
+                PullToRefreshDefaults.Indicator(
+                    state = pullState,
+                    isRefreshing = refreshing,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = padding.calculateTopPadding()),
+                )
+            },
             modifier = Modifier
-                .padding(padding)
-                .fillMaxSize(),
+                .fillMaxSize()
+                .layerBackdrop(backdrop)
+                .background(MaterialTheme.colorScheme.background),
         ) {
             LazyColumn(
                 state = listState,
-                contentPadding = PaddingValues(bottom = 96.dp),
+                contentPadding = PaddingValues(top = padding.calculateTopPadding() + 4.dp, bottom = bottomSpace + 16.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 if (connectionState is ConnectionState.Failed) {
@@ -210,7 +222,7 @@ fun ChatsScreen(
                             EmptyState(
                                 Icons.Rounded.Forum,
                                 "还没有对话",
-                                "点右下角的「新对话」，像发消息一样和 Hermes 聊天。",
+                                "点右下角的按钮开始新对话，像发消息一样和 Hermes 聊天。",
                             )
                         } else {
                             EmptyState(Icons.Rounded.SearchOff, "没有找到匹配的会话", "换个关键词，或者切换上面的筛选条件。")

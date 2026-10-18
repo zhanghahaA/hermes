@@ -1,13 +1,14 @@
 [versions]
-agp = "8.13.0"
-kotlin = "2.2.20"
-composeBom = "2025.10.00"
+agp = "9.4.1"
+kotlin = "2.4.21"
+composeBom = "2026.09.00"
 activityCompose = "1.10.1"
 coreKtx = "1.16.0"
 lifecycle = "2.9.0"
-navigation = "2.9.0"
+navigation = "2.9.8"
 serialization = "1.9.0"
 coroutines = "1.10.2"
+backdrop = "2.0.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -23,10 +24,10 @@ compose-foundation = { module = "androidx.compose.foundation:foundation" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+backdrop = { module = "io.github.kyant0:backdrop", version.ref = "backdrop" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

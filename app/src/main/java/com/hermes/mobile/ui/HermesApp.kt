@@ -1,9 +1,5 @@
 package com.hermes.mobile.ui
 
-import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -25,13 +21,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.ui.chat.ChatScreen
 import com.hermes.mobile.ui.jobs.JobEditorScreen
 import com.hermes.mobile.ui.main.MainScreen
+import com.hermes.mobile.ui.navigation.backEnter
+import com.hermes.mobile.ui.navigation.backExit
+import com.hermes.mobile.ui.navigation.forwardEnter
+import com.hermes.mobile.ui.navigation.forwardExit
+import com.hermes.mobile.ui.navigation.screen
 import com.hermes.mobile.ui.settings.ConnectionEditorScreen
 import com.hermes.mobile.ui.theme.HermesTheme
 import com.hermes.mobile.ui.welcome.WelcomeScreen
@@ -79,7 +79,7 @@ fun HermesApp(repository: HermesRepository) {
                             .align(Alignment.BottomCenter)
                             .navigationBarsPadding()
                             .imePadding()
-                            .padding(bottom = 84.dp),
+                            .padding(bottom = 100.dp),
                     ) { data -> Snackbar(data, shape = MaterialTheme.shapes.medium) }
                 }
             }
@@ -90,17 +90,16 @@ fun HermesApp(repository: HermesRepository) {
 @Composable
 private fun HermesNavHost(repository: HermesRepository) {
     val navController = rememberNavController()
-    val slide = tween<androidx.compose.ui.unit.IntOffset>(320)
 
     NavHost(
         navController = navController,
         startDestination = MainRoute,
-        enterTransition = { slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Start, slide) + fadeIn(tween(220)) },
-        exitTransition = { fadeOut(tween(200)) },
-        popEnterTransition = { fadeIn(tween(220)) },
-        popExitTransition = { slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.End, slide) + fadeOut(tween(220)) },
+        enterTransition = forwardEnter,
+        exitTransition = forwardExit,
+        popEnterTransition = backEnter,
+        popExitTransition = backExit,
     ) {
-        composable<MainRoute> {
+        screen<MainRoute> {
             MainScreen(
                 repository = repository,
                 onOpenChat = { navController.navigate(ChatRoute(it)) },
@@ -109,7 +108,7 @@ private fun HermesNavHost(repository: HermesRepository) {
                 onOpenWelcome = { navController.navigate(WelcomeRoute) },
             )
         }
-        composable<ChatRoute> { entry ->
+        screen<ChatRoute> { entry ->
             val route = entry.toRoute<ChatRoute>()
             ChatScreen(
                 repository = repository,
@@ -120,7 +119,7 @@ private fun HermesNavHost(repository: HermesRepository) {
                 },
             )
         }
-        composable<ConnectionEditRoute> { entry ->
+        screen<ConnectionEditRoute> { entry ->
             val route = entry.toRoute<ConnectionEditRoute>()
             ConnectionEditorScreen(
                 repository = repository,
@@ -129,14 +128,14 @@ private fun HermesNavHost(repository: HermesRepository) {
                 onClose = { navController.popBackStack() },
             )
         }
-        composable<JobEditRoute> { entry ->
+        screen<JobEditRoute> { entry ->
             JobEditorScreen(
                 repository = repository,
                 jobId = entry.toRoute<JobEditRoute>().jobId,
                 onClose = { navController.popBackStack() },
             )
         }
-        composable<WelcomeRoute> {
+        screen<WelcomeRoute> {
             WelcomeScreen(
                 onPickType = { type ->
                     navController.navigate(ConnectionEditRoute(type = type.name)) { popUpTo<MainRoute>() }

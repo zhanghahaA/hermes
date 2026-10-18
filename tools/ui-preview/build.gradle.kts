@@ -1,8 +1,8 @@
 plugins {
-    kotlin("jvm") version "2.2.20"
-    kotlin("plugin.compose") version "2.2.20"
-    kotlin("plugin.serialization") version "2.2.20"
-    id("org.jetbrains.compose") version "1.9.3"
+    kotlin("jvm") version "2.4.21"
+    kotlin("plugin.compose") version "2.4.21"
+    kotlin("plugin.serialization") version "2.4.21"
+    id("org.jetbrains.compose") version "1.12.2"
     application
 }
 
@@ -30,9 +30,10 @@ sourceSets {
 
 dependencies {
     implementation(compose.desktop.currentOs)
-    implementation(compose.material3)
-    implementation(compose.materialIconsExtended)
-    implementation("org.jetbrains.androidx.navigation:navigation-compose:2.9.1")
+    implementation("org.jetbrains.compose.material3:material3:1.9.0")
+    implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
+    implementation("org.jetbrains.androidx.navigation:navigation-compose:2.9.2")
+    implementation("io.github.kyant0:backdrop:2.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
 }

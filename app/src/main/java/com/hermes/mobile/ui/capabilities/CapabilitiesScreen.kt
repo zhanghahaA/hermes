@@ -49,18 +49,29 @@ import com.hermes.mobile.ui.components.IconBadge
 import com.hermes.mobile.ui.components.NoInsets
 import com.hermes.mobile.ui.components.TagLabel
 import com.hermes.mobile.ui.rememberPlaceholder
+import com.hermes.mobile.ui.glass.GlassTopBar
+import com.hermes.mobile.ui.glass.TransparentBarColors
+import com.hermes.mobile.ui.main.LocalBottomBarSpace
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.graphics.Color
 
 private val tabs = listOf("模型", "技能", "工具集", "更多")
 
 @Composable
 fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0) {
     var tab by rememberSaveable { mutableIntStateOf(initialTab) }
+    val backdrop = rememberLayerBackdrop()
+    val bottomSpace = LocalBottomBarSpace.current
     Scaffold(
         contentWindowInsets = NoInsets,
+        containerColor = Color.Transparent,
         topBar = {
-            Column {
-                TopAppBar(title = { Text("能力") })
-                PrimaryTabRow(selectedTabIndex = tab) {
+            GlassTopBar(backdrop) {
+                TopAppBar(title = { Text("能力") }, colors = TransparentBarColors())
+                PrimaryTabRow(selectedTabIndex = tab, containerColor = Color.Transparent) {
                     tabs.forEachIndexed { index, title ->
                         Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title) })
                     }
@@ -68,23 +79,29 @@ fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0) {
             }
         },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
+        val contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = bottomSpace + 8.dp)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .layerBackdrop(backdrop)
+                .background(MaterialTheme.colorScheme.background),
+        ) {
             when (tab) {
-                0 -> ModelsTab(repository)
-                1 -> SkillsTab(repository)
-                2 -> ToolsetsTab(repository)
-                else -> MoreTab()
+                0 -> ModelsTab(repository, contentPadding)
+                1 -> SkillsTab(repository, contentPadding)
+                2 -> ToolsetsTab(repository, contentPadding)
+                else -> MoreTab(contentPadding)
             }
         }
     }
 }
 
 @Composable
-private fun ModelsTab(repository: HermesRepository) {
+private fun ModelsTab(repository: HermesRepository, contentPadding: PaddingValues) {
     val models by repository.models.collectAsState()
     val defaultId by repository.defaultModelId.collectAsState()
     val current = models.firstOrNull { it.id == defaultId }
-    Column(Modifier.verticalScroll(rememberScrollState())) {
+    Column(Modifier.verticalScroll(rememberScrollState()).padding(contentPadding)) {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
             modifier = Modifier
@@ -120,9 +137,9 @@ private fun ModelsTab(repository: HermesRepository) {
 }
 
 @Composable
-private fun SkillsTab(repository: HermesRepository) {
+private fun SkillsTab(repository: HermesRepository, contentPadding: PaddingValues) {
     val skills by repository.skills.collectAsState()
-    LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+    LazyColumn(contentPadding = contentPadding) {
         item {
             Text(
                 "Hermes 已安装的技能，聊天时它会自动选用。安装和删除需要在电脑上操作。",
@@ -143,9 +160,9 @@ private fun SkillsTab(repository: HermesRepository) {
 }
 
 @Composable
-private fun ToolsetsTab(repository: HermesRepository) {
+private fun ToolsetsTab(repository: HermesRepository, contentPadding: PaddingValues) {
     val toolsets by repository.toolsets.collectAsState()
-    LazyColumn(contentPadding = PaddingValues(vertical = 8.dp)) {
+    LazyColumn(contentPadding = contentPadding) {
         items(toolsets, key = { it.name }) { toolset ->
             ListItem(
                 leadingContent = { IconBadge(Icons.Rounded.Build) },
@@ -159,11 +176,12 @@ private fun ToolsetsTab(repository: HermesRepository) {
 
 /** API Server 管不到、需要通过 SSH 执行 hermes 命令的功能（计划 M5）。 */
 @Composable
-private fun MoreTab() {
+private fun MoreTab(contentPadding: PaddingValues) {
     val placeholder = rememberPlaceholder()
     Column(
         Modifier
             .verticalScroll(rememberScrollState())
+            .padding(contentPadding)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
