@@ -67,6 +67,8 @@ private class Scene(
     val prepare: (FakeHermesRepository) -> String? = { null },
     /** prepare 之后等待的真实时间，让假仓库里的 delay 走完。 */
     val waitMs: Long = 0,
+    /** 假仓库的回复延迟；截“正在输入”时调大，避免渲染期间回复已经到达。 */
+    val replyDelayMs: Long = 1200,
     val content: @Composable (HermesRepository, String?) -> Unit,
 )
 
@@ -83,6 +85,7 @@ private val scenes = listOf(
         "05-chat-typing",
         prepare = { it.sendMessage("s-2", "第二天下午有没有安静一点的咖啡馆？", emptyList()); null },
         waitMs = 600,
+        replyDelayMs = 60_000,
     ) { repo, _ -> ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {}) },
     Scene(
         "06-chat-approval",
@@ -201,7 +204,7 @@ fun main(args: Array<String>) {
     for (scene in scenes) {
         if (only.isNotEmpty() && only.none { scene.name.contains(it) }) continue
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val repo = FakeHermesRepository(scope)
+        val repo = FakeHermesRepository(scope, replyDelayMs = scene.replyDelayMs)
         val arg = scene.prepare(repo)
         if (scene.waitMs > 0) Thread.sleep(scene.waitMs)
 

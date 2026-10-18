@@ -37,6 +37,8 @@ import kotlinx.coroutines.launch
 class FakeHermesRepository(
     private val scope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** 模拟 Hermes 思考多久才回复。 */
+    private val replyDelayMs: Long = 1200,
 ) : HermesRepository {
 
     private var idSeq = 0
@@ -189,7 +191,7 @@ class FakeHermesRepository(
             delay(350)
             editItems(sessionId) { list -> list.map { if (it.id == message.id) message.copy(status = DeliveryStatus.Sent) else it } }
             setPhase(sessionId, RunPhase.Working)
-            delay(1200)
+            delay(replyDelayMs)
             if (NEEDS_APPROVAL.any { text.contains(it) }) {
                 editItems(sessionId) {
                     it + ChatItem.Approval(

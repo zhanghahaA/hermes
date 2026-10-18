@@ -16,12 +16,14 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
-      - name: Build debug APK
-        run: ./gradlew --no-configuration-cache assembleDebug
+      - name: Build APKs
+        run: ./gradlew --no-configuration-cache assembleDebug assembleRelease
       - uses: actions/upload-artifact@v4
         with:
-          name: hermes-mobile-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: hermes-mobile-apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
 
   ui-preview:
     name: 渲染界面截图

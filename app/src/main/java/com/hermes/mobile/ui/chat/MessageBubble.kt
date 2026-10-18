@@ -70,18 +70,18 @@ fun MessageBubble(
     val container = if (isUser) colors.userBubble else colors.assistantBubble
     val content = if (isUser) colors.onUserBubble else colors.onAssistantBubble
 
-    Row(
+    // 头像和气泡底边对齐，时间放在气泡下方（Hermes 一侧缩进到头像右边）
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 12.dp, end = 12.dp, top = if (first) 6.dp else 2.dp),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Bottom,
+        horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
     ) {
-        if (!isUser) {
-            if (last) HermesAvatar() else Spacer(Modifier.width(28.dp))
-            Spacer(Modifier.width(8.dp))
-        }
-        Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            if (!isUser) {
+                if (last) HermesAvatar() else Spacer(Modifier.width(28.dp))
+                Spacer(Modifier.width(8.dp))
+            }
             val shape = bubbleShape(message.role, first)
             Surface(
                 color = container,
@@ -113,18 +113,18 @@ fun MessageBubble(
                     }
                 }
             }
-            if (last || message.status != DeliveryStatus.Sent) {
-                MessageMeta(message, onRetry)
-            }
+        }
+        if (last || message.status != DeliveryStatus.Sent) {
+            MessageMeta(message, onRetry, Modifier.padding(start = if (isUser) 0.dp else AVATAR_GAP.dp))
         }
     }
 }
 
 @Composable
-private fun MessageMeta(message: ChatItem.Message, onRetry: () -> Unit) {
+private fun MessageMeta(message: ChatItem.Message, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
-        Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+        modifier.padding(horizontal = 6.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {

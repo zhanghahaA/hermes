@@ -42,8 +42,8 @@ app/src/main/java/com/hermes/mobile/
 需要 JDK 17 和 Android SDK（API 36）。
 
 ```bash
-./gradlew assembleDebug
-# 输出：app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug     # 调试包：app/build/outputs/apk/debug/app-debug.apk（约 19 MB）
+./gradlew assembleRelease   # 精简包：app/build/outputs/apk/release/app-release.apk（约 1.7 MB，暂用 debug 签名）
 ```
 
 推送到 GitHub 后，`.github/workflows/android.yml` 会自动构建 APK 并渲染界面截图，在 Actions 页面的 Artifacts 里下载。
