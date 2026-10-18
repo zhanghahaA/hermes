@@ -68,7 +68,7 @@ class ModelsJobsTest {
         val models = repo.models.await("模型清单") { it.isNotEmpty() }
         assertEquals(listOf("custom", "openrouter", "openrouter"), models.map { it.providerSlug }, "没登录的 Provider 不显示，当前的排最前")
         assertEquals("Hermes 默认", models.first().note)
-        assertEquals("custom:fake-model", repo.defaultModelId.value)
+        repo.defaultModelId.await("默认模型") { it == "custom:fake-model" }
         assertTrue(AppFeature.Models in repo.features.value)
     }
 
