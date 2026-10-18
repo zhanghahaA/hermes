@@ -118,6 +118,16 @@ class SkillsSteerTest {
     }
 
     @Test
+    fun secondMessageRightAfterTheFirstStillSteers() {
+        val s = server()
+        val repo = connected(s)
+        repo.sendMessage("s1", "慢慢查", emptyList())
+        repo.sendMessage("s1", "马上补一句", emptyList())
+        repo.chatItems("s1").await("插话后的回复") { list -> list.texts().any { it.second == "收到插话：马上补一句" } }
+        assertEquals(1, s.requests.count { it.path == "/v1/runs" }, "不能并行开第二轮")
+    }
+
+    @Test
     fun steerThatArrivesTooLateIsSentAsNextMessage() {
         val s = server()
         val repo = connected(s)

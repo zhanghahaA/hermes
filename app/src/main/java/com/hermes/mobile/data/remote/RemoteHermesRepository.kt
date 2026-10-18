@@ -926,9 +926,25 @@ class RemoteHermesRepository(
             files = attachments.displayFiles(),
         )
         val running = runs[key]
+        // 上一条刚发出、还没拿到这一轮的 id：等它开始，再按插话处理（不要并行开第二轮）
+        val starting = running == null && outbox.values.any { resolve(it.uiId) == key }
         updateChat(key) { it.copy(local = it.local + LocalEntry(message, it.messageCount), phase = if (running != null && it.phase == RunPhase.AwaitingInput) it.phase else RunPhase.Working, streaming = running?.let { _ -> it.streaming }) }
         outbox[localId] = Outgoing(sessionId, text.trim(), attachments, quote)
-        runScope.launch { if (running != null) steerOrQueue(key, running, localId) else submit(localId) }
+        runScope.launch {
+            val run = running ?: if (starting) awaitStartedRun(key, localId) else null
+            if (run != null) steerOrQueue(key, run, localId) else submit(localId)
+        }
+    }
+
+    /** 等同一个对话里先发的那条消息变成正在进行的一轮；它发送失败或已经结束就返回 null。 */
+    private suspend fun awaitStartedRun(key: String, localId: String): ActiveRun? = withTimeoutOrNull(60_000) {
+        while (true) {
+            runs[key]?.let { return@withTimeoutOrNull it }
+            if (outbox.none { (id, out) -> id != localId && resolve(out.uiId) == key }) return@withTimeoutOrNull runs[key]
+            delay(50)
+        }
+        @Suppress("UNREACHABLE_CODE")
+        null
     }
 
     /** 插话发出去、还没被这一轮用上的本地消息：run id → 本地消息 id。 */
