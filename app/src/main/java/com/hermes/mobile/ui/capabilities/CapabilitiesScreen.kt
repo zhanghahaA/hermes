@@ -46,6 +46,9 @@ import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.ui.chat.ModelPickerContent
 import com.hermes.mobile.ui.components.IconBadge
+import com.hermes.mobile.ui.components.EmptyState
+import com.hermes.mobile.data.model.AppFeature
+import androidx.compose.material.icons.rounded.Extension
 import com.hermes.mobile.ui.components.NoInsets
 import com.hermes.mobile.ui.components.TagLabel
 import com.hermes.mobile.ui.rememberPlaceholder
@@ -86,10 +89,20 @@ fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0) {
                 .layerBackdrop(backdrop)
                 .background(MaterialTheme.colorScheme.background),
         ) {
-            when (tab) {
-                0 -> ModelsTab(repository, contentPadding)
-                1 -> SkillsTab(repository, contentPadding)
-                2 -> ToolsetsTab(repository, contentPadding)
+            val features by repository.features.collectAsState()
+            val needed = when (tab) {
+                0 -> AppFeature.Models
+                1 -> AppFeature.Skills
+                2 -> AppFeature.Toolsets
+                else -> null
+            }
+            when {
+                needed != null && needed !in features -> Box(Modifier.padding(contentPadding)) {
+                    EmptyState(Icons.Rounded.Extension, "还没接入", "连接真实 Hermes 后的${tabs[tab]}列表会在后续阶段完成。")
+                }
+                tab == 0 -> ModelsTab(repository, contentPadding)
+                tab == 1 -> SkillsTab(repository, contentPadding)
+                tab == 2 -> ToolsetsTab(repository, contentPadding)
                 else -> MoreTab(contentPadding)
             }
         }

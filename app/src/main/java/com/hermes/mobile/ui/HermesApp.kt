@@ -12,6 +12,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -60,6 +61,8 @@ fun HermesApp(repository: HermesRepository, navigator: Navigator) {
             }
         }
     }
+
+    LaunchedEffect(repository) { repository.errors.collect { showMessage(it) } }
 
     HermesTheme(themeMode = settings.themeMode, dynamicColor = settings.dynamicColor) {
         CompositionLocalProvider(LocalShowMessage provides showMessage) {

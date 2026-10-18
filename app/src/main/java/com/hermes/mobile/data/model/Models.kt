@@ -1,5 +1,7 @@
 package com.hermes.mobile.data.model
 
+import kotlinx.serialization.Serializable
+
 // ---- 连接 ----
 
 enum class ConnectionType(val label: String, val description: String) {
@@ -9,6 +11,7 @@ enum class ConnectionType(val label: String, val description: String) {
     Local("本机 Termux", "连接手机上的 127.0.0.1"),
 }
 
+@Serializable
 data class ConnectionProfile(
     val id: String,
     val name: String,
@@ -33,12 +36,31 @@ data class ConnectionTestStep(val title: String, val status: TestStepStatus, val
 
 // ---- 会话与消息 ----
 
-/** 会话的来源。只有通过 API Server 创建的会话能在手机上继续聊天，其它来源只读。 */
-enum class SessionSource(val label: String) {
-    Api("App"),
-    Cli("CLI"),
-    Tui("TUI"),
-    Telegram("Telegram"),
+/**
+ * 会话的来源，对应服务器返回的 `source` 字段。不同版本的 Hermes 可能出现新的来源，
+ * 所以不用枚举：认识的给个好看的名字，不认识的原样显示。
+ */
+data class SessionSource(val id: String) {
+    val label: String
+        get() = when (id.lowercase()) {
+            "api_server", "api", "app" -> "App"
+            "cli" -> "CLI"
+            "tui" -> "TUI"
+            "telegram" -> "Telegram"
+            "discord" -> "Discord"
+            "slack" -> "Slack"
+            "cron" -> "定时任务"
+            "acp" -> "编辑器"
+            "" -> "未知"
+            else -> id
+        }
+
+    companion object {
+        val Api = SessionSource("api_server")
+        val Cli = SessionSource("cli")
+        val Tui = SessionSource("tui")
+        val Telegram = SessionSource("telegram")
+    }
 }
 
 data class Session(
@@ -51,8 +73,11 @@ data class Session(
     val unread: Int = 0,
     val running: Boolean = false,
     val model: String? = null,
+    /** 服务器拒绝从手机继续这个会话（返回过 409），只能看或分叉。 */
+    val readOnly: Boolean = false,
 ) {
-    val readOnly: Boolean get() = source != SessionSource.Api
+    /** 不是在 App / API 里建的会话（CLI、Telegram……），列表里显示来源标签。 */
+    val external: Boolean get() = source != SessionSource.Api
 }
 
 enum class Role { User, Assistant }
@@ -146,10 +171,16 @@ data class CronJob(
     val deliverTo: String,
 )
 
+// ---- 当前连接能用的功能 ----
+
+/** 界面按这个决定显示还是提示“暂不支持”。由服务器能力和 App 的开发进度共同决定。 */
+enum class AppFeature { SendMessages, ManageSessions, Models, Skills, Toolsets, Jobs }
+
 // ---- 设置 ----
 
 enum class ThemeMode(val label: String) { System("跟随系统"), Light("浅色"), Dark("深色") }
 
+@Serializable
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.System,
     val dynamicColor: Boolean = false,

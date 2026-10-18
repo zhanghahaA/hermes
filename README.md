@@ -2,7 +2,8 @@
 
 在手机上像发消息一样使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：只显示最终回复，不显示思考链和工具调用；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 
-> **当前状态：界面骨架。** 所有界面和交互都已经搭好，数据来自 `FakeHermesRepository`（假数据），还没有连接真实的 Hermes。标注为“占位”的功能点击后会弹出提示。
+> **当前状态：阶段 1 完成（连接与会话）。** 能连接真实的 Hermes：测试连接、读取会话列表和聊天记录、重命名/置顶/删除会话。
+> 发消息在阶段 2 接入。怎么让手机连上 Hermes 见 [docs/setup.md](docs/setup.md)，接口和版本兼容见 [docs/protocol.md](docs/protocol.md)。
 
 ## 界面一览
 
@@ -73,9 +74,18 @@ gradle test           # 返回手势的自动化测试
 
 在 Linux 上需要装一个中文字体（例如 `fonts-noto-cjk`），否则中文会显示成方块。
 
-## 下一步（见计划 M0–M5）
+## 开发阶段
 
-1. M0：读 Hermes 源码，核对 API Server 的事件格式
-2. M1–M2：真实的连接层和聊天（SSE、断线恢复、幂等重试、审批）
-3. M3：SSH 隧道
-4. M4–M5：图片上传、cron、通知、SSH 管理功能
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| 1 | 接通 Hermes：连接、测试连接、会话列表、聊天记录、重命名/置顶/删除 | ✅ |
+| 2 | 聊天核心：发消息、只显示最终回复、审批/追问、停止、断线恢复、通知 | 待开发 |
+| 3 | SSH 隧道 | 待开发 |
+| 4 | 图片、模型切换、定时任务、技能/工具集、Profile | 待开发 |
+| 5 | 本地缓存、SSH 管理功能、打磨 | 待开发 |
+
+### 不绑定 Hermes 版本
+
+App 连接时先探测服务器能力（`/v1/capabilities`，旧版本逐个探测接口），按结果显示功能，不比较版本号。
+`tools/ui-preview/src/test` 里的模拟服务器同时模拟新版、2026.6 版、2026.4 版和非 Hermes 服务器。
+设置 `HERMES_IT_HOST` / `HERMES_IT_KEY` 环境变量后，`gradle test` 还会对真实运行的 Hermes 跑集成测试。

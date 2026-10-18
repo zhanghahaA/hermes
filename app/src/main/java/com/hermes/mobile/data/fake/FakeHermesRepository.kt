@@ -1,6 +1,7 @@
 package com.hermes.mobile.data.fake
 
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.model.AppFeature
 import com.hermes.mobile.data.model.AppSettings
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.ConnectionProfile
@@ -65,7 +66,9 @@ class FakeHermesRepository(
         }
     }
 
-    override fun saveConnection(profile: ConnectionProfile) {
+    override val features: StateFlow<Set<AppFeature>> = MutableStateFlow(AppFeature.entries.toSet())
+
+    override fun saveConnection(profile: ConnectionProfile, apiKey: String?) {
         _connections.update { list ->
             if (list.any { it.id == profile.id }) list.map { if (it.id == profile.id) profile else it } else list + profile
         }
@@ -76,7 +79,7 @@ class FakeHermesRepository(
         if (_activeConnectionId.value == id) _activeConnectionId.value = _connections.value.firstOrNull()?.id
     }
 
-    override fun testConnection(profile: ConnectionProfile): Flow<List<ConnectionTestStep>> = flow {
+    override fun testConnection(profile: ConnectionProfile, apiKey: String?): Flow<List<ConnectionTestStep>> = flow {
         val titles = buildList {
             add("网络可达")
             if (profile.type == ConnectionType.Ssh) add("建立 SSH 隧道")
@@ -122,10 +125,6 @@ class FakeHermesRepository(
     override fun renameSession(id: String, title: String) = updateSession(id) { it.copy(title = title) }
 
     override fun deleteSession(id: String) = _sessions.update { list -> list.filterNot { it.id == id } }
-
-    override fun restoreSession(session: Session) = _sessions.update { list ->
-        (list + session).sortedWith(compareByDescending<Session> { it.pinned }.thenByDescending { it.updatedAt })
-    }
 
     override fun togglePin(id: String) = updateSession(id) { it.copy(pinned = !it.pinned) }
 
@@ -330,6 +329,8 @@ class FakeHermesRepository(
     override val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
     override fun updateSettings(transform: (AppSettings) -> AppSettings) = _settings.update(transform)
+
+    override val errors: Flow<String> = kotlinx.coroutines.flow.emptyFlow()
 
     private companion object {
         val NEEDS_APPROVAL = listOf("删除", "重启", "清理", "rm ")

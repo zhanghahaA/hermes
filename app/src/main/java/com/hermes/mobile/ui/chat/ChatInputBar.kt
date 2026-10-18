@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
@@ -245,7 +246,12 @@ private fun AttachmentRow(attachments: List<ImageRef>, onRemove: (ImageRef) -> U
 
 /** 只读会话（CLI/TUI/Telegram 创建）：悬浮玻璃提示条，替代输入栏。 */
 @Composable
-fun ReadOnlyBar(backdrop: Backdrop, sourceLabel: String, onFork: () -> Unit) {
+fun ReadOnlyBar(backdrop: Backdrop, sourceLabel: String, onFork: () -> Unit) =
+    NoticeBar(backdrop, "来自 $sourceLabel，只能查看", actionLabel = "分叉后继续", onAction = onFork)
+
+/** 替代输入栏的悬浮提示条（只读会话、当前连接还不能发消息等）。 */
+@Composable
+fun NoticeBar(backdrop: Backdrop, text: String, actionLabel: String? = null, onAction: () -> Unit = {}) {
     GlassSurface(
         backdrop = backdrop,
         shape = CircleShape,
@@ -257,14 +263,18 @@ fun ReadOnlyBar(backdrop: Backdrop, sourceLabel: String, onFork: () -> Unit) {
         Row(Modifier.padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Rounded.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
             Text(
-                "来自 $sourceLabel，只能查看",
+                text,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 10.dp),
             )
-            FilledTonalButton(onClick = onFork) { Text("分叉后继续") }
+            if (actionLabel != null) {
+                FilledTonalButton(onClick = onAction) { Text(actionLabel) }
+            } else {
+                Spacer(Modifier.size(width = 10.dp, height = 40.dp))
+            }
         }
     }
 }

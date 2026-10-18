@@ -1,5 +1,6 @@
 package com.hermes.mobile.data
 
+import com.hermes.mobile.data.model.AppFeature
 import com.hermes.mobile.data.model.AppSettings
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.ConnectionProfile
@@ -26,20 +27,24 @@ interface HermesRepository {
     val activeConnectionId: StateFlow<String?>
     val connectionState: StateFlow<ConnectionState>
     fun switchConnection(id: String)
-    fun saveConnection(profile: ConnectionProfile)
+    /** [apiKey] 为 null 表示不改已保存的 Key。 */
+    fun saveConnection(profile: ConnectionProfile, apiKey: String?)
     fun deleteConnection(id: String)
-    fun testConnection(profile: ConnectionProfile): Flow<List<ConnectionTestStep>>
+    /** [apiKey] 为 null 时用已保存的 Key。 */
+    fun testConnection(profile: ConnectionProfile, apiKey: String?): Flow<List<ConnectionTestStep>>
+    /** 当前连接能用的功能。 */
+    val features: StateFlow<Set<AppFeature>>
 
     // 会话
     val sessions: StateFlow<List<Session>>
     fun session(id: String): Flow<Session?>
     suspend fun refreshSessions()
-    fun createSession(): String
+    /** 返回新会话 id；当前连接不支持时返回 null（并通过 [errors] 说明原因）。 */
+    fun createSession(): String?
     fun renameSession(id: String, title: String)
     fun deleteSession(id: String)
-    fun restoreSession(session: Session)
     fun togglePin(id: String)
-    fun forkSession(id: String, fromItemId: String?): String
+    fun forkSession(id: String, fromItemId: String?): String?
 
     // 聊天
     fun chatItems(sessionId: String): Flow<List<ChatItem>>
@@ -72,6 +77,9 @@ interface HermesRepository {
     fun runJobNow(id: String)
     fun saveJob(job: CronJob)
     fun deleteJob(id: String)
+
+    /** 要提示给用户的错误或说明（一次性事件）。 */
+    val errors: Flow<String>
 
     // 设置
     val settings: StateFlow<AppSettings>

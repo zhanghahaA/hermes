@@ -120,7 +120,7 @@ fun ConnectionEditorScreen(
                 actions = {
                     Button(
                         onClick = {
-                            repository.saveConnection(currentProfile())
+                            repository.saveConnection(currentProfile(), apiKey.ifBlank { null })
                             onClose()
                         },
                         modifier = Modifier.padding(end = 8.dp),
@@ -220,7 +220,12 @@ fun ConnectionEditorScreen(
                 }
             }
 
-            SecretField("API Key", apiKey, { apiKey = it }, "对应服务器上的 API_SERVER_KEY")
+            SecretField(
+                "API Key",
+                apiKey,
+                { apiKey = it },
+                if (existing != null) "已保存。留空表示不修改" else "对应服务器上的 API_SERVER_KEY（至少 16 位）",
+            )
             OutlinedTextField(
                 value = profileName,
                 onValueChange = { profileName = it },
@@ -231,7 +236,7 @@ fun ConnectionEditorScreen(
             )
 
             ConnectionTestPanel(steps) {
-                scope.launch { repository.testConnection(currentProfile()).collect { steps = it } }
+                scope.launch { repository.testConnection(currentProfile(), apiKey.ifBlank { null }).collect { steps = it } }
             }
 
             if (existing != null) {

@@ -72,9 +72,9 @@ object SampleData {
         Session("s-1", "家庭网络排查", "已经把路由器的 DNS 改回 223.5.5.5，重启后…", now - 4 * MIN, pinned = true, model = "Claude Sonnet"),
         Session("s-2", "周末去杭州的行程", "第二天上午建议先去灵隐寺，人少一些。", now - 2 * HOUR, unread = 2),
         Session("s-3", "整理照片脚本", "脚本写好了，放在 ~/scripts/sort_photos.py", now - 5 * HOUR),
-        Session("s-4", "hermes 配置迁移", "(在电脑终端里进行的会话)", now - DAY - 3 * HOUR, source = SessionSource.Cli),
+        Session("s-4", "hermes 配置迁移", "(在电脑终端里进行的会话)", now - DAY - 3 * HOUR, source = SessionSource.Cli, readOnly = true),
         Session("s-5", "论文阅读：长上下文检索", "核心思路是把检索当作一种工具调用…", now - 2 * DAY),
-        Session("s-6", "Telegram 群里的提醒", "好的，周五下午 3 点提醒大家开会。", now - 3 * DAY, source = SessionSource.Telegram),
+        Session("s-6", "Telegram 群里的提醒", "好的，周五下午 3 点提醒大家开会。", now - 3 * DAY, source = SessionSource.Telegram, readOnly = true),
         Session("s-7", "给爸妈的手机设置", "已经列好了步骤，一共 6 步。", now - 6 * DAY),
     )
 

@@ -72,7 +72,7 @@ fun MainScreen(
     val bottomSpace = FloatingBarHeight + FloatingBarMargin * 2 + navBar
 
     val action = when (tab) {
-        MainTab.Chats -> FloatingAction(Icons.Rounded.EditNote, "新对话") { onOpenChat(repository.createSession()) }
+        MainTab.Chats -> FloatingAction(Icons.Rounded.EditNote, "新对话") { repository.createSession()?.let(onOpenChat) }
         MainTab.Jobs -> FloatingAction(Icons.Rounded.Add, "新建任务") { onEditJob(null) }
         else -> null
     }

@@ -203,9 +203,14 @@ fun SettingsScreen(
             }
 
             SettingsGroup("关于") {
-                SettingsRow(Icons.Rounded.Info, "Hermes 移动版", "0.1.0 · 界面骨架", trailing = null)
+                SettingsRow(Icons.Rounded.Info, "Hermes 移动版", "0.2.0 · 阶段 1（连接与会话）", trailing = null)
                 GroupDivider()
-                SettingsRow(Icons.Rounded.AutoAwesome, "服务器版本", "Hermes Agent v0.9.2（示例）", trailing = null)
+                SettingsRow(
+                    Icons.Rounded.AutoAwesome,
+                    "服务器版本",
+                    (state as? ConnectionState.Connected)?.let { "Hermes Agent ${it.serverVersion}" } ?: "未连接",
+                    trailing = null,
+                )
             }
 
             TextButton(onClick = { placeholder("导出诊断日志") }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)) {

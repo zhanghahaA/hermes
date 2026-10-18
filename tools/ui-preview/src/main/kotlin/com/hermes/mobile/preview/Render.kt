@@ -95,7 +95,7 @@ private val scenes = listOf(
         prepare = { it.sendMessage("s-3", "脚本没问题的话，帮我重启一下 hermes gateway", emptyList()); null },
         waitMs = 2200,
     ) { repo, _ -> ChatScreen(repo, "s-3", onBack = {}, onOpenChat = {}) },
-    Scene("07-chat-new", prepare = { it.createSession() }) { repo, id -> ChatScreen(repo, id!!, onBack = {}, onOpenChat = {}) },
+    Scene("07-chat-new", prepare = { it.createSession()!! }) { repo, id -> ChatScreen(repo, id!!, onBack = {}, onOpenChat = {}) },
     Scene("08-chat-readonly") { repo, _ -> ChatScreen(repo, "s-4", onBack = {}, onOpenChat = {}) },
     Scene("09-sheet-model") { repo, _ ->
         SheetOver({ ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) }) {

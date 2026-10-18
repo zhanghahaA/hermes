@@ -45,6 +45,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.model.AppFeature
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.JobRunResult
 import com.hermes.mobile.ui.LocalShowMessage
@@ -61,6 +62,7 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 @Composable
 fun JobsScreen(repository: HermesRepository, onEditJob: (String?) -> Unit) {
     val jobs by repository.jobs.collectAsState()
+    val available = AppFeature.Jobs in repository.features.collectAsState().value
     val showMessage = LocalShowMessage.current
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val backdrop = rememberLayerBackdrop()
@@ -89,8 +91,14 @@ fun JobsScreen(repository: HermesRepository, onEditJob: (String?) -> Unit) {
                 .layerBackdrop(backdrop)
                 .background(MaterialTheme.colorScheme.background),
         ) {
-            item(key = "summary") { JobsSummary(jobs) }
-            if (jobs.isEmpty()) {
+            if (!available) {
+                item(key = "not-yet") {
+                    EmptyState(Icons.Rounded.Schedule, "定时任务还没接入", "连接真实 Hermes 后的定时任务管理会在后续阶段完成。")
+                }
+            } else {
+                item(key = "summary") { JobsSummary(jobs) }
+            }
+            if (available && jobs.isEmpty()) {
                 item(key = "empty") {
                     EmptyState(Icons.Rounded.Schedule, "还没有定时任务", "让 Hermes 每天早上发简报、定时检查服务器，都可以在这里设置。")
                 }

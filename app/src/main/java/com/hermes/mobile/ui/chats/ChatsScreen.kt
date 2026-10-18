@@ -105,6 +105,7 @@ fun ChatsScreen(
     var showSwitcher by remember { mutableStateOf(false) }
     var actionTarget by remember { mutableStateOf<Session?>(null) }
     var openRow by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var renameTarget by remember { mutableStateOf<Session?>(null) }
 
     val scope = rememberCoroutineScope()
@@ -118,23 +119,31 @@ fun ChatsScreen(
     LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) openRow = null }
 
     val visible = sessions
+        .filter { it.id !in pendingDelete }
         .filter { query.isBlank() || it.title.contains(query, true) || it.preview.contains(query, true) }
         .filter {
             when (filter) {
                 ChatFilter.All -> true
                 ChatFilter.Unread -> it.unread > 0
                 ChatFilter.Pinned -> it.pinned
-                ChatFilter.External -> it.readOnly
+                ChatFilter.External -> it.external
             }
         }
         .sortedWith(compareByDescending<Session> { it.pinned }.thenByDescending { it.updatedAt })
 
+    // 删除先只在界面上隐藏，提示条消失（没点撤销）才真正删除——服务器上的删除是撤销不了的
     fun delete(session: Session) {
-        repository.deleteSession(session.id)
+        pendingDelete = pendingDelete + session.id
         scope.launch {
-            snackbar.currentSnackbarData?.dismiss()
-            val result = snackbar.showSnackbar("已删除「${session.title}」", actionLabel = "撤销", duration = SnackbarDuration.Short)
-            if (result == SnackbarResult.ActionPerformed) repository.restoreSession(session)
+            var undone = false
+            try {
+                snackbar.currentSnackbarData?.dismiss()
+                val result = snackbar.showSnackbar("已删除「${session.title}」", actionLabel = "撤销", duration = SnackbarDuration.Short)
+                undone = result == SnackbarResult.ActionPerformed
+            } finally {
+                if (!undone) repository.deleteSession(session.id)
+                pendingDelete = pendingDelete - session.id
+            }
         }
     }
 
@@ -378,9 +387,9 @@ fun SessionRow(session: Session, onClick: () -> Unit, onLongPress: () -> Unit) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (session.readOnly) {
+                if (session.external) {
                     Spacer(Modifier.width(6.dp))
-                    TagLabel("${session.source.label} · 只读")
+                    TagLabel(if (session.readOnly) "${session.source.label} · 只读" else session.source.label)
                 }
             }
             if (session.running) {

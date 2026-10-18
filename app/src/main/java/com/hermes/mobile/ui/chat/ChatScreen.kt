@@ -77,6 +77,7 @@ import com.hermes.mobile.ui.components.dayLabel
 import com.hermes.mobile.ui.components.sameDay
 import com.hermes.mobile.ui.rememberPlaceholder
 import com.hermes.mobile.data.model.Quote
+import com.hermes.mobile.data.model.AppFeature
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalTextToolbar
@@ -136,6 +137,7 @@ fun ChatScreen(
     val streaming by remember(sessionId) { repository.streamingText(sessionId) }.collectAsState(initial = null)
     val settings by repository.settings.collectAsState()
     val models by repository.models.collectAsState()
+    val features by repository.features.collectAsState()
 
     var draft by rememberSaveable(sessionId) { mutableStateOf("") }
     var attachments by remember(sessionId) { mutableStateOf(listOf<ImageRef>()) }
@@ -204,7 +206,7 @@ fun ChatScreen(
                     onBack = onBack,
                     onModelClick = { if (session?.readOnly == false) showModels = true },
                     onRename = { showRename = true },
-                    onFork = { onOpenChat(repository.forkSession(sessionId, null)) },
+                    onFork = { repository.forkSession(sessionId, null)?.let(onOpenChat) },
                     onSearch = { placeholder("会话内搜索") },
                     onDiagnostics = { placeholder("查看原始事件（诊断模式）") },
                     onDelete = {
@@ -260,7 +262,9 @@ fun ChatScreen(
             ) {
                 val current = session
                 if (current != null && current.readOnly) {
-                    ReadOnlyBar(backdrop, current.source.label, onFork = { onOpenChat(repository.forkSession(sessionId, null)) })
+                    ReadOnlyBar(backdrop, current.source.label, onFork = { repository.forkSession(sessionId, null)?.let(onOpenChat) })
+                } else if (AppFeature.SendMessages !in features) {
+                    NoticeBar(backdrop, "当前版本还不能发消息，下一阶段接入")
                 } else {
                     ChatInputBar(
                         backdrop = backdrop,
@@ -362,7 +366,7 @@ fun ChatScreen(
                 if (message.role == Role.Assistant && !readOnly) {
                     add(SheetAction("重新生成", Icons.Rounded.Refresh, { repository.regenerate(sessionId, message.id) }))
                 }
-                add(SheetAction("从这里分叉", Icons.Rounded.AccountTree, { onOpenChat(repository.forkSession(sessionId, message.id)) }))
+                add(SheetAction("从这里分叉", Icons.Rounded.AccountTree, { repository.forkSession(sessionId, message.id)?.let(onOpenChat) }))
                 if (!readOnly) {
                     add(SheetAction("删除", Icons.Rounded.Delete, { repository.deleteItem(sessionId, message.id) }, destructive = true))
                 }

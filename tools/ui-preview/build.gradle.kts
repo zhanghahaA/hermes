@@ -23,7 +23,11 @@ sourceSets {
         kotlin {
             // 直接编译 app 里的界面代码，只排除依赖 Android 的两个文件（桌面版替身在 src/main/kotlin）
             srcDir("../../app/src/main/java")
-            exclude("com/hermes/mobile/MainActivity.kt", "com/hermes/mobile/platform/Platform.kt")
+            exclude(
+                "com/hermes/mobile/MainActivity.kt",
+                "com/hermes/mobile/platform/Platform.kt",
+                "com/hermes/mobile/platform/AndroidStorage.kt",
+            )
         }
     }
 }
@@ -33,10 +37,12 @@ dependencies {
     implementation("org.jetbrains.compose.material3:material3:1.9.0")
     implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
     implementation("io.github.kyant0:backdrop:2.0.1")
+    implementation("com.squareup.okhttp3:okhttp:5.3.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
 
     testImplementation(kotlin("test"))
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.uiTest)
 }
