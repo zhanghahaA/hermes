@@ -386,6 +386,8 @@ class RealHermesIT {
             assertTrue(replies.isNotEmpty())
             assertTrue(history.any { it.role == Role.User && it.text == "顺便改成英文" }, "插话以普通消息显示，没有标记")
             assertTrue(history.none { "OUT-OF-BAND" in it.text })
+            val titled = runBlocking { withTimeout(20_000) { repo.session(chat).first { it != null && it.title != "未命名会话" } } }
+            println("Hermes 自动起的标题：${titled?.title}")
         } finally {
             scope.cancel()
         }

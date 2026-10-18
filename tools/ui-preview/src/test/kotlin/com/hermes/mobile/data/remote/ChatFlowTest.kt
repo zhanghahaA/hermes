@@ -97,6 +97,7 @@ class ChatFlowTest {
         assertTrue(run.getHeader("Idempotency-Key")!!.startsWith("local-"), "带幂等键")
 
         assertTrue(repo.sessions.value.any { it.id == "new1" }, "新会话出现在列表里")
+        repo.sessions.await("显示 Hermes 自动起的标题") { list -> list.firstOrNull { it.id == "new1" }?.title == "关于你好" }
         assertEquals("new1", runBlocking { repo.session(draft).first() }?.id, "界面拿着草稿 id 也能找到会话")
         Thread.sleep(200)
         val everything = history.flatten().filterIsInstance<ChatItem.Message>().map { it.text } + streamed.mapNotNull { it }

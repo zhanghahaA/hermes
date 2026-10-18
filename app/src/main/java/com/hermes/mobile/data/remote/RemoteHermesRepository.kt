@@ -1318,8 +1318,31 @@ class RemoteHermesRepository(
         scope.launch { reconcileAfterRun(run.sessionId, expectedReply = null) }
     }
 
+    /**
+     * Hermes 会自动给对话起名：第一条消息一进来先按内容起个临时标题，
+     * 再在后台让小模型想一个更好的（几秒后才写进去）。所以一轮结束后隔几次读一下标题。
+     */
+    private fun refreshTitleSoon(sessionId: String) {
+        if (capabilities?.endpoints?.contains("session") == false) return
+        scope.launch {
+            var last: String? = null
+            for (wait in longArrayOf(0, 3_000, 10_000)) {
+                delay(wait)
+                val dto = try {
+                    client?.session(sessionId)
+                } catch (e: HermesError) {
+                    null
+                } ?: continue
+                val title = dto.title?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+                if (title != last) updateSession(sessionId) { it.copy(title = title) }
+                last = title
+            }
+        }
+    }
+
     /** 一轮结束后以服务器记录为准。服务器写入记录可能比结束事件晚一点，所以没看到回复就稍等再拉。 */
     private suspend fun reconcileAfterRun(sessionId: String, expectedReply: String?) {
+        refreshTitleSoon(sessionId)
         repeat(3) { attempt ->
             loadMessages(sessionId)
             val server = chats.value[sessionId]?.server.orEmpty()

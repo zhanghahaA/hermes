@@ -91,6 +91,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 if (screenshotOnly) "\n[screenshot]"
                 else "\n\n[Image attached at: /srv/hermes/cache/documents/native-inputs/$it/api_${it.take(32)}.jpg]\n[screenshot]"
             }
+            // 和 Hermes 一样：第一轮之后会话有了自动标题
+            autoTitles.putIfAbsent(sessionId, "关于" + input.take(12))
             add("run.completed", "\"output\":\"$reply\"" + (pendingSteer?.let { ",\"pending_steer\":${kotlinx.serialization.json.JsonPrimitive(it)}" } ?: ""))
             messages.getOrPut(sessionId) { mutableListOf() }.apply {
                 add("""{"id":${size + 100},"role":"user","content":${kotlinx.serialization.json.JsonPrimitive(stored)},"timestamp":1760009000}""")
@@ -145,6 +147,9 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
     }
 
     /** 会话 id → 锁定的 provider/model。 */
+    /** 会话 id → Hermes 自动起的标题。 */
+    val autoTitles = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     /** 模拟 /v1/skills 自身出错（某些 Hermes 版本就是这样）。 */
     @Volatile var skillsBroken = false
 
@@ -429,6 +434,12 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                    ${messages["s1"].orEmpty().joinToString("") { ",$it" }}
                 ],"pagination":{"limit":500,"offset":0,"order":"latest","returned":8}}""",
             )
+            // 单个会话：新建的会话在第一轮之后有了 Hermes 自动起的标题
+            path.matches(Regex("/api/sessions/new\\d+")) && request.method == "GET" -> {
+                val id = path.removePrefix("/api/sessions/")
+                val title = autoTitles[id]?.let { kotlinx.serialization.json.JsonPrimitive(it).toString() } ?: "null"
+                json("""{"object":"hermes.session","session":{"id":"$id","source":"api_server","title":$title,"started_at":1760009000.0}}""")
+            }
             path.startsWith("/api/sessions/") && request.method == "PATCH" ->
                 if (failPatch) error(500, "database is locked") else json("""{"object":"hermes.session","session":{"id":"s1","title":"新标题"}}""")
             path.startsWith("/api/sessions/") && request.method == "DELETE" -> json("""{"object":"hermes.session.deleted","id":"s1","deleted":true}""")
