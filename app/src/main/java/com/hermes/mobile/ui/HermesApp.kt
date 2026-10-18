@@ -113,6 +113,7 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 repository = repository,
                 jobId = route.jobId,
                 onClose = navigator::pop,
+                onOpenChat = { navigator.push(ChatRoute(it)) },
             )
             WelcomeRoute -> WelcomeScreen(
                 onPickType = { type -> navigator.push(ConnectionEditRoute(type = type.name), clearAboveRoot = true) },

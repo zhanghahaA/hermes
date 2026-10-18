@@ -34,6 +34,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -67,6 +69,8 @@ fun JobsScreen(repository: HermesRepository, onEditJob: (String?) -> Unit) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val backdrop = rememberLayerBackdrop()
     val bottomSpace = LocalBottomBarSpace.current
+    // 每次打开都刷新一下：任务可能在 Hermes 那边被改过、刚跑完
+    LaunchedEffect(Unit) { repository.refreshJobs() }
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -93,7 +97,7 @@ fun JobsScreen(repository: HermesRepository, onEditJob: (String?) -> Unit) {
         ) {
             if (!available) {
                 item(key = "not-yet") {
-                    EmptyState(Icons.Rounded.Schedule, "定时任务还没接入", "连接真实 Hermes 后的定时任务管理会在后续阶段完成。")
+                    EmptyState(Icons.Rounded.Schedule, "这台 Hermes 不支持定时任务", "它的 API Server 没有提供定时任务接口（/api/jobs），可以升级 Hermes 后再试。")
                 }
             } else {
                 item(key = "summary") { JobsSummary(jobs) }
@@ -109,7 +113,7 @@ fun JobsScreen(repository: HermesRepository, onEditJob: (String?) -> Unit) {
                     onToggle = { repository.setJobEnabled(job.id, it) },
                     onRunNow = {
                         repository.runJobNow(job.id)
-                        showMessage("已触发「${job.name}」，完成后会通知你")
+                        showMessage("已触发「${job.name}」，Hermes 一分钟内开始执行，跑完会通知你")
                     },
                     onEdit = { onEditJob(job.id) },
                     modifier = Modifier.animateItem(),
@@ -126,7 +130,7 @@ private fun JobsSummary(jobs: List<CronJob>) {
     val next = jobs.filter { it.enabled }.minByOrNull { it.nextRunLabel }?.nextRunLabel
     ElevatedCard(Modifier.fillMaxWidth()) {
         Row(Modifier.padding(vertical = 16.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            SummaryCell("$active", "运行中", Modifier.weight(1f))
+            SummaryCell("$active", "已启用", Modifier.weight(1f))
             SummaryCell("$failed", "上次失败", Modifier.weight(1f), if (failed > 0) MaterialTheme.colorScheme.error else null)
             SummaryCell(next ?: "—", "下次运行", Modifier.weight(1.4f))
         }
@@ -191,10 +195,16 @@ private fun JobCard(
                     Spacer(Modifier.width(6.dp))
                     Text("编辑")
                 }
-                FilledTonalButton(onClick = onRunNow, contentPadding = PaddingValues(horizontal = 14.dp)) {
-                    Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("立即运行")
+                FilledTonalButton(onClick = onRunNow, enabled = !job.runningNow, contentPadding = PaddingValues(horizontal = 14.dp)) {
+                    if (job.runningNow) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(6.dp))
+                        Text("运行中…")
+                    } else {
+                        Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("立即运行")
+                    }
                 }
             }
         }

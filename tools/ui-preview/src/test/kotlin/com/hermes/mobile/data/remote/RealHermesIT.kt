@@ -9,6 +9,7 @@ import com.hermes.mobile.platform.MemoryLocalStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
@@ -282,6 +283,67 @@ class RealHermesIT {
             assertEquals(listOf("数据.csv"), mine.files.map { it.name })
             runBlocking { repo.session(chat).first() }?.id?.let(repo::deleteSession)
             Thread.sleep(1000)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /** 阶段 4：模型清单、锁定会话模型；定时任务新建 → 暂停/恢复 → 立即运行 → 出现运行记录 → 删除。 */
+    @Test
+    fun modelsAndJobsAgainstRealHermes() {
+        if (host == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_HOST / HERMES_IT_KEY")
+            return
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), jobPollMillis = 2_000)
+            repo.saveConnection(ConnectionProfile("real", "真实 Hermes", ConnectionType.Direct, host, port), key)
+            runBlocking { withTimeout(15_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
+
+            val models = runBlocking { withTimeout(30_000) { repo.models.first { it.isNotEmpty() } } }
+            println("模型：" + models.joinToString { "${it.providerSlug}/${it.model}(${it.note ?: ""})" })
+            assertTrue(models.first().note == "Hermes 默认", models.toString())
+
+            val draft = assertNotNullOr(repo.createSession(), "草稿")
+            repo.setSessionModel(draft, models.first().id)
+            repo.sendMessage(draft, "你好", emptyList())
+            val chat = runBlocking { withTimeout(60_000) { repo.session(draft).first { it != null && !it.id.startsWith("draft-") && !it.running } } }!!
+            println("新会话 ${chat.id} 模型 ${chat.model}")
+            assertEquals(models.first().model, chat.model)
+
+            runBlocking { withTimeout(10_000) { repo.features.first { com.hermes.mobile.data.model.AppFeature.Jobs in it } } }
+            val name = "IT任务${System.currentTimeMillis() % 100000}"
+            val schedule = com.hermes.mobile.data.model.JobSchedule.Weekly(setOf(1, 3, 5), 7, 15)
+            repo.saveJob(
+                com.hermes.mobile.data.model.CronJob(
+                    id = "", name = name, prompt = "说一句早安", scheduleLabel = "", cron = schedule.toHermes(), nextRunLabel = "",
+                    lastResult = com.hermes.mobile.data.model.JobRunResult.Never, lastRunLabel = null, enabled = true, deliverTo = "",
+                ),
+            )
+            val job = runBlocking { withTimeout(15_000) { repo.jobs.first { list -> list.any { it.name == name } } } }.first { it.name == name }
+            println("任务：${job.id} ${job.scheduleLabel} 下次 ${job.nextRunLabel} 发到 ${job.deliverTo}")
+            assertEquals(schedule, job.schedule)
+
+            repo.setJobEnabled(job.id, false)
+            runBlocking { withTimeout(10_000) { while (true) { repo.refreshJobs(); if (repo.jobs.value.first { it.id == job.id }.enabled == false) break; kotlinx.coroutines.delay(300) } } }
+            repo.setJobEnabled(job.id, true)
+            runBlocking { withTimeout(10_000) { while (true) { repo.refreshJobs(); if (repo.jobs.value.first { it.id == job.id }.enabled) break; kotlinx.coroutines.delay(300) } } }
+
+            val notice = runBlocking {
+                val n = async { withTimeout(240_000) { repo.notices.first { it.title == name } } }
+                kotlinx.coroutines.delay(100)
+                repo.runJobNow(job.id)
+                n.await()
+            }
+            println("运行通知：${notice.kind} ${notice.sessionId} ${notice.text}")
+            assertTrue(notice.sessionId.isNotEmpty(), "通知能点开运行记录")
+            assertTrue(notice.text.startsWith("收到"), "通知里是 Hermes 的回复（假模型会原样复述提示）：${notice.text}")
+            val runs = runBlocking { withTimeout(10_000) { repo.jobRuns(repo.jobs.value.first { it.id == job.id }).first { it.isNotEmpty() } } }
+            println("运行记录：" + runs.joinToString { "${it.id} ${it.title} | ${it.preview}" })
+
+            repo.deleteJob(job.id)
+            runBlocking { withTimeout(10_000) { while (true) { repo.refreshJobs(); if (repo.jobs.value.none { it.id == job.id }) break; kotlinx.coroutines.delay(300) } } }
         } finally {
             scope.cancel()
         }

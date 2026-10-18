@@ -1,7 +1,12 @@
 package com.hermes.mobile.data.remote
 
 import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.FileRef
+import com.hermes.mobile.data.model.JobRunResult
+import com.hermes.mobile.data.model.JobSchedule
+import com.hermes.mobile.data.model.parseInstant
+import com.hermes.mobile.data.model.friendlyTime
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.Role
@@ -32,7 +37,7 @@ internal fun JsonElement?.epochMillis(): Long? {
 internal fun SessionDto.toSession(now: Long): Session = Session(
     id = id,
     title = title?.takeIf { it.isNotBlank() } ?: preview?.lineSequence()?.firstOrNull()?.take(24)?.takeIf { it.isNotBlank() } ?: "未命名会话",
-    preview = preview.orEmpty().replace('\n', ' ').trim(),
+    preview = cleanPreview(preview).ifEmpty { if (source == "cron") "定时任务运行记录" else "" },
     updatedAt = last_active.epochMillis() ?: started_at.epochMillis() ?: now,
     source = SessionSource(source ?: "api_server"),
     pinned = pinned == true,
@@ -183,4 +188,57 @@ internal fun replyMedia(raw: String): Pair<String, ReplyMedia> {
     val images = all.filter { it.second }.map { it.first }
     val files = all.filterNot { it.second }.map { (path, _) -> FileRef(path.substringAfterLast('/'), note = "在 Hermes 那台机器上", remotePath = path) }
     return body to ReplyMedia(images, files)
+}
+
+/** Hermes 的定时任务 → App 里的任务卡片。 */
+internal fun JobDto.toCronJob(now: Long): CronJob {
+    val raw = schedule?.expr ?: schedule?.display ?: schedule_display.orEmpty()
+    val parsed = JobSchedule.parse(schedule?.kind, schedule?.expr ?: schedule_display, schedule?.minutes, schedule?.run_at)
+    val deliverValue = when (val d = deliver) {
+        is JsonPrimitive -> d.contentOrNull
+        is JsonArray -> d.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.joinToString(",")
+        else -> null
+    }?.takeIf { it.isNotBlank() } ?: "local"
+    val lastRun = parseInstant(last_run_at)
+    val nowInstant = java.time.Instant.ofEpochMilli(now)
+    return CronJob(
+        id = id,
+        name = name?.takeIf { it.isNotBlank() } ?: "未命名任务",
+        prompt = prompt.orEmpty(),
+        scheduleLabel = if (parsed is JobSchedule.Custom) (schedule_display ?: raw).ifBlank { "未设置" } else parsed.label(),
+        cron = if (parsed is JobSchedule.Custom) raw else parsed.toHermes(),
+        nextRunLabel = parseInstant(next_run_at)?.let { friendlyTime(it, nowInstant) } ?: "—",
+        lastResult = when {
+            lastRun == null -> JobRunResult.Never
+            last_status == null || last_status == "ok" || last_status == "success" -> JobRunResult.Success
+            else -> JobRunResult.Failed
+        },
+        lastRunLabel = lastRun?.let { friendlyTime(it, nowInstant) },
+        enabled = enabled != false && state != "paused",
+        deliverTo = deliverLabel(deliverValue),
+        deliver = deliverValue,
+        lastError = last_error,
+        schedule = parsed,
+    )
+}
+
+/** deliver 值 → 给人看的说法。 */
+internal fun deliverLabel(deliver: String): String = deliver.split(',').joinToString("、") { d ->
+    when (d.trim().substringBefore(':').lowercase()) {
+        "local", "origin", "" -> "在 App 里查看"
+        "telegram" -> "Telegram"
+        "discord" -> "Discord"
+        "slack" -> "Slack"
+        "whatsapp" -> "WhatsApp"
+        "signal" -> "Signal"
+        "email" -> "邮件"
+        "sms" -> "短信"
+        else -> d.trim()
+    }
+}
+
+/** 列表预览去掉 Hermes 给模型的提示（定时任务的 [IMPORTANT: …] 很长，预览里常常只有半截）。 */
+internal fun cleanPreview(preview: String?): String {
+    val text = SystemNotes.strip(preview.orEmpty()).replace('\n', ' ').trim()
+    return if (text.startsWith("[IMPORTANT") || text.startsWith("[System")) "" else text
 }

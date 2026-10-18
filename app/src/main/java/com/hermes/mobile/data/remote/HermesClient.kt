@@ -144,6 +144,38 @@ class HermesClient(
         }
     }.flowOn(Dispatchers.IO)
 
+    // ---- 模型 ----
+
+    internal suspend fun modelOptions(): ModelOptionsDto = get("/api/model/options", ModelOptionsDto.serializer())
+
+    /** 把会话锁定到某个模型（之后这个会话的每一轮都用它）。 */
+    internal suspend fun lockSessionModel(sessionId: String, model: String, provider: String) {
+        val body = patch {
+            put("model", model)
+            put("provider", provider)
+        }
+        execute(request("/api/sessions/${sessionId.encode()}/model").post(body.toString().toRequestBody(JsonMedia)).build()).close()
+    }
+
+    // ---- 定时任务 ----
+
+    internal suspend fun jobs(): JobListDto = get("/api/jobs?include_disabled=true", JobListDto.serializer())
+
+    internal suspend fun createJob(fields: JsonObject): JobDto? = send("POST", "/api/jobs", fields, JobEnvelopeDto.serializer()).job
+
+    internal suspend fun updateJob(id: String, fields: JsonObject): JobDto? =
+        send("PATCH", "/api/jobs/${id.encode()}", fields, JobEnvelopeDto.serializer()).job
+
+    internal suspend fun deleteJob(id: String) {
+        execute(request("/api/jobs/${id.encode()}").delete().build()).close()
+    }
+
+    /** pause / resume / run */
+    internal suspend fun jobAction(id: String, action: String): JobDto? =
+        send("POST", "/api/jobs/${id.encode()}/$action", JsonObject(emptyMap()), JobEnvelopeDto.serializer()).job
+
+    internal suspend fun job(id: String): JobDto? = get("/api/jobs/${id.encode()}", JobEnvelopeDto.serializer()).job
+
     /** 用一个必须鉴权、又在所有版本都有的接口验证 Key（旧版本没有 /v1/capabilities 时用）。 */
     suspend fun verifyKey() {
         execute(request("/v1/models").get().build()).close()
@@ -206,7 +238,11 @@ class HermesClient(
             val body = runCatching { r.body.string() }.getOrDefault("")
             if ("Headless backend (hermes serve)" in body || "hermes dashboard" in body) throw HermesError.NotHermes(WrongBackendHint)
             val error = runCatching { HermesJson.decodeFromString(ErrorBodyDto.serializer(), body).error }.getOrNull()
-            error?.code to (error?.message ?: "HTTP ${r.code}")
+            // 定时任务接口的错误是 {"error": "一句话"}
+            val plain = if (error == null) runCatching {
+                (HermesJson.parseToJsonElement(body) as? JsonObject)?.get("error")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+            }.getOrNull() else null
+            error?.code to (error?.message ?: plain ?: "HTTP ${r.code}")
         }
         // 端口上跑的是 hermes serve / hermes dashboard（桌面版和网页版的后端），不是 App 要连的 API Server
         throw when (response.code) {

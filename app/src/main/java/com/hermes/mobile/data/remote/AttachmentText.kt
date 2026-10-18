@@ -186,10 +186,11 @@ internal const val RemoteMediaPrefix = "hermes-media:"
  * 这些不是用户说的话，显示前去掉（按方括号配对，提示里可以有嵌套的方括号和换行）。
  */
 internal object SystemNotes {
-    private val start = Regex("""\[System( note)?:""")
+    // [IMPORTANT: You are running as a scheduled cron job …] 是定时任务给模型的说明
+    private val start = Regex("""\[(System( note)?|IMPORTANT):""")
 
     fun strip(text: String): String {
-        if (!text.contains("[System")) return text
+        if (!text.contains("[System") && !text.contains("[IMPORTANT")) return text
         val out = StringBuilder()
         var i = 0
         while (i < text.length) {

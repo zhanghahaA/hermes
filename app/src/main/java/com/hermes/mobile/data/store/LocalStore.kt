@@ -15,6 +15,8 @@ data class StoredState(
     val runs: List<StoredRun> = emptyList(),
     /** 会话 id → 没发出去的草稿文字。 */
     val drafts: Map<String, String> = emptyMap(),
+    /** 连接 id → 从手机新建对话时默认用的模型（ModelOption.id）。没设就用 Hermes 自己的默认。 */
+    val defaultModels: Map<String, String> = emptyMap(),
 )
 
 @Serializable

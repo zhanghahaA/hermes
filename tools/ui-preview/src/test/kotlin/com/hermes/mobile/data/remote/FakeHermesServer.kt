@@ -129,6 +129,13 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
         }
     }
 
+    /** 会话 id → 锁定的 provider/model。 */
+    val modelLocks = java.util.concurrent.ConcurrentHashMap<String, String>()
+    /** 定时任务（JSON 字段，按 Hermes 的样子）。 */
+    val jobs = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, Any?>>()
+    /** 被“立即运行”后，下一次查询时变成已运行（模拟调度器下一轮）。 */
+    private val pendingJobRuns = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     val runs = java.util.concurrent.ConcurrentHashMap<String, FakeRun>()
     /** 会话 id → 动态追加的消息（JSON）。 */
     val messages = java.util.concurrent.ConcurrentHashMap<String, MutableList<String>>()
@@ -199,6 +206,58 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 val run = existing ?: FakeRun("run_${++nextRun}", sessionId, input, shas).also { it.idempotencyKey = key; runs[it.id] = it }
                 json("""{"run_id":"${run.id}","status":"started"}""", 202)
             }
+            path == "/api/model/options" -> json(
+                """{"model":"fake-model","provider":"custom","providers":[
+                   {"slug":"custom","name":"Custom endpoint","is_current":true,"authenticated":true,"models":["fake-model"],"capabilities":{"fake-model":{"reasoning":true}}},
+                   {"slug":"openrouter","name":"OpenRouter","is_current":false,"authenticated":true,"models":["anthropic/claude-sonnet-5.5","openai/gpt-6.1-sol"]},
+                   {"slug":"nous","name":"Nous Portal","is_current":false,"authenticated":false,"models":[]}
+                ]}""",
+            )
+            path.matches(Regex("/api/sessions/[^/]+/model")) && request.method == "POST" -> {
+                val id = path.removePrefix("/api/sessions/").removeSuffix("/model")
+                val obj = HermesJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+                val model = (obj["model"] as kotlinx.serialization.json.JsonPrimitive).content
+                val provider = (obj["provider"] as kotlinx.serialization.json.JsonPrimitive).content
+                modelLocks[id] = "$provider/$model"
+                json("""{"object":"hermes.session.model_lock","session_id":"$id","runtime":{"provider":"$provider","model":"$model"}}""")
+            }
+            path == "/api/jobs" && request.method == "GET" -> json("""{"jobs":[${jobs.values.joinToString(",") { jobJson(it) }}]}""")
+            path == "/api/jobs" && request.method == "POST" -> {
+                val obj = HermesJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+                val schedule = (obj["schedule"] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+                if (schedule == "bad") return@synchronized json("""{"error":"Invalid schedule 'bad'"}""", 400)
+                val id = "%012x".format(jobs.size + 0xabc000)
+                jobs[id] = mutableMapOf(
+                    "id" to id, "name" to (obj["name"] as kotlinx.serialization.json.JsonPrimitive).content,
+                    "prompt" to (obj["prompt"] as kotlinx.serialization.json.JsonPrimitive).content,
+                    "schedule" to schedule, "deliver" to ((obj["deliver"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: "local"),
+                    "enabled" to true, "state" to "scheduled", "last_run_at" to null, "last_status" to null,
+                )
+                json("""{"job":${jobJson(jobs[id]!!)}}""")
+            }
+            path.startsWith("/api/jobs/") -> {
+                val rest = path.removePrefix("/api/jobs/")
+                val id = rest.substringBefore('/')
+                val job = jobs[id] ?: return@synchronized json("""{"error":"Job not found"}""", 404)
+                if (pendingJobRuns.remove(id)) {
+                    job["last_run_at"] = "2026-10-18T10:55:03+00:00"
+                    job["last_status"] = "ok"
+                    messages.getOrPut("cron_$id") { mutableListOf() }
+                    cronSessions += """{"id":"cron_$id","source":"cron","title":"${job["name"]} · Oct 18 10:55","started_at":1792316103,"last_active":1792316103,"preview":"[IMPORTANT: You are running as a scheduled cron job. DELIVERY: Your fin"}"""
+                }
+                when {
+                    rest.endsWith("/pause") -> { job["enabled"] = false; job["state"] = "paused"; json("""{"job":${jobJson(job)}}""") }
+                    rest.endsWith("/resume") -> { job["enabled"] = true; job["state"] = "scheduled"; json("""{"job":${jobJson(job)}}""") }
+                    rest.endsWith("/run") -> { pendingJobRuns += id; json("""{"job":${jobJson(job)}}""") }
+                    request.method == "PATCH" -> {
+                        val obj = HermesJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+                        obj.forEach { (k, v) -> job[k] = (v as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                        json("""{"job":${jobJson(job)}}""")
+                    }
+                    request.method == "DELETE" -> { jobs.remove(id); json("""{"ok":true}""") }
+                    else -> json("""{"job":${jobJson(job)}}""")
+                }
+            }
             path.startsWith("/v1/runs/") -> {
                 val rest = path.removePrefix("/v1/runs/")
                 val run = runs[rest.substringBefore('/')] ?: return@synchronized error(404, "Run not found", "run_not_found")
@@ -220,6 +279,19 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
             }
             else -> null
         }
+    }
+
+    /** 定时任务跑出来的会话（列表里会出现）。 */
+    val cronSessions: MutableList<String> = java.util.concurrent.CopyOnWriteArrayList()
+
+    private fun jobJson(job: Map<String, Any?>): String {
+        val sched = job["schedule"] as String
+        val kind = if (sched.startsWith("every")) "interval" else "cron"
+        fun q(v: Any?) = if (v == null) "null" else kotlinx.serialization.json.JsonPrimitive(v.toString()).toString()
+        return """{"id":${q(job["id"])},"name":${q(job["name"])},"prompt":${q(job["prompt"])},
+            "schedule":{"kind":"$kind","expr":${q(sched)},"display":${q(sched)}},"schedule_display":${q(sched)},
+            "enabled":${job["enabled"]},"state":${q(job["state"])},"next_run_at":"2026-10-19T08:00:00+00:00",
+            "last_run_at":${q(job["last_run_at"])},"last_status":${q(job["last_status"])},"last_error":null,"deliver":${q(job["deliver"])}}"""
     }
 
     private fun handle(request: RecordedRequest): MockResponse {
@@ -269,7 +341,9 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                          "run_status":{"method":"GET","path":"/v1/runs/{run_id}"},
                          "run_events":{"method":"GET","path":"/v1/runs/{run_id}/events"},
                          "run_stop":{"method":"POST","path":"/v1/runs/{run_id}/stop"},
-                         "run_approval":{"method":"POST","path":"/v1/runs/{run_id}/approval"}}}""",
+                         "run_approval":{"method":"POST","path":"/v1/runs/{run_id}/approval"},
+                         "model_options":{"method":"GET","path":"/api/model/options"},
+                         "session_model_lock":{"method":"POST","path":"/api/sessions/{session_id}/model"}}}""",
                 )
             }
             path == "/api/sessions" && version == Version.Old -> MockResponse().setResponseCode(404).setBody("404: Not Found")
@@ -285,7 +359,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                    {"id":"s3","source":"api_server","title":"被隐藏的","hidden":true},
                    {"id":"s4","source":"api_server","title":"已归档","archived":true},
                    {"id":"s5","source":"delegate","title":"子代理","is_internal_child":true},
-                   {"id":"s6","source":"kanban","title":"看板来的"}
+                   {"id":"s6","source":"kanban","title":"看板来的"}${cronSessions.joinToString("") { ",$it" }}
                 ],"limit":100,"offset":0,"has_more":false}""",
             )
             path.endsWith("/messages") && path != "/api/sessions/s1/messages" -> {

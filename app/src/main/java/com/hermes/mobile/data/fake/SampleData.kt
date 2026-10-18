@@ -7,6 +7,7 @@ import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.JobRunResult
+import com.hermes.mobile.data.model.JobSchedule
 import com.hermes.mobile.data.model.ModelOption
 import com.hermes.mobile.data.model.Role
 import com.hermes.mobile.data.model.Session
@@ -57,15 +58,18 @@ object SampleData {
     fun jobs() = listOf(
         CronJob(
             "j-brief", "每日简报", "整理今天的日程、天气和我关注的新闻，用三段话发给我",
-            "每天 08:00", "0 8 * * *", "明天 08:00", JobRunResult.Success, "今天 08:00", true, "App 通知",
+            "每天 08:00", "0 8 * * *", "明天 08:00", JobRunResult.Success, "今天 08:00", true, "在 App 里查看",
+            schedule = JobSchedule.Daily(8, 0),
         ),
         CronJob(
             "j-backup", "NAS 备份检查", "检查昨晚的备份任务是否成功，失败时告诉我原因",
             "每天 09:30", "30 9 * * *", "明天 09:30", JobRunResult.Failed, "今天 09:30", true, "Telegram",
+            deliver = "telegram", lastError = "备份目录 /mnt/nas/backup 不存在", schedule = JobSchedule.Daily(9, 30),
         ),
         CronJob(
             "j-papers", "论文周报", "汇总本周 arXiv 上关于 agent 的新论文",
-            "每周一 10:00", "0 10 * * 1", "周一 10:00", JobRunResult.Never, null, false, "仅记录",
+            "每周一 10:00", "0 10 * * 1", "周一 10:00", JobRunResult.Never, null, false, "在 App 里查看",
+            schedule = JobSchedule.Weekly(setOf(1), 10, 0),
         ),
     )
 

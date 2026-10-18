@@ -107,3 +107,61 @@ internal data class RunStatusDto(
     /** 新版：回复审批/追问时要带上的执行代号（pending_controls 里没有时用这个）。 */
     val execution_generation: JsonElement? = null,
 )
+
+// ---- 阶段 4：模型 ----
+
+/** GET /api/model/options：各 Provider 和它们的模型（和 Hermes 网页版、TUI 的模型选择器是同一份数据）。 */
+@Serializable
+internal data class ModelOptionsDto(
+    val providers: List<ProviderDto> = emptyList(),
+    /** Hermes 当前的默认模型和 Provider。 */
+    val model: String? = null,
+    val provider: String? = null,
+)
+
+@Serializable
+internal data class ProviderDto(
+    val slug: String,
+    val name: String? = null,
+    val is_current: Boolean? = null,
+    val authenticated: Boolean? = null,
+    val models: List<String> = emptyList(),
+    /** 模型 id → {"reasoning": true, "fast": false, ...} */
+    val capabilities: JsonObject? = null,
+)
+
+// ---- 阶段 4：定时任务 ----
+
+@Serializable
+internal data class JobListDto(val jobs: List<JobDto> = emptyList())
+
+@Serializable
+internal data class JobEnvelopeDto(val job: JobDto? = null)
+
+@Serializable
+internal data class JobDto(
+    val id: String,
+    val name: String? = null,
+    val prompt: String? = null,
+    val schedule: ScheduleDto? = null,
+    val schedule_display: String? = null,
+    val enabled: Boolean? = null,
+    val state: String? = null,
+    val next_run_at: String? = null,
+    val last_run_at: String? = null,
+    val last_status: String? = null,
+    val last_error: String? = null,
+    /** 结果发到哪：一般是字符串（local / origin / telegram …）。 */
+    val deliver: JsonElement? = null,
+    val paused_reason: String? = null,
+)
+
+@Serializable
+internal data class ScheduleDto(
+    /** cron / interval / once */
+    val kind: String? = null,
+    val expr: String? = null,
+    val display: String? = null,
+    val minutes: Int? = null,
+    val run_at: String? = null,
+)

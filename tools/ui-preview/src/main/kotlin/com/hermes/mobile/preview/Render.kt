@@ -99,7 +99,7 @@ private val scenes = listOf(
     Scene("08-chat-readonly") { repo, _ -> ChatScreen(repo, "s-4", onBack = {}, onOpenChat = {}) },
     Scene("09-sheet-model") { repo, _ ->
         SheetOver({ ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) }) {
-            ModelPickerContent(SampleData.models, "Claude Sonnet", {})
+            ModelPickerContent(SampleData.models, isSelected = { it.name == "Claude Sonnet" }, onSelect = {})
         }
     },
     Scene("10-sheet-attach") { repo, _ ->
@@ -126,6 +126,8 @@ private val scenes = listOf(
     },
     Scene("13-jobs") { repo, _ -> mainScreen(repo, MainTab.Jobs)() },
     Scene("14-job-editor") { repo, _ -> JobEditorScreen(repo, "j-brief", onClose = {}) },
+    Scene("14b-job-editor-failed") { repo, _ -> JobEditorScreen(repo, "j-backup", onClose = {}) },
+    Scene("14c-job-new") { repo, _ -> JobEditorScreen(repo, null, onClose = {}) },
     Scene("15-capabilities-models") { repo, _ -> mainScreen(repo, MainTab.Capabilities)() },
     Scene("16-capabilities-skills") { repo, _ -> CapabilitiesScreen(repo, initialTab = 1) },
     Scene("17-settings") { repo, _ -> mainScreen(repo, MainTab.Settings)() },

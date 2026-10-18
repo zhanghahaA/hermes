@@ -200,7 +200,18 @@ data class ChatNotice(val sessionId: String, val title: String, val text: String
 
 // ---- 模型 / 能力 ----
 
-data class ModelOption(val id: String, val name: String, val provider: String, val note: String? = null)
+/**
+ * 一个可选模型。[id] 在列表里唯一（`provider:model`）；[model] / [providerSlug] 是发给 Hermes 的值，
+ * [name] / [provider] 是显示用的。
+ */
+data class ModelOption(
+    val id: String,
+    val name: String,
+    val provider: String,
+    val note: String? = null,
+    val model: String = name,
+    val providerSlug: String = provider,
+)
 
 data class Skill(val name: String, val description: String, val category: String)
 
@@ -215,12 +226,21 @@ data class CronJob(
     val name: String,
     val prompt: String,
     val scheduleLabel: String,
+    /** 存到 Hermes 的 schedule 原文（cron 表达式、every 30m、ISO 时间……）。 */
     val cron: String,
     val nextRunLabel: String,
     val lastResult: JobRunResult,
     val lastRunLabel: String?,
     val enabled: Boolean,
+    /** 结果发到哪（给人看的说法）。 */
     val deliverTo: String,
+    /** Hermes 的 deliver 原值：local / telegram / discord …… */
+    val deliver: String = "local",
+    val lastError: String? = null,
+    /** 编辑界面用的结构化时间；null 表示用 [cron] 原文。 */
+    val schedule: JobSchedule? = null,
+    /** 刚点了“立即运行”，还在等 Hermes 跑完。 */
+    val runningNow: Boolean = false,
 )
 
 // ---- 当前连接能用的功能 ----

@@ -114,39 +114,51 @@ private fun ModelsTab(repository: HermesRepository, contentPadding: PaddingValue
     val models by repository.models.collectAsState()
     val defaultId by repository.defaultModelId.collectAsState()
     val current = models.firstOrNull { it.id == defaultId }
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(contentPadding)) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-        ) {
-            Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconBadge(
-                    Icons.Rounded.Psychology,
-                    container = MaterialTheme.colorScheme.primary,
-                    content = MaterialTheme.colorScheme.onPrimary,
-                    size = 48.dp,
-                )
-                Spacer(Modifier.width(16.dp))
-                Column {
-                    Text("默认模型", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    Text(current?.name ?: "—", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                    Text(
-                        "${current?.provider ?: ""} · 新对话默认使用",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
+    val serverDefault = models.firstOrNull { it.note == "Hermes 默认" }
+    ModelPickerContent(
+        models = models,
+        isSelected = { it.id == defaultId },
+        onSelect = { repository.setDefaultModel(it.id) },
+        contentPadding = contentPadding,
+        header = {
+            item(key = "current") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                ) {
+                    Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconBadge(
+                            Icons.Rounded.Psychology,
+                            container = MaterialTheme.colorScheme.primary,
+                            content = MaterialTheme.colorScheme.onPrimary,
+                            size = 48.dp,
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Column {
+                            Text("新对话默认模型", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(current?.name ?: "—", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(
+                                if (current != null && current.id != serverDefault?.id) "${current.provider} · 只影响在手机上新建的对话"
+                                else "${current?.provider ?: ""} · 跟随 Hermes 的默认设置",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
                 }
             }
-        }
-        ModelPickerContent(
-            models = models,
-            selectedName = current?.name,
-            onSelect = { repository.setDefaultModel(it.id) },
-            title = null,
-        )
-    }
+            item(key = "hint") {
+                Text(
+                    "已有的对话在聊天页顶部点模型名单独切换。Hermes 自己的默认模型要在那台机器上用 hermes model 修改。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                )
+            }
+        },
+    )
 }
 
 @Composable

@@ -12,6 +12,7 @@ import com.hermes.mobile.data.model.displayImages
 import com.hermes.mobile.data.model.imageCount
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import java.io.File
@@ -93,6 +94,8 @@ class RemoteHermesRepository(
      * 返回 Termux 里看到的路径；不支持时返回 null。
      */
     private val localFileExporter: ((path: String, name: String, mime: String) -> String?)? = null,
+    /** “立即运行”后多久查一次任务状态。测试里调短。 */
+    private val jobPollMillis: Long = 5_000,
     /** 断线重连的等待时间（毫秒），第 n 次失败等多久。测试里调短。 */
     private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
 ) : HermesRepository {
@@ -174,6 +177,8 @@ class RemoteHermesRepository(
                 )
                 loadSessions()
                 resumeStoredRuns(id)
+                scope.launch { loadModels() }
+                scope.launch { loadJobs() }
             } catch (e: HermesError) {
                 client = null
                 capabilities = null
@@ -602,7 +607,8 @@ class RemoteHermesRepository(
             return null
         }
         val id = DraftPrefix + UUID.randomUUID()
-        draftSessions.update { it + (id to Session(id = id, title = "新对话", preview = "", updatedAt = clock())) }
+        val model = appDefaultModel()?.model
+        draftSessions.update { it + (id to Session(id = id, title = "新对话", preview = "", updatedAt = clock(), model = model)) }
         return id
     }
 
@@ -620,6 +626,7 @@ class RemoteHermesRepository(
         chats.update { m -> m[uiId]?.let { m + (created.id to it) } ?: m }
         aliases.update { it + (uiId to created.id) }
         moveDraft(uiId, created.id)
+        applyInitialModel(uiId, created.id)
         chats.update { it - uiId }
         draftSessions.update { it - uiId }
         return created.id
@@ -1341,18 +1348,198 @@ class RemoteHermesRepository(
 
     // ---- 后续阶段的功能 ----
 
-    override val models: StateFlow<List<ModelOption>> = MutableStateFlow(emptyList())
-    override val defaultModelId: StateFlow<String> = MutableStateFlow("")
-    override fun setSessionModel(sessionId: String, modelId: String) = notYet<Unit>("切换模型")
-    override fun setDefaultModel(modelId: String) = notYet<Unit>("切换模型")
+    // ---- 模型 ----
+
+    private val _models = MutableStateFlow<List<ModelOption>>(emptyList())
+    override val models: StateFlow<List<ModelOption>> = _models.asStateFlow()
+    private val _defaultModelId = MutableStateFlow("")
+    override val defaultModelId: StateFlow<String> = _defaultModelId.asStateFlow()
+
+    /** Hermes 自己的默认模型（ModelOption.id）。 */
+    private var serverDefaultModel: String? = null
+
+    /** 草稿会话选了模型：等它在服务器上建好再锁定。 */
+    private val pendingModels = ConcurrentHashMap<String, ModelOption>()
+
+    /** 读 Hermes 的模型清单：只列已经配好（有 Key / 已登录）且有模型的 Provider，Hermes 当前用的排最前。 */
+    private suspend fun loadModels() {
+        val c = client ?: return
+        if (capabilities?.endpoints?.contains("model_options") != true) return
+        try {
+            val dto = c.modelOptions()
+            val providers = dto.providers.filter { (it.authenticated == true || it.is_current == true) && it.models.isNotEmpty() }
+                .sortedByDescending { it.is_current == true || it.slug == dto.provider }
+            val options = providers.flatMap { p ->
+                p.models.map { m ->
+                    val current = m == dto.model && (p.slug == dto.provider || p.is_current == true)
+                    ModelOption(
+                        id = "${p.slug}:$m",
+                        name = m,
+                        provider = p.name ?: p.slug,
+                        note = if (current) "Hermes 默认" else null,
+                        model = m,
+                        providerSlug = p.slug,
+                    )
+                }
+            }
+            _models.value = options
+            serverDefaultModel = options.firstOrNull { it.note == "Hermes 默认" }?.id
+            _defaultModelId.value = appDefaultModel()?.id ?: serverDefaultModel.orEmpty()
+            _features.update { it + AppFeature.Models }
+        } catch (e: HermesError) {
+            // 模型清单拿不到不影响聊天
+        }
+    }
+
+    private fun appDefaultModel(): ModelOption? {
+        val id = state.value.defaultModels[connectedId ?: return null] ?: return null
+        return _models.value.firstOrNull { it.id == id }
+    }
+
+    override fun setSessionModel(sessionId: String, modelId: String) {
+        val option = _models.value.firstOrNull { it.id == modelId } ?: return
+        val key = resolve(sessionId)
+        if (key.startsWith(DraftPrefix)) {
+            pendingModels[key] = option
+            draftSessions.update { m -> m[key]?.let { m + (key to it.copy(model = option.model)) } ?: m }
+            return
+        }
+        optimistic(key, { it.copy(model = option.model) }) { lockSessionModel(key, option.model, option.providerSlug) }
+    }
+
+    /** “新对话默认模型”：只影响从手机新建的对话（Hermes 自己的默认在服务器配置里，API 改不了）。 */
+    override fun setDefaultModel(modelId: String) {
+        val connection = connectedId ?: return
+        val toServerDefault = modelId == serverDefaultModel
+        persist { st -> st.copy(defaultModels = if (toServerDefault) st.defaultModels - connection else st.defaultModels + (connection to modelId)) }
+        _defaultModelId.value = modelId
+    }
+
+    /** 新会话刚在服务器上建好：把草稿时选的模型（或手机上设的默认模型）锁上。 */
+    private suspend fun applyInitialModel(draftId: String, sessionId: String) {
+        val choice = pendingModels.remove(draftId) ?: appDefaultModel()?.takeIf { it.id != serverDefaultModel } ?: return
+        try {
+            client?.lockSessionModel(sessionId, choice.model, choice.providerSlug)
+            updateSession(sessionId) { it.copy(model = choice.model) }
+        } catch (e: HermesError) {
+            _errors.tryEmit("没能切换到 ${choice.name}：${e.message}")
+        }
+    }
     override val skills: StateFlow<List<Skill>> = MutableStateFlow(emptyList())
     override val toolsets: StateFlow<List<Toolset>> = MutableStateFlow(emptyList())
     override fun toggleToolset(name: String) = notYet<Unit>("工具集")
-    override val jobs: StateFlow<List<CronJob>> = MutableStateFlow(emptyList())
-    override fun setJobEnabled(id: String, enabled: Boolean) = notYet<Unit>("定时任务")
-    override fun runJobNow(id: String) = notYet<Unit>("定时任务")
-    override fun saveJob(job: CronJob) = notYet<Unit>("定时任务")
-    override fun deleteJob(id: String) = notYet<Unit>("定时任务")
+    // ---- 定时任务 ----
+
+    private val _jobs = MutableStateFlow<List<CronJob>>(emptyList())
+    override val jobs: StateFlow<List<CronJob>> = _jobs.asStateFlow()
+
+    /** 读任务列表；能读到就说明这台 Hermes 支持定时任务接口（它不在能力清单里，只能试）。 */
+    private suspend fun loadJobs() {
+        val c = client ?: return
+        try {
+            val running = _jobs.value.filter { it.runningNow }.map { it.id }.toSet()
+            _jobs.value = c.jobs().jobs.map { it.toCronJob(clock()).copy(runningNow = it.id in running) }
+            _features.update { it + AppFeature.Jobs }
+        } catch (e: HermesError.NotSupported) {
+            _features.update { it - AppFeature.Jobs }
+        } catch (e: HermesError.Server) {
+            if (e.status == 501) _features.update { it - AppFeature.Jobs }
+        } catch (e: HermesError) {
+            // 网络问题：保留旧列表
+        }
+    }
+
+    override suspend fun refreshJobs() = loadJobs()
+
+    private fun replaceJob(dto: JobDto?) {
+        dto ?: return
+        val job = dto.toCronJob(clock())
+        _jobs.update { list -> if (list.any { it.id == job.id }) list.map { if (it.id == job.id) job.copy(runningNow = it.runningNow) else it } else list + job }
+    }
+
+    private fun jobCall(what: String, rollback: List<CronJob>? = null, call: suspend HermesClient.() -> Unit) {
+        scope.launch {
+            try {
+                client?.call() ?: throw HermesError.Unreachable("未连接")
+            } catch (e: HermesError) {
+                rollback?.let { _jobs.value = it }
+                _errors.tryEmit("$what：${e.message}")
+            }
+        }
+    }
+
+    override fun setJobEnabled(id: String, enabled: Boolean) {
+        val before = _jobs.value
+        _jobs.update { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
+        jobCall(if (enabled) "恢复任务失败" else "暂停任务失败", before) { replaceJob(jobAction(id, if (enabled) "resume" else "pause")) }
+    }
+
+    /**
+     * 立即运行。Hermes 只是把下次运行时间改成“现在”，调度器下一轮（一分钟内）才真正执行，
+     * 所以这里等它的“上次运行时间”变了，再刷新会话列表、发通知。
+     */
+    override fun runJobNow(id: String) {
+        val job = _jobs.value.firstOrNull { it.id == id } ?: return
+        _jobs.update { list -> list.map { if (it.id == id) it.copy(runningNow = true) else it } }
+        scope.launch {
+            val c = client ?: return@launch
+            try {
+                val before = c.job(id)?.last_run_at
+                c.jobAction(id, "run")
+                val deadline = clock() + 15 * 60_000
+                var done: JobDto? = null
+                while (clock() < deadline) {
+                    delay(jobPollMillis)
+                    val now = runCatching { c.job(id) }.getOrNull() ?: continue
+                    if (now.last_run_at != null && now.last_run_at != before) {
+                        done = now
+                        break
+                    }
+                }
+                _jobs.update { list -> list.map { if (it.id == id) it.copy(runningNow = false) else it } }
+                replaceJob(done)
+                loadSessions()
+                if (done != null) {
+                    val run = _sessions.value.filter { it.source.id == "cron" && it.title.startsWith(job.name + " · ") }.maxByOrNull { it.updatedAt }
+                    val failed = done.last_status != null && done.last_status != "ok"
+                    // 列表预览是 Hermes 加的系统说明，通知里换成它真正的回复
+                    val reply = run?.let { r ->
+                        runCatching { c.messages(r.id).data.lastOrNull { it.role == "assistant" }?.toChatItem(0, clock())?.text }.getOrNull()
+                    }
+                    _notices.tryEmit(
+                        ChatNotice(
+                            run?.id ?: "",
+                            job.name,
+                            if (failed) "运行失败：${done.last_error ?: done.last_status}" else (reply?.let { if (it.trim() == "[SILENT]") "没有新内容" else it }?.takeIf { it.isNotBlank() } ?: run?.preview?.takeIf { it.isNotBlank() } ?: "运行完成"),
+                            if (failed) ChatNotice.Kind.Failed else ChatNotice.Kind.Reply,
+                        ),
+                    )
+                }
+            } catch (e: HermesError) {
+                _jobs.update { list -> list.map { if (it.id == id) it.copy(runningNow = false) else it } }
+                _errors.tryEmit("运行「${job.name}」失败：${e.message}")
+            }
+        }
+    }
+
+    override fun saveJob(job: CronJob) {
+        val fields = HermesClient.patch {
+            put("name", job.name)
+            put("prompt", job.prompt)
+            put("schedule", job.cron)
+            put("deliver", job.deliver)
+        }
+        val exists = _jobs.value.any { it.id == job.id }
+        jobCall(if (exists) "保存任务失败" else "新建任务失败") {
+            replaceJob(if (exists) updateJob(job.id, fields) else createJob(fields))
+        }
+    }
+
+    override fun deleteJob(id: String) {
+        val before = _jobs.value
+        _jobs.update { list -> list.filterNot { it.id == id } }
+        jobCall("删除任务失败", before) { deleteJob(id) }
+    }
 
     // ---- 设置 ----
 

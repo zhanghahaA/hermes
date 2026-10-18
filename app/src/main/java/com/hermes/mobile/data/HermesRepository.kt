@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.map
 
 /**
  * UI 只依赖这个接口。骨架阶段由 [com.hermes.mobile.data.fake.FakeHermesRepository] 提供假数据，
@@ -100,6 +101,11 @@ interface HermesRepository {
 
     // 定时任务
     val jobs: StateFlow<List<CronJob>>
+    suspend fun refreshJobs() = Unit
+    /** 某个定时任务跑出来的会话（Hermes 每跑一次建一个会话，标题是“任务名 · 时间”），新的在前。 */
+    fun jobRuns(job: CronJob): Flow<List<Session>> = sessions.map { list ->
+        list.filter { it.source.id == "cron" && it.title.startsWith(job.name + " · ") }.sortedByDescending { it.updatedAt }
+    }
     fun setJobEnabled(id: String, enabled: Boolean)
     fun runJobNow(id: String)
     fun saveJob(job: CronJob)

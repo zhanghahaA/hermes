@@ -170,6 +170,29 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
   本机 Termux 存到 `/storage/emulated/0/Download/Hermes/`，消息里写 `📎 附件：<名字>（已保存到 <路径>，需要时请用工具读取）`。
   读记录时这些段落拆回文件卡片。
 
+## 模型（阶段 4）
+
+- `GET /api/model/options`：`{model, provider, providers:[{slug, name, is_current, authenticated, models:[...], capabilities}]}`。
+  App 只列出已登录（`authenticated`）或当前在用的 Provider，当前的排最前，标“Hermes 默认”。
+  注意：这个接口会去查各 Provider 的模型清单，某些 Provider（如 bedrock）可能触发 Hermes **按需安装依赖**到 `~/.hermes/installs`。
+  测试环境里遇到过装完后 Python 环境被切走、gateway 起不来的情况；不想要的话在 `config.yaml` 里设 `security.allow_lazy_installs: false`。
+- `POST /api/sessions/{id}/model` `{"model":..., "provider":...}`：锁定这个会话之后每一轮用的模型（Hermes 叫 session model lock）。
+  App 在草稿上选的模型，会在第一次发送、服务器建好会话之后、发第一条消息之前锁上。
+- Hermes 自己的默认模型 API 改不了。App 的“新对话默认模型”存在手机上（按连接分别存），新建对话时用上面的接口锁定。
+
+## 定时任务（阶段 4）
+
+- `/api/jobs` **不在 `/v1/capabilities` 里**，只能试：`GET /api/jobs?include_disabled=true` 能读到就显示“任务”页，404/501 就隐藏。
+- `POST /api/jobs` `{name, prompt, schedule, deliver}` 新建；`PATCH /api/jobs/{id}` 修改；`DELETE` 删除；
+  `POST /api/jobs/{id}/pause|resume|run`。返回 `{"job": {...}}`，出错时是 `{"error": "..."}`（App 原样显示）。
+- `schedule` 是一个字符串：cron 表达式（`0 8 * * 1-5`）、间隔（`every 30m`、`every 2h`）、或 ISO 时间（只跑一次）。
+  读回来是 `{kind: cron|interval|once, expr, minutes, run_at, display}`。App 把常见写法换成“每天/每周几/间隔/一次”的选择器，
+  其它写法放在“自定义”里原样保留。
+- “立即运行”只是把 `next_run_at` 改成现在，Hermes 的调度器下一轮（约 1 分钟内）才真正执行。App 隔几秒查一次 `last_run_at`，变了就刷新会话列表、发通知。
+- 每次运行在会话列表里多出一个 `source: "cron"`、标题为 `<任务名> · <日期>` 的会话；第一条用户消息前面有一大段 `[IMPORTANT: You are running as a scheduled cron job …]`，
+  App 在预览和聊天里都去掉。模型回复 `[SILENT]` 表示没有新内容。
+- `deliver`：`local`/`origin` 只存在 Hermes 里（App 里能看到）；`telegram`、`discord`、`slack` 等需要 Hermes 那边配好对应平台。
+
 ## 客户端说明（instructions）
 
 `/v1/runs` 的 `instructions` 字段是只对这一轮生效的补充系统提示（Hermes 里叫 ephemeral system prompt，追加在系统提示后面，不存进聊天记录）。

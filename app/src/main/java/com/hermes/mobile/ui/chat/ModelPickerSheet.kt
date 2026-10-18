@@ -19,6 +19,19 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -36,32 +49,72 @@ fun ModelPickerSheet(
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        ModelPickerContent(models, selectedName, onSelect)
+        ModelPickerContent(
+            models = models,
+            isSelected = { it.model == selectedName || it.name == selectedName },
+            onSelect = onSelect,
+            header = {
+                item(key = "title") {
+                    Column(Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
+                        Text("切换模型", style = MaterialTheme.typography.titleLarge)
+                        Text("只对这个对话生效", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
+            modifier = Modifier.navigationBarsPadding(),
+        )
     }
 }
 
-/** 按 Provider 分组的模型列表。底部面板和“能力”页共用。 */
+/**
+ * 按 Provider 分组、可以搜索的模型列表（一家 Provider 可能有上百个模型，所以是懒加载列表）。
+ * 底部面板和“能力”页共用；[header] 放在列表最上面。
+ */
 @Composable
 fun ModelPickerContent(
     models: List<ModelOption>,
-    selectedName: String?,
+    isSelected: (ModelOption) -> Boolean,
     onSelect: (ModelOption) -> Unit,
-    title: String? = "切换模型",
-    subtitle: String? = "只对当前会话生效",
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(bottom = 16.dp),
+    header: LazyListScope.() -> Unit = {},
 ) {
-    Column(Modifier.navigationBarsPadding().padding(bottom = 16.dp)) {
-        if (title != null) {
-            Column(Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
-                Text(title, style = MaterialTheme.typography.titleLarge)
-                if (subtitle != null) {
-                    Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+    var query by rememberSaveable { mutableStateOf("") }
+    val shown = remember(models, query) {
+        if (query.isBlank()) models
+        else models.filter { it.name.contains(query.trim(), true) || it.provider.contains(query.trim(), true) }
+    }
+    LazyColumn(modifier, contentPadding = contentPadding) {
+        header()
+        if (models.size > 8) {
+            item(key = "search") {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("搜索模型或 Provider") },
+                    leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                )
             }
         }
-        models.groupBy { it.provider }.forEach { (provider, group) ->
-            SectionHeader(provider, Modifier.padding(start = 4.dp))
-            group.forEach { model ->
-                val selected = model.name == selectedName
+        if (models.isEmpty()) {
+            item(key = "empty") {
+                Text(
+                    "Hermes 没有可选的模型。到 Hermes 那台机器上用 hermes model 配置 Provider 后再来看。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(24.dp),
+                )
+            }
+        }
+        shown.groupBy { it.provider }.forEach { (provider, group) ->
+            item(key = "h-$provider") { SectionHeader(provider, Modifier.padding(start = 4.dp)) }
+            items(group, key = { it.id }) { model ->
+                val selected = isSelected(model)
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -71,18 +124,15 @@ fun ModelPickerContent(
                 ) {
                     RadioButton(selected = selected, onClick = { onSelect(model) })
                     Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(model.name, style = MaterialTheme.typography.bodyLarge)
-                            if (model.note != null) {
-                                TagLabel(
-                                    model.note,
-                                    container = MaterialTheme.colorScheme.primaryContainer,
-                                    content = MaterialTheme.colorScheme.onPrimaryContainer,
-                                )
-                            }
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(model.name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f, fill = false))
+                        if (model.note != null) {
+                            TagLabel(
+                                model.note,
+                                container = MaterialTheme.colorScheme.primaryContainer,
+                                content = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
                         }
-                        Text(model.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
