@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import java.io.File
+import com.hermes.mobile.data.model.GatewayStatus
 import java.io.IOException
 import java.util.Base64
 import com.hermes.mobile.data.model.AppFeature
@@ -1748,6 +1749,29 @@ class RemoteHermesRepository(
         val before = _jobs.value
         _jobs.update { list -> list.filterNot { it.id == id } }
         jobCall("删除任务失败", before) { deleteJob(id) }
+    }
+
+    // ---- 管理 ----
+
+    private var adminFor: Pair<SshTunnel, HermesAdmin>? = null
+
+    override fun admin(): AdminApi? {
+        val t = tunnel ?: return null
+        adminFor?.let { (tt, a) -> if (tt === t) return a }
+        val profile = _connections.value.firstOrNull { it.id == connectedId }?.profile
+        return HermesAdmin(t, profile).also { adminFor = t to it }
+    }
+
+    override suspend fun gatewayStatus(): GatewayStatus? {
+        val c = client ?: return null
+        return try {
+            c.healthDetailed().toGatewayStatus()
+        } catch (e: HermesError.NotSupported) {
+            null
+        } catch (e: HermesError) {
+            _errors.tryEmit("读不到 gateway 状态：${e.message}")
+            null
+        }
     }
 
     // ---- 设置 ----

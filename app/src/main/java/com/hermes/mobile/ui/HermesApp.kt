@@ -22,6 +22,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.ui.admin.AdminPage
+import com.hermes.mobile.ui.admin.AdminScreen
 import com.hermes.mobile.ui.chat.ChatScreen
 import com.hermes.mobile.ui.jobs.JobEditorScreen
 import com.hermes.mobile.ui.main.MainScreen
@@ -37,6 +39,7 @@ data object WelcomeRoute
 data class ChatRoute(val sessionId: String)
 data class ConnectionEditRoute(val connectionId: String? = null, val type: String? = null)
 data class JobEditRoute(val jobId: String? = null)
+data class AdminRoute(val page: AdminPage)
 
 /** 全局轻提示，主要用来标注“这个功能还是占位”。 */
 val LocalShowMessage = staticCompositionLocalOf<(String) -> Unit> { {} }
@@ -96,7 +99,9 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 onEditConnection = { id -> navigator.push(ConnectionEditRoute(id)) },
                 onEditJob = { id -> navigator.push(JobEditRoute(id)) },
                 onOpenWelcome = { navigator.push(WelcomeRoute) },
+                onOpenAdmin = { navigator.push(AdminRoute(it)) },
             )
+            is AdminRoute -> AdminScreen(repository, route.page, onBack = navigator::pop)
             is ChatRoute -> ChatScreen(
                 repository = repository,
                 sessionId = route.sessionId,

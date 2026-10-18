@@ -44,6 +44,8 @@ import com.hermes.mobile.ui.chats.ActionSheetContent
 import com.hermes.mobile.ui.chats.ConnectionSwitcherContent
 import com.hermes.mobile.ui.chats.SheetAction
 import com.hermes.mobile.ui.jobs.JobEditorScreen
+import com.hermes.mobile.ui.admin.AdminPage
+import com.hermes.mobile.ui.admin.AdminScreen
 import com.hermes.mobile.ui.capabilities.SkillSheetContent
 import com.hermes.mobile.ui.main.MainScreen
 import com.hermes.mobile.ui.main.MainTab
@@ -132,6 +134,11 @@ private val scenes = listOf(
     Scene("15-capabilities-models") { repo, _ -> mainScreen(repo, MainTab.Capabilities)() },
     Scene("16-capabilities-skills") { repo, _ -> CapabilitiesScreen(repo, initialTab = 1) },
     Scene("16b-capabilities-toolsets") { repo, _ -> CapabilitiesScreen(repo, initialTab = 2) },
+    Scene("16d-capabilities-more") { repo, _ -> CapabilitiesScreen(repo, initialTab = 3) },
+    Scene("24-admin-memory", waitMs = 300) { repo, _ -> AdminScreen(repo, AdminPage.Memory, onBack = {}) },
+    Scene("25-admin-mcp", waitMs = 300) { repo, _ -> AdminScreen(repo, AdminPage.Mcp, onBack = {}) },
+    Scene("26-admin-gateway", waitMs = 300) { repo, _ -> AdminScreen(repo, AdminPage.Gateway, onBack = {}) },
+    Scene("27-admin-config", waitMs = 300) { repo, _ -> AdminScreen(repo, AdminPage.Config, onBack = {}) },
     Scene("16c-sheet-skill") { repo, _ ->
         SheetOver({ CapabilitiesScreen(repo, initialTab = 1) }) { SkillSheetContent(SampleData.skills[3], onUse = {}) }
     },

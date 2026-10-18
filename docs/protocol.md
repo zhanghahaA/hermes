@@ -220,6 +220,23 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 - 没有列出 Profile 的接口。名字不对（或没开 `gateway.multiplex_profiles`）时返回 404 `{"error":"Unknown or unconfigured profile"}`，App 会直接说明。
 - 单 Profile 的 gateway 上，`/p/default/` 只在它本来就跑在默认 Profile 时可用。
 
+## 管理功能（阶段 5，经 SSH）
+
+API 管不到的都经 SSH 做，尽量用 `hermes` 自己的命令（`-p <profile>` 跟连接设置走）：
+
+| 功能 | 做法 |
+|---|---|
+| 找到 Hermes 目录 | `hermes config path`（输出 config.yaml 的绝对路径，Profile 也对） |
+| 记忆 | 直接读写 `<目录>/memories/USER.md`、`MEMORY.md`：条目之间是 `\n§\n`；上限来自 `hermes config get memory --json`（默认 1375 / 2200 字）。写入先写临时文件再 `mv` |
+| MCP | `hermes config get mcp_servers --json` 读；`config set mcp_servers.<名>.url/command/args/enabled`、`config unset` 改。`hermes mcp add` 会停下来问问题，不用它。gateway 会自动按新配置重连 |
+| MCP 测试 | `hermes mcp test <名> < /dev/null`，输出原样显示 |
+| 配置文件 | SFTP 读写 config.yaml。保存前把新内容放进 `mktemp -d` 的临时目录，用 `HERMES_HOME=<临时目录> hermes config get model --json` 让 Hermes 读一遍：格式有错它会输出 “formatting error … at line N … Details: …”（**退出码仍是 0**），这时不覆盖；没问题才备份为 `config.yaml.mobile-backup` 再替换 |
+| 日志 | `hermes logs -n 200` |
+
+`hermes config get` 对没设过的键输出 “Config key not set” 并以非 0 退出，按“空”处理。
+
+Gateway 状态走 API：`GET /health/detailed` 有 `readiness.checks`（数据库、配置、模型、磁盘……）、`platforms`（各聊天平台的连接状态和错误）、`metrics_today`、`active_agents`。
+
 ## 客户端说明（instructions）
 
 `/v1/runs` 的 `instructions` 字段是只对这一轮生效的补充系统提示（Hermes 里叫 ephemeral system prompt，追加在系统提示后面，不存进聊天记录）。

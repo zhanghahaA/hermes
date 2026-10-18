@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.Skill
+import com.hermes.mobile.ui.admin.AdminPage
 import com.hermes.mobile.ui.chat.ModelPickerContent
 import com.hermes.mobile.ui.components.IconBadge
 import com.hermes.mobile.ui.components.EmptyState
@@ -52,7 +53,6 @@ import com.hermes.mobile.data.model.AppFeature
 import androidx.compose.material.icons.rounded.Extension
 import com.hermes.mobile.ui.components.NoInsets
 import com.hermes.mobile.ui.components.TagLabel
-import com.hermes.mobile.ui.rememberPlaceholder
 import com.hermes.mobile.ui.glass.GlassTopBar
 import com.hermes.mobile.ui.glass.TransparentBarColors
 import com.hermes.mobile.ui.main.LocalBottomBarSpace
@@ -65,7 +65,12 @@ import androidx.compose.ui.graphics.Color
 private val tabs = listOf("模型", "技能", "工具集", "更多")
 
 @Composable
-fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0, onUseSkill: (Skill) -> Unit = {}) {
+fun CapabilitiesScreen(
+    repository: HermesRepository,
+    initialTab: Int = 0,
+    onUseSkill: (Skill) -> Unit = {},
+    onOpenAdmin: (AdminPage) -> Unit = {},
+) {
     var tab by rememberSaveable { mutableIntStateOf(initialTab) }
     val backdrop = rememberLayerBackdrop()
     val bottomSpace = LocalBottomBarSpace.current
@@ -104,7 +109,7 @@ fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0, onUseS
                 tab == 0 -> ModelsTab(repository, contentPadding)
                 tab == 1 -> SkillsTab(repository, contentPadding, onUseSkill)
                 tab == 2 -> ToolsetsTab(repository, contentPadding)
-                else -> MoreTab(contentPadding)
+                else -> MoreTab(contentPadding, hasSsh = repository.admin() != null, onOpenAdmin = onOpenAdmin)
             }
         }
     }
@@ -162,10 +167,9 @@ private fun ModelsTab(repository: HermesRepository, contentPadding: PaddingValue
     )
 }
 
-/** API Server 管不到、需要通过 SSH 执行 hermes 命令的功能（计划 M5）。 */
+/** 管理功能：记忆、MCP、配置文件要经 SSH 读写 Hermes 的文件；Gateway 状态走 API。 */
 @Composable
-private fun MoreTab(contentPadding: PaddingValues) {
-    val placeholder = rememberPlaceholder()
+private fun MoreTab(contentPadding: PaddingValues, hasSsh: Boolean, onOpenAdmin: (AdminPage) -> Unit) {
     Column(
         Modifier
             .verticalScroll(rememberScrollState())
@@ -174,26 +178,27 @@ private fun MoreTab(contentPadding: PaddingValues) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            "下面这些功能 API Server 没有提供接口，计划在 SSH 连接下通过远程执行 hermes 命令来实现。",
+            if (hasSsh) "这些功能 API 管不到，App 经 SSH 在 Hermes 那台机器上读写它的文件、执行 hermes 命令。"
+            else "记忆、MCP 和配置文件要经 SSH 读写 Hermes 的文件。给当前连接配上 SSH 就能用（本机 Termux 用 8022 端口的 sshd）。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        MoreItem(Icons.Rounded.Memory, "记忆", "查看和整理 Hermes 记住的事情") { placeholder("记忆管理") }
-        MoreItem(Icons.Rounded.Hub, "MCP 服务器", "添加、启用或停用 MCP 服务器") { placeholder("MCP 管理") }
-        MoreItem(Icons.Rounded.Dns, "Gateway", "查看 gateway 状态、重启服务") { placeholder("Gateway 管理") }
-        MoreItem(Icons.Rounded.Terminal, "配置文件", "编辑 config.yaml 和 .env") { placeholder("配置编辑") }
+        MoreItem(Icons.Rounded.Memory, "记忆", "看看 Hermes 记住了你什么，改错的、删多余的", needsSsh = !hasSsh) { onOpenAdmin(AdminPage.Memory) }
+        MoreItem(Icons.Rounded.Hub, "MCP 服务器", "添加、测试、启用或停用 MCP 服务器", needsSsh = !hasSsh) { onOpenAdmin(AdminPage.Mcp) }
+        MoreItem(Icons.Rounded.Dns, "Gateway", "运行状态、接入的平台、今天的用量和日志", needsSsh = false) { onOpenAdmin(AdminPage.Gateway) }
+        MoreItem(Icons.Rounded.Terminal, "配置文件", "直接编辑 config.yaml（保存前自动检查格式）", needsSsh = !hasSsh) { onOpenAdmin(AdminPage.Config) }
     }
 }
 
 @Composable
-private fun MoreItem(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+private fun MoreItem(icon: ImageVector, title: String, subtitle: String, needsSsh: Boolean, onClick: () -> Unit) {
     OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
         ListItem(
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
             leadingContent = { IconBadge(icon) },
             headlineContent = { Text(title) },
             supportingContent = { Text(subtitle) },
-            trailingContent = { TagLabel("需要 SSH") },
+            trailingContent = { if (needsSsh) TagLabel("需要 SSH") },
         )
     }
 }

@@ -47,7 +47,7 @@ class SshTunnel(
     private val pinnedHostKey: String?,
     private val onHostKey: (String) -> Unit = {},
     private val connectTimeoutMs: Int = 10_000,
-) : Closeable {
+) : Closeable, RemoteShell {
 
     private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
     val localPort: Int get() = server.localPort
@@ -123,7 +123,7 @@ class SshTunnel(
      * 在服务器上执行一条命令（用登录 shell，这样 `hermes` 在 PATH 里），返回退出码和输出（stdout + stderr）。
      * 用来做 API 管不到的事，比如开关工具集。
      */
-    fun exec(command: String, timeoutSeconds: Long = 60): Pair<Int, String> {
+    override fun exec(command: String, timeoutSeconds: Long): Pair<Int, String> {
         fun once(): Pair<Int, String> = session().startSession().use { s ->
             val cmd = s.exec("bash -lc " + shellQuote(command) + " 2>&1")
             val out = cmd.inputStream.readBytes().toString(Charsets.UTF_8)
@@ -132,6 +132,40 @@ class SshTunnel(
         }
         return try {
             once()
+        } catch (e: IOException) {
+            reset()
+            once()
+        }
+    }
+
+    override fun readFile(path: String): ByteArray? {
+        fun once(): ByteArray? = session().newSFTPClient().use { sftp ->
+            if (sftp.statExistence(path) == null) return@use null
+            sftp.open(path).use { file -> file.RemoteFileInputStream().use { it.readBytes() } }
+        }
+        return try {
+            once()
+        } catch (e: net.schmizz.sshj.sftp.SFTPException) {
+            throw e
+        } catch (e: IOException) {
+            reset()
+            once()
+        }
+    }
+
+    override fun writeFile(path: String, bytes: ByteArray) {
+        fun once() = session().newSFTPClient().use { sftp ->
+            val modes = java.util.EnumSet.of(
+                net.schmizz.sshj.sftp.OpenMode.WRITE,
+                net.schmizz.sshj.sftp.OpenMode.CREAT,
+                net.schmizz.sshj.sftp.OpenMode.TRUNC,
+            )
+            sftp.open(path, modes).use { file -> file.RemoteFileOutputStream().use { it.write(bytes) } }
+        }
+        try {
+            once()
+        } catch (e: net.schmizz.sshj.sftp.SFTPException) {
+            throw e
         } catch (e: IOException) {
             reset()
             once()

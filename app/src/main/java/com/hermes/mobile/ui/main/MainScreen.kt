@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.Draft
+import com.hermes.mobile.ui.admin.AdminPage
 import com.hermes.mobile.ui.capabilities.CapabilitiesScreen
 import com.hermes.mobile.ui.chats.ChatsScreen
 import com.hermes.mobile.ui.jobs.JobsScreen
@@ -62,6 +63,7 @@ fun MainScreen(
     onEditConnection: (String?) -> Unit,
     onEditJob: (String?) -> Unit,
     onOpenWelcome: () -> Unit,
+    onOpenAdmin: (AdminPage) -> Unit = {},
     initialTab: MainTab = MainTab.Chats,
 ) {
     var tabIndex by rememberSaveable { mutableIntStateOf(initialTab.ordinal) }
@@ -107,6 +109,7 @@ fun MainScreen(
                                     onOpenChat(id)
                                 }
                             },
+                            onOpenAdmin = onOpenAdmin,
                         )
                         MainTab.Settings -> SettingsScreen(
                             repository = repository,

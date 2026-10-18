@@ -1,5 +1,7 @@
 package com.hermes.mobile.data.remote
 
+import com.hermes.mobile.data.model.GatewayStatus
+
 import com.hermes.mobile.data.model.Skill
 
 import com.hermes.mobile.data.model.ChatItem
@@ -260,3 +262,36 @@ internal fun parseSkillListing(output: String): List<Skill> = output.lines().map
         category = if (dirs.size >= 2) dirs[dirs.size - 2] else "",
     )
 }.sortedWith(compareBy({ it.category }, { it.name }))
+
+/** `/health/detailed` → 状态页要显示的东西。各字段都可能缺。 */
+internal fun JsonObject.toGatewayStatus(): GatewayStatus {
+    fun JsonObject.obj(key: String) = this[key] as? JsonObject
+    fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull
+    fun JsonObject.num(key: String) = (this[key] as? JsonPrimitive)?.doubleOrNull
+    val checks = obj("readiness")?.obj("checks").orEmpty().map { (name, value) ->
+        val c = value as? JsonObject
+        val status = c?.str("status")
+        val detail = when (name) {
+            "disk" -> c?.num("used_percent")?.let { "已用 ${"%.0f".format(it)}%" }
+            "gateway" -> c?.str("state")
+            else -> c?.str("error") ?: c?.str("message")
+        }
+        GatewayStatus.Check(name, status == "ok", detail)
+    }
+    val platforms = obj("platforms").orEmpty().map { (name, value) ->
+        val p = value as? JsonObject
+        GatewayStatus.Platform(name, p?.str("state") ?: "unknown", p?.str("error_message") ?: p?.str("error_code"))
+    }
+    val today = obj("metrics_today") ?: obj("api_server")?.obj("metrics_today")
+    return GatewayStatus(
+        ok = str("status") == "ok",
+        state = str("gateway_state"),
+        checks = checks,
+        platforms = platforms,
+        activeAgents = num("active_agents")?.toInt(),
+        requestsToday = today?.num("requests")?.toInt(),
+        messagesToday = today?.num("messages")?.toInt(),
+        tokensToday = today?.num("tokens")?.toLong(),
+        diskUsedPercent = obj("readiness")?.obj("checks")?.obj("disk")?.num("used_percent"),
+    )
+}

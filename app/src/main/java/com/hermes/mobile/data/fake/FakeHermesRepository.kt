@@ -300,6 +300,9 @@ class FakeHermesRepository(
     override val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
 
     override val skillsError: StateFlow<String?> = MutableStateFlow(null)
+    private val fakeAdmin = FakeAdmin()
+    override fun admin(): com.hermes.mobile.data.remote.AdminApi = fakeAdmin
+    override suspend fun gatewayStatus() = FakeAdmin.status
     override val toolsetsBusy: StateFlow<Set<String>> = MutableStateFlow(emptySet())
     override fun canToggleToolsets() = true
 

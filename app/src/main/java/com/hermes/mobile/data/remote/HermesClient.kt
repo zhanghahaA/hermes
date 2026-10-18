@@ -175,6 +175,9 @@ class HermesClient(
 
     // ---- 定时任务 ----
 
+    /** `/health/detailed`：gateway 的运行状态、各平台连接情况、今天的用量。字段随版本变化，原样返回。 */
+    internal suspend fun healthDetailed(): JsonObject = get("/health/detailed", JsonObject.serializer())
+
     internal suspend fun skills(): SkillListDto = get("/v1/skills", SkillListDto.serializer())
 
     internal suspend fun toolsets(): ToolsetListDto = get("/v1/toolsets", ToolsetListDto.serializer())

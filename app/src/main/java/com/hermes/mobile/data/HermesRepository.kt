@@ -107,6 +107,12 @@ interface HermesRepository {
     /** 重新读技能和工具集（打开“能力”页时）。 */
     suspend fun refreshCapabilities() = Unit
 
+    // 管理
+    /** 经 SSH 的管理功能（记忆、MCP、配置文件、日志）。连接没配 SSH 时为 null。 */
+    fun admin(): com.hermes.mobile.data.remote.AdminApi? = null
+    /** gateway 状态（`/health/detailed`，不需要 SSH）。 */
+    suspend fun gatewayStatus(): com.hermes.mobile.data.model.GatewayStatus? = null
+
     // 定时任务
     val jobs: StateFlow<List<CronJob>>
     suspend fun refreshJobs() = Unit

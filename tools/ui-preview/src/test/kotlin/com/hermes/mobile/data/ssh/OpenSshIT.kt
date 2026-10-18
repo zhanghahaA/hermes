@@ -174,4 +174,61 @@ class OpenSshIT {
             scope.cancel()
         }
     }
+
+    /** 管理功能：记忆、MCP、配置文件、日志，全部对着真实的 sshd + hermes 命令。 */
+    @Test
+    fun adminOverRealSsh() {
+        if (dir == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_SSH_DIR / HERMES_IT_KEY")
+            return
+        }
+        val tunnel = com.hermes.mobile.data.ssh.SshTunnel(
+            "127.0.0.1", sshPort, user, com.hermes.mobile.data.ssh.SshAuth.Key(File(dir, "user_ed25519").readText()), 8642, null, {},
+        )
+        try {
+            tunnel.connect()
+            val admin = com.hermes.mobile.data.remote.HermesAdmin(tunnel, null)
+            runBlocking {
+                // 记忆：写进去、读回来，再恢复
+                val before = admin.memory()
+                println("记忆：" + before.joinToString { "${it.target.label} ${it.entries.size} 条 ${it.used}/${it.charLimit}" })
+                val user = before.first { it.target == com.hermes.mobile.data.model.MemoryTarget.User }
+                admin.saveMemory(user.target, user.entries + "IT 测试：喜欢简短回答")
+                assertTrue(admin.memory().first { it.target == user.target }.entries.contains("IT 测试：喜欢简短回答"))
+                admin.saveMemory(user.target, user.entries)
+                assertEquals(user.entries, admin.memory().first { it.target == user.target }.entries)
+
+                // MCP：新建、改成网址、停用、测试、删除
+                admin.saveMcpServer(com.hermes.mobile.data.model.McpServer("ittest", command = "echo", args = listOf("hi there")))
+                assertEquals(listOf("hi there"), admin.mcpServers().first { it.name == "ittest" }.args)
+                admin.saveMcpServer(com.hermes.mobile.data.model.McpServer("ittest", url = "https://example.com/mcp"), previousName = "ittest")
+                val changed = admin.mcpServers().first { it.name == "ittest" }
+                assertEquals("https://example.com/mcp", changed.url)
+                assertEquals(null, changed.command, "改成网址后旧的命令字段要清掉")
+                admin.setMcpEnabled("ittest", false)
+                assertEquals(false, admin.mcpServers().first { it.name == "ittest" }.enabled)
+                println("MCP 测试输出：" + admin.testMcpServer("ittest").lines().take(3))
+                admin.removeMcpServer("ittest")
+                assertTrue(admin.mcpServers().none { it.name == "ittest" })
+
+                // 配置文件：坏的不保存，好的保存后能读回
+                val original = admin.readConfig()
+                assertTrue(original.isNotBlank())
+                val e = runCatching { admin.saveConfig(original + "\nbroken: [unclosed\n") }.exceptionOrNull()
+                println("坏配置：${e?.message}")
+                assertTrue(e is com.hermes.mobile.data.remote.AdminException)
+                assertEquals(original, admin.readConfig(), "格式不对时原文件不动")
+                admin.saveConfig(original + "\n# hermes-mobile IT\n")
+                assertTrue(admin.readConfig().endsWith("# hermes-mobile IT\n"))
+                admin.saveConfig(original)
+                assertEquals(original, admin.readConfig())
+
+                val logs = admin.logs(20)
+                println("日志最后一行：" + logs.lines().lastOrNull())
+                assertTrue(logs.isNotBlank())
+            }
+        } finally {
+            tunnel.close()
+        }
+    }
 }

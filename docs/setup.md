@@ -138,6 +138,17 @@ platform_toolsets:
   否则在那台机器上运行 `hermes tools` 修改。SSH 登录后要能找到 `hermes` 命令。
 - Hermes 正在回复时，你可以接着打字发送，这叫“插话”：它不会被打断，会在下一步看到你补充的话。想让它停下，输入框空着时点停止按钮。
 
+## 管理 Hermes（能力 → 更多）
+
+- **记忆**：Hermes 记住的关于你的事（USER.md）和它自己的笔记（MEMORY.md），可以改、删、加，显示已用字数和上限。
+- **MCP 服务器**：添加（网址或本机命令）、测试连接、启用/停用、删除。改的是 config.yaml，Hermes 会自动重连。
+- **Gateway**：运行状态、接入的平台（Telegram 等）是否连着、今天的请求和 Token 用量；配了 SSH 还能看最近的日志。
+- **配置文件**：直接编辑 config.yaml。保存前会让 Hermes 先检查格式，有错不会覆盖；原文件备份为 `config.yaml.mobile-backup`。
+  API Key 等密钥在 `.env` 里，App 不显示也不改。
+
+除了 Gateway 状态，其它都要连接配了 SSH。本机 Termux：在 Termux 里 `pkg install openssh`、`passwd` 设密码、运行 `sshd`（端口 8022），
+然后在连接设置里填 SSH 用户名（`whoami` 的结果）和密码。SSH 登录后要能直接运行 `hermes` 命令。
+
 ## 后台和通知
 
 等 Hermes 回复时，App 会在通知栏显示“Hermes 正在回复…”，这样切到后台、锁屏也不会断。
