@@ -93,10 +93,20 @@ class HermesClient(
         send("POST", "/api/sessions/${id.encode()}/fork", JsonObject(emptyMap()), SessionEnvelopeDto.serializer()).session
 
     /** 提交一轮对话。[idempotencyKey] 相同的重试不会让 Hermes 重复执行。 */
-    internal suspend fun startRun(sessionId: String, input: JsonElement, idempotencyKey: String, instructions: String? = null): RunAcceptedDto {
+    internal suspend fun startRun(
+        sessionId: String,
+        input: JsonElement,
+        idempotencyKey: String,
+        instructions: String? = null,
+        model: String? = null,
+        provider: String? = null,
+    ): RunAcceptedDto {
         val body = patch {
             put("input", input)
             put("session_id", sessionId)
+            // 这一轮用哪个模型。/v1/runs 不读会话上锁定的模型，不带就是 Hermes 的默认模型
+            if (model != null) put("model", model)
+            if (provider != null) put("provider", provider)
             // 只对这一轮生效的补充系统提示（Hermes 叫 ephemeral system prompt），不进聊天记录
             if (instructions != null) put("instructions", instructions)
         }

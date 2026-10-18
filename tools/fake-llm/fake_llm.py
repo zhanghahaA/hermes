@@ -71,6 +71,7 @@ def chunk(delta, finish=None):
 
 async def chat(request):
     body = await request.json()
+    print("model=%s" % body.get("model"), flush=True)
     messages = body.get("messages", [])
     text = last_user_text(messages)
     stream = body.get("stream", False)

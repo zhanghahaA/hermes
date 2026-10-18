@@ -51,8 +51,8 @@ fun SwipeBackHost(
     SystemBackHandler(enabled = navigator.canGoBack) { progress ->
         val top = navigator.entries.last()
         try {
-            // 系统手势：页面随进度移动最多 30% 屏宽，缩成卡片；松手后再滑出
-            progress.collect { p -> top.offset.snapTo(p * SystemGestureTravel) }
+            // 系统手势：页面跟着手指走（和应用内的右滑一样），缩成卡片；松手后再滑出
+            progress.collect { p -> top.offset.snapTo(p) }
             navigator.settle(top, commit = true, velocity = 0f)
         } catch (e: CancellationException) {
             scope.launch { navigator.settle(top, commit = false, velocity = 0f) }
@@ -83,8 +83,6 @@ fun SwipeBackHost(
         }
     }
 }
-
-private const val SystemGestureTravel = 0.3f
 
 /** 顶层页面：跟着进度右移，同时缩小、出现圆角和阴影（Android 预测性返回的样式）。 */
 internal fun Modifier.topPage(fraction: () -> Float): Modifier = graphicsLayer {

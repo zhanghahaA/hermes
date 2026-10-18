@@ -75,12 +75,26 @@ class ModelsJobsTest {
     @Test
     fun switchingModelLocksTheSession() {
         val s = server()
-        val repo = connected(s)
+        val store = MemoryLocalStore()
+        val repo = connected(s, store)
         val sonnet = repo.models.await("模型清单") { it.isNotEmpty() }.first { it.model == "anthropic/claude-sonnet-5.5" }
         repo.setSessionModel("s1", sonnet.id)
         repo.sessions.await("会话显示新模型") { list -> list.first { it.id == "s1" }.model == sonnet.model }
         runBlocking { withTimeout(5_000) { while (s.modelLocks["s1"] == null) kotlinx.coroutines.delay(20) } }
         assertEquals("openrouter/anthropic/claude-sonnet-5.5", s.modelLocks["s1"])
+
+        // Hermes 的 /v1/runs 不读会话锁，每条消息都要带上模型
+        repo.sendMessage("s1", "用新模型回答", emptyList())
+        runBlocking { withTimeout(10_000) { while (s.requests.none { it.path == "/v1/runs" }) kotlinx.coroutines.delay(20) } }
+        val run = bodyOf(s, "POST", "/v1/runs")
+        assertTrue("\"model\":\"anthropic/claude-sonnet-5.5\"" in run && "\"provider\":\"openrouter\"" in run, run)
+
+        // 重启 App 后（模型清单还没读到时）也照样带上
+        val again = connected(s, store)
+        again.sendMessage("s1", "再来一句", emptyList())
+        runBlocking { withTimeout(10_000) { while (s.requests.count { it.path == "/v1/runs" } < 2) kotlinx.coroutines.delay(20) } }
+        val second = bodyOf(s, "POST", "/v1/runs")
+        assertTrue("\"model\":\"anthropic/claude-sonnet-5.5\"" in second, second)
     }
 
     @Test
@@ -99,6 +113,8 @@ class ModelsJobsTest {
         val lock = s.requests.indexOfFirst { it.path == "/api/sessions/new1/model" }
         val run = s.requests.indexOfFirst { it.path == "/v1/runs" }
         assertTrue(lock in 0 until run, "先锁模型再发第一条消息")
+        val body = bodyOf(s, "POST", "/v1/runs")
+        assertTrue("\"model\":\"openai/gpt-6.1-sol\"" in body && "\"provider\":\"openrouter\"" in body, "第一条消息就用选的模型：$body")
     }
 
     @Test
@@ -117,6 +133,8 @@ class ModelsJobsTest {
         again.sendMessage(draft, "嗨", emptyList())
         runBlocking { withTimeout(10_000) { while (s.modelLocks["new1"] == null) kotlinx.coroutines.delay(20) } }
         assertEquals("openrouter/anthropic/claude-sonnet-5.5", s.modelLocks["new1"])
+        runBlocking { withTimeout(10_000) { while (s.requests.none { it.path == "/v1/runs" }) kotlinx.coroutines.delay(20) } }
+        assertTrue("\"provider\":\"openrouter\"" in bodyOf(s, "POST", "/v1/runs"), "默认模型也要带在每一轮里")
 
         again.setDefaultModel("custom:fake-model")
         assertFalse(store.state!!.defaultModels.containsKey("c1"), "改回 Hermes 默认就不再单独存")

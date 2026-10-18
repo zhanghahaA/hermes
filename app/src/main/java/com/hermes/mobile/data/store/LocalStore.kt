@@ -17,6 +17,11 @@ data class StoredState(
     val drafts: Map<String, String> = emptyMap(),
     /** 连接 id → 从手机新建对话时默认用的模型（ModelOption.id）。没设就用 Hermes 自己的默认。 */
     val defaultModels: Map<String, String> = emptyMap(),
+    /**
+     * "连接 id/会话 id" → 这个对话选的模型（ModelOption.id，即 "provider:model"）。
+     * Hermes 的 /v1/runs 不看会话上锁定的模型，所以每一轮都要带上。
+     */
+    val sessionModels: Map<String, String> = emptyMap(),
 )
 
 @Serializable

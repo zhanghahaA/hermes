@@ -983,7 +983,10 @@ class RemoteHermesRepository(
             val sessionId = ensureServerSession(uiId)
             val input = buildInput(out)
             val instructions = ClientInstructions + skillCommandNote(out.text).orEmpty()
-            val accepted = withRetry { c.startRun(sessionId, input, idempotencyKey = localId, instructions = instructions) }
+            val (model, provider) = chosenModel(sessionId)
+            val accepted = withRetry {
+                c.startRun(sessionId, input, idempotencyKey = localId, instructions = instructions, model = model, provider = provider)
+            }
             val runId = accepted.run_id ?: throw HermesError.NotHermes()
             outbox.remove(localId)
             setLocalStatus(sessionId, localId, DeliveryStatus.Sent)
@@ -1449,7 +1452,27 @@ class RemoteHermesRepository(
             draftSessions.update { m -> m[key]?.let { m + (key to it.copy(model = option.model)) } ?: m }
             return
         }
+        rememberSessionModel(key, option)
+        // 锁定是给桌面版、网页版看的；App 自己每一轮都带上模型（/v1/runs 不读这个锁）
         optimistic(key, { it.copy(model = option.model) }) { lockSessionModel(key, option.model, option.providerSlug) }
+    }
+
+    private fun sessionModelKey(sessionId: String) = "${connectedId.orEmpty()}/$sessionId"
+
+    private fun rememberSessionModel(sessionId: String, option: ModelOption) {
+        if (connectedId == null) return
+        persist { st -> st.copy(sessionModels = st.sessionModels + (sessionModelKey(sessionId) to option.id)) }
+    }
+
+    /** 这个对话在手机上选过的模型 → (model, provider)；没选过返回 (null, null)，用 Hermes 的默认。 */
+    private fun chosenModel(sessionId: String): Pair<String?, String?> {
+        val id = state.value.sessionModels[sessionModelKey(sessionId)] ?: return null to null
+        val option = _models.value.firstOrNull { it.id == id }
+        if (option != null) return option.model to option.providerSlug
+        // 模型清单还没读到：id 就是 "provider:model"（模型名里可能也有冒号，provider 里没有）
+        val provider = id.substringBefore(':', "")
+        val model = id.substringAfter(':', "")
+        return if (provider.isEmpty() || model.isEmpty()) null to null else model to provider
     }
 
     /** “新对话默认模型”：只影响从手机新建的对话（Hermes 自己的默认在服务器配置里，API 改不了）。 */
@@ -1463,6 +1486,7 @@ class RemoteHermesRepository(
     /** 新会话刚在服务器上建好：把草稿时选的模型（或手机上设的默认模型）锁上。 */
     private suspend fun applyInitialModel(draftId: String, sessionId: String) {
         val choice = pendingModels.remove(draftId) ?: appDefaultModel()?.takeIf { it.id != serverDefaultModel } ?: return
+        rememberSessionModel(sessionId, choice)
         try {
             client?.lockSessionModel(sessionId, choice.model, choice.providerSlug)
             updateSession(sessionId) { it.copy(model = choice.model) }
