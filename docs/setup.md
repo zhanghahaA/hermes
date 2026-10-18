@@ -40,6 +40,7 @@ API Server 默认只监听本机（`127.0.0.1`）的 8642 端口，手机访问�
 |---|---|
 | 网络可达 | 地址或端口不对；Tailscale 没连上；`API_SERVER_HOST` 还是 `127.0.0.1` |
 | 识别 Hermes | 这个端口上跑的不是 Hermes；或者 Hermes 太旧，还没有 API Server |
+| 识别 Hermes（提示 hermes serve） | 端口被 `hermes serve` / `hermes dashboard`（桌面版、网页版的后端，默认 9119）占了。App 要的是 `hermes gateway` 里的 API Server，两者不是一个东西 |
 | API Key 鉴权 | Key 填错了，或者和 `.env` 里的 `API_SERVER_KEY` 不一致 |
 | 能力探测 | Hermes 版本太旧（早于 2026.6），没有会话接口，建议升级 |
 

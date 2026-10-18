@@ -575,7 +575,9 @@ private fun ConnectionTestPanel(steps: List<ConnectionTestStep>, onTest: () -> U
 
 @Composable
 private fun TestStepRow(step: ConnectionTestStep) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    // 短的说明（如 “14 ms”）放在右边；长的（失败原因、指纹）放到标题下面，别把标题挤成竖排
+    val inline = step.detail != null && step.detail.length <= 16 && step.status != TestStepStatus.Failed
+    Row(verticalAlignment = if (inline || step.detail == null) Alignment.CenterVertically else Alignment.Top) {
         Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
             when (step.status) {
                 TestStepStatus.Running -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -586,14 +588,23 @@ private fun TestStepRow(step: ConnectionTestStep) {
             }
         }
         Spacer(Modifier.width(12.dp))
-        Text(
-            step.title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (step.status == TestStepStatus.Pending) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        if (step.detail != null) {
-            Text(step.detail, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                step.title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (step.status == TestStepStatus.Pending) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            )
+            if (step.detail != null && !inline) {
+                Text(
+                    step.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (step.status == TestStepStatus.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (inline) {
+            Spacer(Modifier.width(8.dp))
+            Text(step.detail!!, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

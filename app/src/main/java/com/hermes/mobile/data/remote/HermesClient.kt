@@ -35,7 +35,7 @@ sealed class HermesError(message: String) : Exception(message) {
     class Unreachable(detail: String) : HermesError(detail)
     class Timeout : HermesError("连接超时，确认地址、端口和网络（例如 Tailscale 是否已连上）")
     class Tls(detail: String) : HermesError("HTTPS 证书有问题：$detail")
-    class NotHermes : HermesError("这个地址有服务在运行，但不是 Hermes API Server")
+    class NotHermes(detail: String = "这个地址有服务在运行，但不是 Hermes API Server") : HermesError(detail)
     class Unauthorized : HermesError("API Key 不对，或者服务器没有配置 API_SERVER_KEY")
     class NotSupported(val what: String) : HermesError("这台 Hermes 的版本不支持$what")
     class Conflict(val code: String?, detail: String) : HermesError(detail)
@@ -63,7 +63,10 @@ class HermesClient(
     private val streamHttp: OkHttpClient = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
 
     internal suspend fun health(): HealthDto =
-        get("/health", HealthDto.serializer(), auth = false, profileScoped = false)
+        get("/health", HealthDto.serializer(), auth = false, profileScoped = false).also {
+            // 随便一个返回 JSON 的服务也能解析成功（字段全是可选的），至少要有 status 或 platform 才算 Hermes
+            if (it.status == null && it.platform == null) throw HermesError.NotHermes()
+        }
 
     internal suspend fun capabilities(): CapabilitiesDto = get("/v1/capabilities", CapabilitiesDto.serializer())
 
@@ -199,9 +202,11 @@ class HermesClient(
         if (response.isSuccessful) return response
         val (code, message) = response.use { r ->
             val body = runCatching { r.body.string() }.getOrDefault("")
+            if ("Headless backend (hermes serve)" in body || "hermes dashboard" in body) throw HermesError.NotHermes(WrongBackendHint)
             val error = runCatching { HermesJson.decodeFromString(ErrorBodyDto.serializer(), body).error }.getOrNull()
             error?.code to (error?.message ?: "HTTP ${r.code}")
         }
+        // 端口上跑的是 hermes serve / hermes dashboard（桌面版和网页版的后端），不是 App 要连的 API Server
         throw when (response.code) {
             401, 403 -> HermesError.Unauthorized()
             404, 405 -> HermesError.NotSupported("这个功能")
@@ -214,6 +219,12 @@ class HermesClient(
 
     companion object {
         private val JsonMedia = "application/json".toMediaType()
+
+        /** 新版 Hermes 的 `hermes serve` / `hermes dashboard` 也会占一个端口，但它们不是 App 用的 API Server。 */
+        const val WrongBackendHint =
+            "这个端口上运行的是 hermes serve / dashboard（桌面版和网页版用的后端），不是 API Server。" +
+                "App 要连的是 hermes gateway 里的 API Server：在 ~/.hermes/.env 里设 API_SERVER_ENABLED=true，" +
+                "启动 hermes gateway，并确认它的端口（默认 8642）没有被 hermes serve 占用"
 
         /** 所有连接共用一个连接池。普通请求 20 秒超时；流式聊天（阶段 2）会单独放宽。 */
         val SharedHttp: OkHttpClient = OkHttpClient.Builder()

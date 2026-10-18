@@ -20,6 +20,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
         Old,
         /** 不是 Hermes：随便一个返回网页的服务器。 */
         NotHermes,
+        /** 新版 Hermes 的 `hermes serve`（桌面版后端）占了这个端口。 */
+        HermesServe,
     }
 
     val server = MockWebServer()
@@ -186,6 +188,10 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
     }
 
     private fun handle(request: RecordedRequest): MockResponse {
+        if (version == Version.HermesServe) {
+            return MockResponse().setResponseCode(404).setHeader("Content-Type", "application/json")
+                .setBody("""{"error":"Headless backend (hermes serve): web UI disabled — use `hermes dashboard` for the browser UI."}""")
+        }
         if (version == Version.NotHermes) {
             return MockResponse().setHeader("Content-Type", "text/html").setBody("<html><body>Welcome to nginx!</body></html>")
         }

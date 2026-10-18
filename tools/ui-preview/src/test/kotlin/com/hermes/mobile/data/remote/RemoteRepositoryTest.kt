@@ -102,6 +102,15 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun hermesServeOnThePortIsExplained() {
+        val s = server(FakeHermesServer.Version.HermesServe)
+        val result = steps(repo().testConnection(s.profile(), s.key))
+        assertEquals(TestStepStatus.Passed, result[0].status)
+        assertEquals(TestStepStatus.Failed, result[1].status)
+        assertTrue(result[1].detail!!.contains("hermes serve") && result[1].detail!!.contains("hermes gateway"), result[1].detail)
+    }
+
+    @Test
     fun unreachableHostFailsAtFirstStep() {
         val s = server(FakeHermesServer.Version.Modern)
         val port = s.server.port
