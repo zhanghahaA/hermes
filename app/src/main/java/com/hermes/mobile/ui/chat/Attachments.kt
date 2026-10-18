@@ -24,6 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.PictureAsPdf
@@ -77,6 +81,9 @@ fun rememberLocalSource(source: String?): String? {
     return state.value
 }
 
+/** 点消息里的文件卡片。由聊天页提供（弹出“打开 / 分享 / 保存”）。 */
+val LocalOpenFile = staticCompositionLocalOf<(FileRef) -> Unit> { {} }
+
 /** 点消息里的图片时打开大图。由聊天页提供。 */
 val LocalOpenImage = staticCompositionLocalOf<(ImageRef) -> Unit> { {} }
 
@@ -127,12 +134,14 @@ fun ImageGrid(images: List<ImageRef>, modifier: Modifier = Modifier) {
 /** 消息里的文件卡片。 */
 @Composable
 fun FileChips(files: List<FileRef>, tint: Color, modifier: Modifier = Modifier) {
+    val open = LocalOpenFile.current
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         files.forEach { file ->
             Row(
                 Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(tint.copy(alpha = 0.10f))
+                    .clickable(enabled = file.openable) { open(file) }
                     .padding(horizontal = 10.dp, vertical = 8.dp)
                     .widthIn(max = 260.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -283,6 +292,52 @@ fun ImageViewer(image: ImageRef, onDismiss: () -> Unit) {
             IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
                 Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
             }
+        }
+    }
+}
+
+/** 点文件卡片后的操作面板。 */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun FileActionSheet(file: FileRef, busy: Boolean, onOpen: () -> Unit, onShare: () -> Unit, onSave: () -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(fileIcon(file.name), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(file.name, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    val detail = listOfNotNull(
+                        file.sizeBytes?.takeIf { it >= 0 }?.let(::formatSize),
+                        file.remotePath?.takeIf { file.localPath == null && file.inlineText == null }?.let { "在 Hermes 那台机器上：$it" },
+                    ).joinToString(" · ")
+                    if (detail.isNotEmpty()) {
+                        Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (busy) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            }
+            FileAction("打开", "用手机上的其它应用打开", Icons.AutoMirrored.Rounded.OpenInNew, !busy, onOpen)
+            FileAction("分享", "发到微信、邮件、网盘……", Icons.Rounded.Share, !busy, onShare)
+            FileAction("保存到手机", "存到“下载/Hermes”文件夹", Icons.Rounded.Download, !busy, onSave)
+        }
+    }
+}
+
+@Composable
+private fun FileAction(title: String, subtitle: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(16.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

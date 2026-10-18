@@ -264,4 +264,18 @@ class SshTunnelTest {
         assertEquals(TestStepStatus.Failed, result[2].status)
         assertTrue(result[2].detail!!.contains("不允许端口转发"), result[2].detail)
     }
+
+    @Test
+    fun generatedFilesOpenOverSftp() {
+        val hermes = hermes()
+        val ssh = sshd()
+        java.nio.file.Files.createDirectories(ssh.home.resolve("scratch"))
+        java.nio.file.Files.writeString(ssh.home.resolve("scratch/one-character.md"), "糖")
+        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), mediaDir = kotlin.io.path.createTempDirectory("m").toFile(), backoff = { 50L })
+        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        val file = com.hermes.mobile.data.model.FileRef("one-character.md", remotePath = "/scratch/one-character.md")
+        val local = assertNotNull(runBlocking { repo.fileForOpening(file) })
+        assertEquals("糖", java.io.File(local).readText())
+    }
 }

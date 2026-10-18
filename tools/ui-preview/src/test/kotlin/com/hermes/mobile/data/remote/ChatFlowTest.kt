@@ -351,4 +351,20 @@ class ChatFlowTest {
         again.saveDraft("s1", Draft(""))
         assertTrue(again.drafts.value.isEmpty())
     }
+
+    @Test
+    fun runsCarryClientInstructionsAndFilesOpen() {
+        val s = server()
+        val repo = connected(s)
+        repo.sendMessage("s1", "你好", emptyList())
+        repo.chatItems("s1").await("回复") { list -> list.texts().any { it.second == "最终回复：你好" } }
+        val body = s.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
+        assertTrue(body.contains("\"instructions\"") && body.contains("MEDIA:/absolute/path"), "告诉模型这个 App 能收文件、能渲染 Markdown")
+
+        val text = com.hermes.mobile.data.model.FileRef("a.md", inlineText = "# 糖")
+        val path = assertNotNull(runBlocking { repo.fileForOpening(text) })
+        assertEquals("# 糖", java.io.File(path).readText())
+        assertTrue(path.endsWith(".md"))
+        assertNull(runBlocking { repo.fileForOpening(com.hermes.mobile.data.model.FileRef("x.md", remotePath = "/srv/x.md")) }, "直连没有 SSH 拿不到服务器上的文件")
+    }
 }

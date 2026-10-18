@@ -100,8 +100,20 @@ data class Draft(val text: String = "", val attachments: List<Attachment> = empt
     val isEmpty: Boolean get() = text.isBlank() && attachments.isEmpty()
 }
 
-/** 消息里附带的文件（只用来显示：文件名、大小、说明）。 */
-data class FileRef(val name: String, val sizeBytes: Long? = null, val note: String? = null)
+/**
+ * 消息里附带的文件。点开时按顺序找内容：[localPath]（手机上的文件）→ [inlineText]（消息里带着的文本）
+ * → [remotePath]（Hermes 那台机器上的文件，经 SSH 下载）。
+ */
+data class FileRef(
+    val name: String,
+    val sizeBytes: Long? = null,
+    val note: String? = null,
+    val remotePath: String? = null,
+    val localPath: String? = null,
+    val inlineText: String? = null,
+) {
+    val openable: Boolean get() = localPath != null || inlineText != null || remotePath != null
+}
 
 /** 输入框里待发送的附件。 */
 sealed interface Attachment {

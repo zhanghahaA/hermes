@@ -8,6 +8,7 @@ import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionState
 import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.Draft
+import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.ModelOption
@@ -78,6 +79,9 @@ interface HermesRepository {
      * 当前连接拿不到（没有 SSH）时返回 null。
      */
     suspend fun fetchRemoteMedia(path: String): String? = null
+
+    /** 消息里的文件准备好给系统打开：返回本机路径；拿不到（服务器上的文件但没有 SSH）返回 null。 */
+    suspend fun fileForOpening(file: FileRef): String? = file.localPath?.takeIf { java.io.File(it).isFile }
     fun retryMessage(sessionId: String, itemId: String)
     fun regenerate(sessionId: String, itemId: String)
     fun deleteItem(sessionId: String, itemId: String)

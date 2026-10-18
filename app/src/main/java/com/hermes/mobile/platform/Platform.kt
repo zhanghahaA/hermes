@@ -173,3 +173,55 @@ private fun decodeImage(source: String, maxPx: Int): androidx.compose.ui.graphic
     val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
     return bitmap?.asImageBitmap()
 }
+
+/** 消息里的文件：用别的 App 打开、分享、存到“下载/Hermes”。传入的都是本机文件路径。 */
+class FileActions(
+    val open: (path: String, name: String) -> Unit,
+    val share: (path: String, name: String) -> Unit,
+    val save: (path: String, name: String) -> String?,
+)
+
+@Composable
+fun rememberFileActions(onError: (String) -> Unit): FileActions {
+    val context = LocalContext.current
+    val currentError = androidx.compose.runtime.rememberUpdatedState(onError)
+    return androidx.compose.runtime.remember(context) {
+        /** 按原文件名复制一份到缓存，再给出 content:// 地址（别的 App 看到的是正确的文件名和类型）。 */
+        fun contentUri(path: String, name: String): Pair<android.net.Uri, String> {
+            val dir = java.io.File(context.cacheDir, "share/" + java.util.UUID.randomUUID()).apply { mkdirs() }
+            val copy = java.io.File(dir, name.replace('/', '_').ifBlank { "file" })
+            java.io.File(path).copyTo(copy, overwrite = true)
+            val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", copy)
+            return uri to mimeOf(name)
+        }
+        FileActions(
+            open = { path, name ->
+                try {
+                    val (uri, mime) = contentUri(path, name)
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+                        .setDataAndType(uri, mime)
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(android.content.Intent.createChooser(intent, "打开 $name").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (e: Exception) {
+                    currentError.value("没有能打开这个文件的应用")
+                }
+            },
+            share = { path, name ->
+                runCatching {
+                    val (uri, mime) = contentUri(path, name)
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
+                        .setType(mime)
+                        .putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    context.startActivity(android.content.Intent.createChooser(intent, "分享 $name").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                }.onFailure { currentError.value("分享失败：${it.message}") }
+            },
+            save = { path, name -> AttachmentImporter.exportForTermux(context, path, name, mimeOf(name))?.let { "已保存到 下载/Hermes/${it.substringAfterLast('/')}" } },
+        )
+    }
+}
+
+private fun mimeOf(name: String): String =
+    android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
+        ?: if (name.substringAfterLast('.', "").lowercase() in setOf("md", "log", "kt", "py", "sh", "yaml", "yml", "toml", "ini", "conf")) "text/plain"
+        else "application/octet-stream"

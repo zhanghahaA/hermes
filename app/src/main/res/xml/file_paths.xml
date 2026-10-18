@@ -2,4 +2,6 @@
 <!-- 拍照时相机把照片写到这里（App 自己的缓存目录） -->
 <paths>
     <cache-path name="camera" path="camera/" />
+    <!-- 打开/分享文件时，先按原文件名复制到这里，别的 App 看到的才是正确的名字 -->
+    <cache-path name="share" path="share/" />
 </paths>

@@ -70,4 +70,29 @@ class AttachmentTextTest {
         assertEquals("画好了", item.text)
         assertEquals(RemoteMediaPrefix + "/gen/cat.png", item.images.single().source)
     }
+
+    @Test
+    fun plainPathsInRepliesBecomeOpenableFiles() {
+        // 截图里真实的回复：模型没用 MEDIA:，直接写了路径
+        val reply = "已生成，文档里只有一个“糖”字，没有换行或其他内容。\n\n当前接口无法直接附加 MD 文件，文件保存在手机端：" +
+            "/data/data/com.termux/files/home/.hermes/cache/scratch/one-character-md-jorbfi46/one-character.md"
+        val (text, media) = replyMedia(reply)
+        assertEquals(reply, text, "正文不改")
+        val file = media.files.single()
+        assertEquals("one-character.md", file.name)
+        assertEquals("/data/data/com.termux/files/home/.hermes/cache/scratch/one-character-md-jorbfi46/one-character.md", file.remotePath)
+        assertTrue(file.openable)
+    }
+
+    @Test
+    fun plainPathDetectionIgnoresUrlsAndShortThings() {
+        val text = "看 https://example.com/a/b.png 和 a/b.txt 还有 `~/notes/todo.md`，以及 /etc/nginx/nginx.conf。"
+        assertEquals(listOf("~/notes/todo.md", "/etc/nginx/nginx.conf"), PlainPaths.find(text))
+    }
+
+    @Test
+    fun sentTextFilesKeepTheirContentForOpening() {
+        val (_, files) = AttachmentText.parse("看\n\n" + AttachmentText.textFile("a.csv", "x,y\n1,2"))
+        assertEquals("x,y\n1,2", files.single().inlineText)
+    }
 }

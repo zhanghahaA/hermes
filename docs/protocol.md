@@ -169,3 +169,10 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
   文本文件把内容写进消息（`📎 附件：<名字>` + 代码块）；PDF 渲染成图片；其它文件 SSH 用 SFTP 传到 `~/hermes-uploads/`，
   本机 Termux 存到 `/storage/emulated/0/Download/Hermes/`，消息里写 `📎 附件：<名字>（已保存到 <路径>，需要时请用工具读取）`。
   读记录时这些段落拆回文件卡片。
+
+## 客户端说明（instructions）
+
+`/v1/runs` 的 `instructions` 字段是只对这一轮生效的补充系统提示（Hermes 里叫 ephemeral system prompt，追加在系统提示后面，不存进聊天记录）。
+Hermes 对 API 客户端的默认提示是“渲染层未知，别用 Markdown；runs 接口不处理 MEDIA:，只写纯文本路径”。App 每轮都附带一段说明，
+告诉模型这个客户端能渲染 Markdown、能收任意文件（用 `MEDIA:/绝对路径`）。实测（gemini-2.5-flash）：不带说明时模型只说“已生成文件”，
+带上后回复 `MEDIA:/root/sugar.md`。

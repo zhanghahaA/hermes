@@ -79,12 +79,12 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long, imageSource: 
             )
         }
     } else {
-        val (body, media) = MediaTags.parse(rawText)
+        val (body, media) = replyMedia(rawText)
         text = body
-        images = partImages + media.filter { it.isImage }.mapIndexed { i, m ->
-            ImageRef("img-$index-r$i", hue = ((index * 31 + i * 67) % 360).toFloat(), aspect = 1f, source = RemoteMediaPrefix + m.path)
+        images = partImages + media.images.mapIndexed { i, path ->
+            ImageRef("img-$index-r$i", hue = ((index * 31 + i * 67) % 360).toFloat(), aspect = 1f, source = RemoteMediaPrefix + path)
         }
-        files = media.filterNot { it.isImage }.map { FileRef(it.path.substringAfterLast('/'), note = "在服务器上：${it.path}") }
+        files = media.files
     }
     if (role == Role.Assistant && text.isBlank() && images.isEmpty() && files.isEmpty()) return null
     if (role == Role.User && text.isBlank() && images.isEmpty() && files.isEmpty()) return null
@@ -172,3 +172,15 @@ private fun JsonObject.imageUrl(): String? = when (val v = this["image_url"]) {
     is JsonObject -> (v["url"] as? JsonPrimitive)?.contentOrNull
     else -> null
 }?.takeIf { it.isNotBlank() }
+
+/** 回复里要给用户的文件：MEDIA: 标签（去掉）+ 正文里直接写出的路径（保留）。 */
+internal data class ReplyMedia(val images: List<String>, val files: List<FileRef>)
+
+internal fun replyMedia(raw: String): Pair<String, ReplyMedia> {
+    val (body, tagged) = MediaTags.parse(raw)
+    val plain = PlainPaths.find(body).filter { p -> tagged.none { it.path == p } }
+    val all = tagged.map { it.path to it.isImage } + plain.map { it to MediaTags.isImagePath(it) }
+    val images = all.filter { it.second }.map { it.first }
+    val files = all.filterNot { it.second }.map { (path, _) -> FileRef(path.substringAfterLast('/'), note = "在 Hermes 那台机器上", remotePath = path) }
+    return body to ReplyMedia(images, files)
+}

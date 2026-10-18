@@ -42,3 +42,13 @@ fun rememberImageBitmap(source: String?, maxPx: Int): androidx.compose.ui.graphi
             org.jetbrains.skia.Image.makeFromEncoded(bytes).toComposeImageBitmap()
         }.getOrNull()
     }
+
+class FileActions(
+    val open: (path: String, name: String) -> Unit,
+    val share: (path: String, name: String) -> Unit,
+    val save: (path: String, name: String) -> String?,
+)
+
+@Suppress("UNUSED_PARAMETER")
+@Composable
+fun rememberFileActions(onError: (String) -> Unit): FileActions = FileActions({ _, _ -> }, { _, _ -> }, { _, _ -> null })

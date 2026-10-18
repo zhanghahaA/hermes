@@ -785,6 +785,16 @@ class RemoteHermesRepository(
         }
     }
 
+    override suspend fun fileForOpening(file: FileRef): String? = withContext(Dispatchers.IO) {
+        file.localPath?.takeIf { File(it).isFile }?.let { return@withContext it }
+        file.inlineText?.let { text ->
+            val dir = File(mediaDir ?: return@let null, "text").apply { mkdirs() }
+            val ext = file.name.substringAfterLast('.', "txt").filter { it.isLetterOrDigit() }.take(8).ifEmpty { "txt" }
+            return@withContext File(dir, sha256Hex(text).take(40) + "." + ext).apply { if (!isFile) writeText(text) }.path
+        }
+        file.remotePath?.let { fetchRemoteMedia(it) }
+    }
+
     // ---- 发过的图片 ----
 
     private val sentImagesFile: File? get() = mediaDir?.let { File(it, "sent-images.json") }
@@ -904,7 +914,7 @@ class RemoteHermesRepository(
             val c = client ?: throw HermesError.Unreachable("还没连上 Hermes")
             val sessionId = ensureServerSession(uiId)
             val input = buildInput(out)
-            val accepted = withRetry { c.startRun(sessionId, input, idempotencyKey = localId) }
+            val accepted = withRetry { c.startRun(sessionId, input, idempotencyKey = localId, instructions = ClientInstructions) }
             val runId = accepted.run_id ?: throw HermesError.NotHermes()
             outbox.remove(localId)
             setLocalStatus(sessionId, localId, DeliveryStatus.Sent)
@@ -1186,9 +1196,9 @@ class RemoteHermesRepository(
         if (runs[run.sessionId] !== run) return
         val raw = output.trim().ifEmpty { chats.value[run.sessionId]?.streaming?.trim().orEmpty() }
         // 回复里的 MEDIA:<路径> 是 Hermes 生成的文件：图片显示出来，其它显示成卡片
-        val (text, media) = MediaTags.parse(raw)
-        val images = media.filter { it.isImage }.mapIndexed { i, m -> ImageRef("reply-${run.runId}-$i", 200f + i * 40, 1f, RemoteMediaPrefix + m.path) }
-        val files = media.filterNot { it.isImage }.map { FileRef(it.path.substringAfterLast('/'), note = "在服务器上：${it.path}") }
+        val (text, media) = replyMedia(raw)
+        val images = media.images.mapIndexed { i, path -> ImageRef("reply-${run.runId}-$i", 200f + i * 40, 1f, RemoteMediaPrefix + path) }
+        val files = media.files
         finish(run)
         // 先把结果显示出来，再去服务器拉正式记录对齐
         updateChat(run.sessionId) { st ->
@@ -1345,6 +1355,18 @@ class RemoteHermesRepository(
         java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 
     private companion object {
+        /**
+         * 每轮对话附带给模型的客户端说明（Hermes 追加在系统提示后面，不存进聊天记录）。
+         * Hermes 对 API 客户端的默认说法是“不支持 Markdown、runs 接口发不了文件、只写纯文本路径”，
+         * 这个 App 两样都支持，告诉模型按 App 的方式来。
+         */
+        const val ClientInstructions =
+            "Client note: the user is chatting through the Hermes Mobile Android app, which renders Markdown " +
+                "(headings, lists, code blocks, tables) and supports file delivery on this endpoint. To send the user " +
+                "ANY file you created or want to share (images, documents, archives, audio...), put MEDIA:/absolute/path " +
+                "on its own line; the app shows images inline and turns other files into cards the user can open or save. " +
+                "Prefer that over writing the bare path. This overrides the generic API-server delivery advice."
+
         const val DraftPrefix = "draft-"
         val ImageExtensions = listOf("jpg", "png", "webp", "gif")
 

@@ -53,11 +53,12 @@ internal object AttachmentText {
                 // 跳过整个代码块
                 var end = i + 2
                 while (end < lines.size && lines[end] != fence) end++
-                val size = lines.subList(i + 2, minOf(end, lines.size)).joinToString("\n").toByteArray().size.toLong()
-                files += FileRef(name, size, note)
+                val content = lines.subList(i + 2, minOf(end, lines.size)).joinToString("\n")
+                files += FileRef(name, content.toByteArray().size.toLong(), note, inlineText = content)
                 i = end + 1
             } else {
-                files += FileRef(name, null, note?.let(::friendlyNote))
+                val uploaded = note?.takeIf { it.startsWith("已保存到 ") }?.removePrefix("已保存到 ")?.substringBefore('，')
+                files += FileRef(name, null, note?.let(::friendlyNote), remotePath = uploaded)
                 i++
             }
         }
@@ -147,6 +148,8 @@ internal object MediaTags {
 
     data class Found(val path: String, val isImage: Boolean)
 
+    fun isImagePath(path: String): Boolean = path.substringAfterLast('.', "").lowercase() in imageExt
+
     fun parse(text: String): Pair<String, List<Found>> {
         if (!text.contains("MEDIA:")) return text to emptyList()
         val found = mutableListOf<Found>()
@@ -159,6 +162,19 @@ internal object MediaTags {
         val tidy = cleaned.lines().joinToString("\n") { it.trimEnd() }.replace(Regex("\n{3,}"), "\n\n").trim()
         return tidy to found
     }
+}
+
+/**
+ * 回复里直接写出来的文件路径（模型没用 MEDIA: 标签时）。只认绝对路径（或 ~/ 开头）且带扩展名的，
+ * 正文不改，额外做成文件卡片 / 图片，点开时经 SSH 下载。
+ */
+internal object PlainPaths {
+    private val path = Regex("""(?<![\w/.~:])((?:~|/[A-Za-z0-9_.-]+)(?:/[^\s`'"<>()（）\[\]，。；：！？、]+)+\.[A-Za-z0-9]{1,8})(?![\w/])""")
+
+    fun find(text: String): List<String> =
+        path.findAll(text).map { it.groupValues[1].trimEnd('.', ',') }
+            .filter { it.count { c -> c == '/' } >= 2 && !it.startsWith("//") }
+            .distinct().take(6).toList()
 }
 
 /** 服务器上的文件：界面通过仓库下载（SSH）后再显示。 */

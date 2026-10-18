@@ -64,10 +64,12 @@ import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.Draft
+import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.MaxImagesPerMessage
 import com.hermes.mobile.data.model.imageCount
 import com.hermes.mobile.platform.rememberAttachmentPickers
+import com.hermes.mobile.platform.rememberFileActions
 import com.hermes.mobile.data.model.Role
 import com.hermes.mobile.data.model.RunPhase
 import com.hermes.mobile.data.model.Session
@@ -154,6 +156,8 @@ fun ChatScreen(
         snapshotFlow { draft to attachments }.collect { (text, files) -> repository.saveDraft(sessionId, Draft(text, files)) }
     }
     var viewing by remember { mutableStateOf<ImageRef?>(null) }
+    var fileTarget by remember { mutableStateOf<FileRef?>(null) }
+    var fileBusy by remember { mutableStateOf(false) }
     var showModels by remember { mutableStateOf(false) }
     var showAttach by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -229,7 +233,7 @@ fun ChatScreen(
     var bottomBarHeight by remember { mutableIntStateOf(0) }
     val bottomBarSpace = with(density) { bottomBarHeight.toDp() }
 
-    CompositionLocalProvider(LocalOpenImage provides { viewing = it }) {
+    CompositionLocalProvider(LocalOpenImage provides { viewing = it }, LocalOpenFile provides { fileTarget = it }) {
     Scaffold(
         contentWindowInsets = NoInsets,
         topBar = {
@@ -375,6 +379,32 @@ fun ChatScreen(
             },
             anyFile = repository.canSendAnyFile(),
             onDismiss = { showAttach = false },
+        )
+    }
+
+    val fileActions = rememberFileActions(onError = showMessage)
+    fileTarget?.let { file ->
+        /** 先把文件准备到手机上（服务器上的经 SSH 下载），再交给系统。 */
+        fun withLocal(action: (String) -> Unit) {
+            fileBusy = true
+            scope.launch {
+                val path = repository.fileForOpening(file)
+                fileBusy = false
+                if (path == null) {
+                    showMessage("这个文件在 Hermes 那台机器上，给连接配上 SSH（本机 Termux 打开“文件互通”）后才能打开")
+                } else {
+                    fileTarget = null
+                    action(path)
+                }
+            }
+        }
+        FileActionSheet(
+            file = file,
+            busy = fileBusy,
+            onOpen = { withLocal { fileActions.open(it, file.name) } },
+            onShare = { withLocal { fileActions.share(it, file.name) } },
+            onSave = { withLocal { path -> showMessage(fileActions.save(path, file.name) ?: "保存失败") } },
+            onDismiss = { if (!fileBusy) fileTarget = null },
         )
     }
 

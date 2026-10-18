@@ -12,8 +12,8 @@ fun List<Attachment>.displayImages(): List<ImageRef> = flatMap { attachment ->
 fun List<Attachment>.displayFiles(): List<FileRef> = mapNotNull { attachment ->
     when (attachment) {
         is Attachment.Pdf -> FileRef(attachment.name, attachment.sizeBytes, "共 ${attachment.totalPages} 页")
-        is Attachment.TextFile -> FileRef(attachment.name, attachment.sizeBytes)
-        is Attachment.BinaryFile -> FileRef(attachment.name, attachment.sizeBytes)
+        is Attachment.TextFile -> FileRef(attachment.name, attachment.sizeBytes, inlineText = attachment.text)
+        is Attachment.BinaryFile -> FileRef(attachment.name, attachment.sizeBytes, localPath = attachment.path)
         is Attachment.Image -> null
     }
 }
