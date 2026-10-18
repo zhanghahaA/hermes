@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.Attachment
+import com.hermes.mobile.data.model.Draft
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.MaxImagesPerMessage
 import com.hermes.mobile.data.model.imageCount
@@ -83,6 +84,8 @@ import com.hermes.mobile.ui.rememberPlaceholder
 import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.AppFeature
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalTextToolbar
 import kotlinx.coroutines.delay
@@ -143,8 +146,13 @@ fun ChatScreen(
     val models by repository.models.collectAsState()
     val features by repository.features.collectAsState()
 
-    var draft by rememberSaveable(sessionId) { mutableStateOf("") }
-    var attachments by remember(sessionId) { mutableStateOf(listOf<Attachment>()) }
+    // 草稿存在仓库里：退出聊天再进来、甚至重启 App，输入框里的字还在
+    val savedDraft = remember(sessionId) { repository.draft(sessionId) }
+    var draft by rememberSaveable(sessionId) { mutableStateOf(savedDraft.text) }
+    var attachments by remember(sessionId) { mutableStateOf(savedDraft.attachments) }
+    LaunchedEffect(sessionId) {
+        snapshotFlow { draft to attachments }.collect { (text, files) -> repository.saveDraft(sessionId, Draft(text, files)) }
+    }
     var viewing by remember { mutableStateOf<ImageRef?>(null) }
     var showModels by remember { mutableStateOf(false) }
     var showAttach by remember { mutableStateOf(false) }

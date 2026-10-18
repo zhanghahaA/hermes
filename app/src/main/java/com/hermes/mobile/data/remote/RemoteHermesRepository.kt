@@ -2,6 +2,10 @@ package com.hermes.mobile.data.remote
 
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.Attachment
+import com.hermes.mobile.data.model.Draft
+import com.hermes.mobile.data.model.FileRef
+import com.hermes.mobile.data.model.ImageRef
+import kotlinx.coroutines.sync.withLock
 import com.hermes.mobile.data.model.MaxImagesPerMessage
 import com.hermes.mobile.data.model.displayFiles
 import com.hermes.mobile.data.model.displayImages
@@ -219,7 +223,7 @@ class RemoteHermesRepository(
         // 改了 SSH 地址就是另一台服务器了，旧指纹作废
         val moved = previous != null && (previous.host != profile.host || previous.sshPort != profile.sshPort)
         val pinned = when {
-            profile.type != ConnectionType.Ssh -> null
+            profile.sshUser.isNullOrBlank() -> null
             moved -> seenHostKeys[profile.id]
             else -> profile.sshHostKey ?: seenHostKeys[profile.id]
         }
@@ -231,7 +235,7 @@ class RemoteHermesRepository(
             var keys = s.keys
             if (apiKey != null) keys = keys + (saved.id to secrets.encrypt(apiKey.trim()))
             if (sshSecret != null) keys = keys + (SshSecretPrefix + saved.id to secrets.encrypt(sshSecret))
-            if (saved.type != ConnectionType.Ssh) keys = keys - (SshSecretPrefix + saved.id)
+            if (saved.sshUser.isNullOrBlank()) keys = keys - (SshSecretPrefix + saved.id)
             s.copy(connections = _connections.value, keys = keys, activeConnectionId = s.activeConnectionId ?: saved.id)
         }
         if (_activeConnectionId.value == null || _activeConnectionId.value == saved.id) {
@@ -241,7 +245,7 @@ class RemoteHermesRepository(
 
     override fun sshPublicKey(connectionId: String): String? {
         val profile = _connections.value.firstOrNull { it.id == connectionId } ?: return null
-        if (profile.type != ConnectionType.Ssh || profile.sshAuth != SshAuthMethod.Key) return null
+        if (profile.sshUser.isNullOrBlank() || profile.sshAuth != SshAuthMethod.Key) return null
         return sshSecretOf(connectionId)?.let { runCatching { SshKeys.publicKeyLine(it) }.getOrNull() }
     }
 
@@ -270,7 +274,9 @@ class RemoteHermesRepository(
     override fun testConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?): Flow<List<ConnectionTestStep>> = flow {
         val key = apiKey?.takeIf { it.isNotBlank() } ?: keyOf(profile.id)
         val ssh = profile.type == ConnectionType.Ssh
-        val titles = (if (ssh) listOf("SSH 连接", "SSH 登录") else emptyList()) + listOf("网络可达", "识别 Hermes", "API Key 鉴权", "能力探测")
+        val fileSsh = hasFileSsh(profile)
+        val titles = (if (ssh) listOf("SSH 连接", "SSH 登录") else emptyList()) + listOf("网络可达", "识别 Hermes", "API Key 鉴权", "能力探测") +
+            (if (fileSsh) listOf("文件互通（SSH）") else emptyList())
         var steps = titles.map { ConnectionTestStep(it, TestStepStatus.Pending) }
         suspend fun mark(i: Int, status: TestStepStatus, detail: String? = null) {
             steps = steps.mapIndexed { index, step ->
@@ -321,6 +327,11 @@ class RemoteHermesRepository(
                 seen?.let { seenHostKeys[profile.id] = it }
                 mark(0, TestStepStatus.Passed, hostKeyDetail(pinned, t.hostKey))
                 mark(1, TestStepStatus.Passed, "用户 ${profile.sshUser.trim()}")
+                // 先单独试一下转发，能分清“服务器禁止转发”和“端口上没服务”
+                withContext(Dispatchers.IO) { t.probeForward() }?.let { reason ->
+                    mark(2, TestStepStatus.Failed, reason)
+                    return@flow
+                }
                 clientFactory("http://127.0.0.1:${t.localPort}", key, profile.profile)
             } else {
                 try {
@@ -375,6 +386,27 @@ class RemoteHermesRepository(
             } else {
                 mark(base + 3, TestStepStatus.Passed, caps.summary())
             }
+            if (fileSsh) {
+                mark(base + 4, TestStepStatus.Running)
+                val secret = sshSecret?.takeIf { it.isNotEmpty() } ?: sshSecretOf(profile.id)
+                val auth = sshAuthOf(profile, secret)
+                if (auth == null) {
+                    mark(base + 4, TestStepStatus.Failed, if (profile.sshAuth == SshAuthMethod.Key) "还没有私钥：导入或生成一把" else "还没填 SSH 密码")
+                } else {
+                    var seen: String? = null
+                    try {
+                        val t = withContext(Dispatchers.IO) {
+                            SshTunnel(fileSshHost(profile), profile.sshPort, profile.sshUser!!.trim(), auth, profile.port, profile.sshHostKey, { seen = it })
+                                .also { testTunnel = it }
+                                .also { it.connect() }
+                        }
+                        seen?.let { seenHostKeys[profile.id] = it }
+                        mark(base + 4, TestStepStatus.Passed, "可以显示 Hermes 生成的图片、发送任意文件 · " + hostKeyDetail(profile.sshHostKey, t.hostKey))
+                    } catch (e: SshException) {
+                        mark(base + 4, TestStepStatus.Failed, e.message)
+                    }
+                }
+            }
         } finally {
             testTunnel?.let { t -> withContext(Dispatchers.IO) { t.close() } }
         }
@@ -393,7 +425,11 @@ class RemoteHermesRepository(
 
     /** 建立到这个连接的客户端；SSH 连接先建隧道（[onHostKey]：第一次见到的主机指纹）。 */
     private suspend fun openClient(profile: ConnectionProfile, key: String?, sshSecret: String?, onHostKey: (String) -> Unit): HermesClient {
-        if (profile.type != ConnectionType.Ssh) return clientFor(profile, key)
+        if (profile.type != ConnectionType.Ssh) {
+            val c = clientFor(profile, key)
+            if (hasFileSsh(profile)) openFileSsh(profile, sshSecret, onHostKey)
+            return c
+        }
         val auth = sshAuthOf(profile, sshSecret) ?: throw HermesError.Ssh("这个 SSH 连接还没有保存私钥或密码")
         val user = profile.sshUser?.trim()?.takeIf { it.isNotEmpty() } ?: throw HermesError.Ssh("这个 SSH 连接还没填用户名")
         val t = try {
@@ -412,6 +448,32 @@ class RemoteHermesRepository(
         }
         tunnel = t
         return clientFactory("http://127.0.0.1:${t.localPort}", key, profile.profile)
+    }
+
+    /** 本机 Termux / 直连也可以配一个 SSH（只用来传文件：显示 Hermes 生成的图片、发任意文件）。 */
+    private fun hasFileSsh(profile: ConnectionProfile): Boolean =
+        (profile.type == ConnectionType.Local || profile.type == ConnectionType.Direct) && !profile.sshUser.isNullOrBlank()
+
+    private fun fileSshHost(profile: ConnectionProfile): String =
+        if (profile.type == ConnectionType.Local) "127.0.0.1" else profile.host.trim()
+
+    /** 尽力而为：连不上不影响聊天，只提示一下。 */
+    private suspend fun openFileSsh(profile: ConnectionProfile, sshSecret: String?, onHostKey: (String) -> Unit) {
+        val auth = sshAuthOf(profile, sshSecret) ?: return
+        try {
+            tunnel = withContext(Dispatchers.IO) {
+                SshTunnel(fileSshHost(profile), profile.sshPort, profile.sshUser!!.trim(), auth, profile.port, profile.sshHostKey, onHostKey).also {
+                    try {
+                        it.connect()
+                    } catch (e: SshException) {
+                        it.close()
+                        throw e
+                    }
+                }
+            }
+        } catch (e: SshException) {
+            _errors.tryEmit("文件互通的 SSH 没连上（聊天不受影响）：${e.message}")
+        }
     }
 
     private fun clientFor(profile: ConnectionProfile, key: String?): HermesClient {
@@ -433,7 +495,7 @@ class RemoteHermesRepository(
      * 新建的会话先是本地草稿（id 以 [DraftPrefix] 开头），发第一条消息时才在服务器上创建，
      * 之后草稿 id 通过 [aliases] 指向服务器 id。界面一直拿着草稿 id 也没关系。
      */
-    private val drafts = MutableStateFlow<Map<String, Session>>(emptyMap())
+    private val draftSessions = MutableStateFlow<Map<String, Session>>(emptyMap())
     private val aliases = MutableStateFlow<Map<String, String>>(emptyMap())
 
     private fun resolve(id: String): String = aliases.value[id] ?: id
@@ -441,7 +503,7 @@ class RemoteHermesRepository(
     /** 本机刚建出来的会话 → 建好的时间。见 [loadSessions]。 */
     private val createdAt = ConcurrentHashMap<String, Long>()
 
-    override fun session(id: String): Flow<Session?> = combine(_sessions, drafts, aliases) { list, draftMap, aliasMap ->
+    override fun session(id: String): Flow<Session?> = combine(_sessions, draftSessions, aliases) { list, draftMap, aliasMap ->
         val real = aliasMap[id] ?: id
         list.firstOrNull { it.id == real } ?: draftMap[id]
     }
@@ -503,7 +565,7 @@ class RemoteHermesRepository(
     override fun renameSession(id: String, title: String) {
         val real = resolve(id)
         if (real.startsWith(DraftPrefix)) {
-            drafts.update { m -> m[real]?.let { m + (real to it.copy(title = title)) } ?: m }
+            draftSessions.update { m -> m[real]?.let { m + (real to it.copy(title = title)) } ?: m }
             return
         }
         optimistic(real, { it.copy(title = title) }) { patchSession(real, HermesClient.patch { put("title", title) }) }
@@ -518,7 +580,7 @@ class RemoteHermesRepository(
     override fun deleteSession(id: String) {
         val real = resolve(id)
         if (real.startsWith(DraftPrefix)) {
-            drafts.update { it - real }
+            draftSessions.update { it - real }
             return
         }
         val before = _sessions.value
@@ -540,7 +602,7 @@ class RemoteHermesRepository(
             return null
         }
         val id = DraftPrefix + UUID.randomUUID()
-        drafts.update { it + (id to Session(id = id, title = "新对话", preview = "", updatedAt = clock())) }
+        draftSessions.update { it + (id to Session(id = id, title = "新对话", preview = "", updatedAt = clock())) }
         return id
     }
 
@@ -549,7 +611,7 @@ class RemoteHermesRepository(
         aliases.value[uiId]?.let { return it }
         if (!uiId.startsWith(DraftPrefix)) return uiId
         val c = client ?: throw HermesError.Unreachable("未连接")
-        val draft = drafts.value[uiId]
+        val draft = draftSessions.value[uiId]
         val created = withRetry { c.createSession(draft?.title?.takeIf { it != "新对话" }) } ?: throw HermesError.NotHermes()
         val session = created.toSession(clock()).copy(running = true)
         createdAt[created.id] = clock()
@@ -557,8 +619,9 @@ class RemoteHermesRepository(
         // 先把聊天状态复制到新 id，再切别名，最后删草稿：界面任何时刻都能看到消息
         chats.update { m -> m[uiId]?.let { m + (created.id to it) } ?: m }
         aliases.update { it + (uiId to created.id) }
+        moveDraft(uiId, created.id)
         chats.update { it - uiId }
-        drafts.update { it - uiId }
+        draftSessions.update { it - uiId }
         return created.id
     }
 
@@ -571,7 +634,7 @@ class RemoteHermesRepository(
         val source = resolve(id)
         val title = _sessions.value.firstOrNull { it.id == source }?.title ?: "会话"
         val placeholder = DraftPrefix + UUID.randomUUID()
-        drafts.update { it + (placeholder to Session(placeholder, "$title（分叉）", "正在分叉…", clock())) }
+        draftSessions.update { it + (placeholder to Session(placeholder, "$title（分叉）", "正在分叉…", clock())) }
         if (fromItemId != null) _errors.tryEmit("Hermes 只能分叉整个会话，已从最新一条开始分叉")
         runScope.launch {
             try {
@@ -579,10 +642,10 @@ class RemoteHermesRepository(
                 createdAt[forked.id] = clock()
                 _sessions.update { list -> listOf(forked.toSession(clock())) + list.filterNot { it.id == forked.id } }
                 aliases.update { it + (placeholder to forked.id) }
-                drafts.update { it - placeholder }
+                draftSessions.update { it - placeholder }
                 loadMessages(forked.id)
             } catch (e: HermesError) {
-                drafts.update { m -> m[placeholder]?.let { m + (placeholder to it.copy(preview = "分叉失败")) } ?: m }
+                draftSessions.update { m -> m[placeholder]?.let { m + (placeholder to it.copy(preview = "分叉失败")) } ?: m }
                 _errors.tryEmit("分叉失败：${e.message}")
             }
         }
@@ -645,7 +708,7 @@ class RemoteHermesRepository(
     override fun runPhase(sessionId: String): Flow<RunPhase> = chatOf(sessionId).map { it?.phase ?: RunPhase.Idle }
 
     override fun streamingText(sessionId: String): Flow<String?> = chatOf(sessionId).map { st ->
-        st?.streaming?.takeIf { it.isNotBlank() && _settings.value.streamReplies }
+        st?.streaming?.takeIf { it.isNotBlank() && _settings.value.streamReplies }?.let { MediaTags.parse(it).first }
     }
 
     /** 拉服务器上的聊天记录，和本地还没确认的条目合并。 */
@@ -654,7 +717,9 @@ class RemoteHermesRepository(
         if (capabilities?.sessionMessages == false) return
         try {
             val now = clock()
-            val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now, ::cachedImage) }.linkQuotes()
+            val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now, ::cachedImage) }
+                .linkQuotes()
+                .withSentImages(sessionId)
             val running = runs.containsKey(sessionId)
             updateChat(sessionId) { st -> st.copy(server = items, local = st.local.reconcile(items, running), loaded = true) }
         } catch (e: HermesError) {
@@ -701,9 +766,99 @@ class RemoteHermesRepository(
         return ImageExtensions.asSequence().map { File(dir, "$sha256.$it") }.firstOrNull { it.isFile }?.path
     }
 
+    // ---- 服务器上的文件 ----
+
+    private val mediaLocks = ConcurrentHashMap<String, kotlinx.coroutines.sync.Mutex>()
+
+    override suspend fun fetchRemoteMedia(path: String): String? = withContext(Dispatchers.IO) {
+        val dir = mediaDir ?: return@withContext null
+        val ext = path.substringAfterLast('.', "bin").lowercase().filter { it.isLetterOrDigit() }.take(5).ifEmpty { "bin" }
+        val name = sha256Hex("$connectedId:$path").take(40) + "." + ext
+        val target = File(File(dir, "remote").apply { mkdirs() }, name)
+        if (target.isFile) return@withContext target.path
+        val t = tunnel ?: return@withContext null
+        mediaLocks.getOrPut(name) { kotlinx.coroutines.sync.Mutex() }.withLock {
+            if (target.isFile) return@withLock target.path
+            // SFTP 不展开 ~，相对路径就是相对家目录
+            val remote = if (path.startsWith("~/")) path.removePrefix("~/") else path
+            runCatching { t.download(remote, target) }.map { target.path }.getOrNull()
+        }
+    }
+
+    // ---- 发过的图片 ----
+
+    private val sentImagesFile: File? get() = mediaDir?.let { File(it, "sent-images.json") }
+
+    private val sentImages: MutableMap<String, MutableList<SentImages>> by lazy {
+        runCatching {
+            HermesJson.decodeFromString(SentImagesStore.serializer(), sentImagesFile!!.readText())
+                .sessions.mapValues { it.value.toMutableList() }.toMutableMap()
+        }.getOrElse { mutableMapOf() }
+    }
+
+    private fun rememberSentImages(sessionId: String, out: Outgoing) {
+        val paths = out.attachments.displayImages().mapNotNull { it.source }
+        if (paths.isEmpty() || mediaDir == null) return
+        synchronized(sentImages) {
+            val list = sentImages.getOrPut(sessionId) { mutableListOf() }
+            list += SentImages(out.text.trim(), paths)
+            if (list.size > 300) list.subList(0, list.size - 300).clear()
+            runCatching {
+                sentImagesFile!!.writeText(HermesJson.encodeToString(SentImagesStore.serializer(), SentImagesStore(sentImages)))
+            }
+        }
+    }
+
+    /** 服务器记录里看不到原图的用户消息：按文字和顺序对上自己发过的那条，换回本机的图。 */
+    private fun List<ChatItem.Message>.withSentImages(sessionId: String): List<ChatItem.Message> {
+        val remembered = synchronized(sentImages) { sentImages[sessionId]?.toList() } ?: return this
+        val used = BooleanArray(remembered.size)
+        return map { m ->
+            if (m.role != Role.User) return@map m
+            val local = m.images.all { it.source != null && File(it.source).isFile }
+            if (m.images.isNotEmpty() && local) return@map m
+            val i = remembered.indices.firstOrNull { !used[it] && remembered[it].text == m.text.trim() } ?: return@map m
+            used[i] = true
+            val paths = remembered[i].paths.filter { File(it).isFile }
+            if (paths.isEmpty()) return@map m
+            m.copy(images = paths.mapIndexed { k, p -> ImageRef("${m.id}-s$k", (k * 53f) % 360f, 1.3f, p) })
+        }
+    }
+
+    // ---- 草稿 ----
+
+    private val _drafts = MutableStateFlow(state.value.drafts)
+    override val drafts: StateFlow<Map<String, String>> = _drafts.asStateFlow()
+    private val draftAttachments = ConcurrentHashMap<String, List<Attachment>>()
+    private var draftSaveJob: Job? = null
+
+    override fun draft(sessionId: String): Draft {
+        val key = resolve(sessionId)
+        return Draft(_drafts.value[key].orEmpty(), draftAttachments[key].orEmpty())
+    }
+
+    override fun saveDraft(sessionId: String, draft: Draft) {
+        val key = resolve(sessionId)
+        if (draft.attachments.isEmpty()) draftAttachments.remove(key) else draftAttachments[key] = draft.attachments
+        val text = draft.text
+        if ((_drafts.value[key] ?: "") == text.takeIf { it.isNotBlank() }.orEmpty()) return
+        _drafts.update { if (text.isBlank()) it - key else it + (key to text) }
+        // 打字时不要每个字都写文件
+        draftSaveJob?.cancel()
+        draftSaveJob = scope.launch {
+            delay(500)
+            persist { st -> st.copy(drafts = _drafts.value.filterKeys { !it.startsWith(DraftPrefix) }) }
+        }
+    }
+
+    private fun moveDraft(from: String, to: String) {
+        _drafts.value[from]?.let { text -> _drafts.update { it - from + (to to text) } }
+        draftAttachments.remove(from)?.let { draftAttachments[to] = it }
+    }
+
     override fun canSendAnyFile(): Boolean {
         val profile = _connections.value.firstOrNull { it.id == connectedId } ?: return false
-        return profile.type == ConnectionType.Ssh || (profile.type == ConnectionType.Local && localFileExporter != null)
+        return tunnel != null || (profile.type == ConnectionType.Local && localFileExporter != null)
     }
 
     private fun publishRuns() {
@@ -753,6 +908,7 @@ class RemoteHermesRepository(
             val runId = accepted.run_id ?: throw HermesError.NotHermes()
             outbox.remove(localId)
             setLocalStatus(sessionId, localId, DeliveryStatus.Sent)
+            rememberSentImages(sessionId, out)
             val preview = out.text.lineSequence().lastOrNull { it.isNotBlank() }?.take(80)
                 ?: if (out.attachments.imageCount() > 0) "[图片]" else "[文件]"
             updateSession(sessionId) { it.copy(preview = preview, updatedAt = clock()) }
@@ -810,15 +966,15 @@ class RemoteHermesRepository(
     /** 普通文件交给 Hermes：SSH 上传到服务器，本机 Termux 存到下载目录。返回 Hermes 那边能读到的路径。 */
     private fun deliverFile(file: Attachment.BinaryFile): String {
         val profile = _connections.value.firstOrNull { it.id == connectedId }
-        return when (profile?.type) {
-            ConnectionType.Ssh -> {
-                val t = tunnel ?: throw HermesError.Ssh("SSH 隧道没连上")
-                try {
-                    t.upload(file.path, file.name)
-                } catch (e: Exception) {
-                    throw HermesError.Ssh("文件上传失败：${e.message}")
-                }
+        tunnel?.let { t ->
+            return try {
+                t.upload(file.path, file.name)
+            } catch (e: Exception) {
+                throw HermesError.Ssh("文件上传失败：${e.message}")
             }
+        }
+        return when (profile?.type) {
+            ConnectionType.Ssh -> throw HermesError.Ssh("SSH 隧道没连上")
             ConnectionType.Local -> localFileExporter?.invoke(file.path, file.name, file.mime)
                 ?: throw HermesError.NotSupported("把文件交给本机 Termux")
             else -> throw HermesError.NotSupported("发送这种文件（直连和 HTTPS 只能发图片、PDF 和文本文件，其它文件请用 SSH 连接）")
@@ -1028,16 +1184,20 @@ class RemoteHermesRepository(
 
     private fun complete(run: ActiveRun, output: String) {
         if (runs[run.sessionId] !== run) return
-        val text = output.trim().ifEmpty { chats.value[run.sessionId]?.streaming?.trim().orEmpty() }
+        val raw = output.trim().ifEmpty { chats.value[run.sessionId]?.streaming?.trim().orEmpty() }
+        // 回复里的 MEDIA:<路径> 是 Hermes 生成的文件：图片显示出来，其它显示成卡片
+        val (text, media) = MediaTags.parse(raw)
+        val images = media.filter { it.isImage }.mapIndexed { i, m -> ImageRef("reply-${run.runId}-$i", 200f + i * 40, 1f, RemoteMediaPrefix + m.path) }
+        val files = media.filterNot { it.isImage }.map { FileRef(it.path.substringAfterLast('/'), note = "在服务器上：${it.path}") }
         finish(run)
         // 先把结果显示出来，再去服务器拉正式记录对齐
         updateChat(run.sessionId) { st ->
-            val reply = text.takeIf { it.isNotEmpty() }?.let {
-                LocalEntry(ChatItem.Message("reply-${run.runId}", clock(), Role.Assistant, it), st.messageCount, run.runId)
-            }
+            val reply = if (text.isEmpty() && images.isEmpty() && files.isEmpty()) null else
+                LocalEntry(ChatItem.Message("reply-${run.runId}", clock(), Role.Assistant, text, images = images, files = files), st.messageCount, run.runId)
             st.copy(phase = RunPhase.Idle, streaming = null, local = st.local + listOfNotNull(reply))
         }
-        updateSession(run.sessionId) { it.copy(preview = text.replace('\n', ' ').take(80), updatedAt = clock()) }
+        val preview = text.replace('\n', ' ').take(80).ifEmpty { if (images.isNotEmpty()) "[图片]" else if (files.isNotEmpty()) "[文件]" else "" }
+        updateSession(run.sessionId) { it.copy(preview = preview, updatedAt = clock()) }
         if (text.isNotEmpty()) notify(run.sessionId, ChatNotice.Kind.Reply, text)
         scope.launch { reconcileAfterRun(run.sessionId, text) }
     }
@@ -1181,6 +1341,9 @@ class RemoteHermesRepository(
         return Unit as T
     }
 
+    private fun sha256Hex(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
+
     private companion object {
         const val DraftPrefix = "draft-"
         val ImageExtensions = listOf("jpg", "png", "webp", "gif")
@@ -1201,3 +1364,10 @@ class RemoteHermesRepository(
         _activeConnectionId.value?.let { connect(it) }
     }
 }
+
+/** 一条带图消息：文字和本机缓存的图片路径。服务器有的模式下只记 [screenshot]，靠它把图找回来。 */
+@kotlinx.serialization.Serializable
+internal data class SentImages(val text: String, val paths: List<String>)
+
+@kotlinx.serialization.Serializable
+internal data class SentImagesStore(val sessions: Map<String, List<SentImages>> = emptyMap())

@@ -1,6 +1,7 @@
 package com.hermes.mobile.data.remote
 
 import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.Role
@@ -59,18 +60,33 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long, imageSource: 
     // 调用工具的中间步骤：就算带了几句话（“我先查一下”），也属于过程，不显示
     if (role == Role.Assistant && finish_reason == "tool_calls") return null
     val (rawText, partImages) = content.parseContent(idSeed = index, imageSource = imageSource)
-    // 用户消息：拆出 Hermes 记下的图片路径和 App 写进去的文件段
-    val (withoutImages, marked) = if (role == Role.User) ImageMarkers.parse(rawText) else rawText to emptyList()
-    val (text, files) = if (role == Role.User) AttachmentText.parse(withoutImages) else withoutImages to emptyList()
-    val images = partImages + marked.mapIndexed { i, found ->
-        ImageRef(
-            id = "img-$index-m$i",
-            hue = ((index * 47 + i * 89) % 360).toFloat(),
-            aspect = 1.3f,
-            source = found.sha256?.let(imageSource) ?: found.url,
-        )
+    val text: String
+    val images: List<ImageRef>
+    val files: List<FileRef>
+    if (role == Role.User) {
+        // 用户消息：拆出 Hermes 记下的图片路径和 App 写进去的文件段
+        val (withoutImages, marked) = ImageMarkers.parse(rawText)
+        val (body, attached) = AttachmentText.parse(withoutImages)
+        text = body
+        files = attached
+        images = partImages + marked.mapIndexed { i, found ->
+            ImageRef(
+                id = "img-$index-m$i",
+                hue = ((index * 47 + i * 89) % 360).toFloat(),
+                aspect = 1.3f,
+                // 本机缓存 → 服务器上的原图（能经 SSH 下载时）→ 远端地址
+                source = found.sha256?.let(imageSource) ?: found.path?.let { RemoteMediaPrefix + it } ?: found.url,
+            )
+        }
+    } else {
+        val (body, media) = MediaTags.parse(rawText)
+        text = body
+        images = partImages + media.filter { it.isImage }.mapIndexed { i, m ->
+            ImageRef("img-$index-r$i", hue = ((index * 31 + i * 67) % 360).toFloat(), aspect = 1f, source = RemoteMediaPrefix + m.path)
+        }
+        files = media.filterNot { it.isImage }.map { FileRef(it.path.substringAfterLast('/'), note = "在服务器上：${it.path}") }
     }
-    if (role == Role.Assistant && text.isBlank()) return null
+    if (role == Role.Assistant && text.isBlank() && images.isEmpty() && files.isEmpty()) return null
     if (role == Role.User && text.isBlank() && images.isEmpty() && files.isEmpty()) return null
     val messageId = when (val raw = id) {
         is JsonPrimitive -> raw.contentOrNull

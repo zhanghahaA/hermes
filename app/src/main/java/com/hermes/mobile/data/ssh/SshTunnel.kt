@@ -99,6 +99,45 @@ class SshTunnel(
         }
     }
 
+    /** 把服务器上的文件下载到 [local]（Hermes 生成的图片等）。 */
+    fun download(remotePath: String, local: java.io.File) {
+        fun once() = session().newSFTPClient().use { sftp ->
+            val tmp = java.io.File(local.path + ".part")
+            sftp.get(remotePath, net.schmizz.sshj.xfer.FileSystemFile(tmp))
+            if (!tmp.renameTo(local)) {
+                tmp.copyTo(local, overwrite = true)
+                tmp.delete()
+            }
+        }
+        try {
+            once()
+        } catch (e: net.schmizz.sshj.sftp.SFTPException) {
+            throw e
+        } catch (e: IOException) {
+            reset()
+            once()
+        }
+    }
+
+    /**
+     * 试着开一条到 Hermes 端口的转发通道，返回失败原因（给人看的话），成功返回 null。
+     * 用来区分“服务器禁止端口转发”和“那个端口上没有服务”。
+     */
+    fun probeForward(): String? = try {
+        session().newDirectConnection("127.0.0.1", remotePort).close()
+        null
+    } catch (e: net.schmizz.sshj.connection.channel.OpenFailException) {
+        when (e.reason) {
+            net.schmizz.sshj.connection.channel.OpenFailException.Reason.ADMINISTRATIVELY_PROHIBITED ->
+                "SSH 服务器不允许端口转发：在它的 sshd_config 里加上 AllowTcpForwarding local（或 yes）并重载 sshd"
+            net.schmizz.sshj.connection.channel.OpenFailException.Reason.CONNECT_FAILED ->
+                "SSH 已登录，但服务器上 127.0.0.1:$remotePort 没有服务在监听：确认 Hermes gateway 在运行、API Server 已开启、端口正确"
+            else -> "SSH 转发失败：${e.message}"
+        }
+    } catch (e: IOException) {
+        "SSH 转发失败：${e.message}"
+    }
+
     private fun asciiName(name: String): String {
         val ext = name.substringAfterLast('.', "").filter { it.isLetterOrDigit() && it.code < 128 }.take(10)
         val base = name.substringBeforeLast('.').map { if (it.code < 128 && (it.isLetterOrDigit() || it in "-_")) it else '_' }

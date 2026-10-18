@@ -95,6 +95,11 @@ enum class DeliveryStatus { Sending, Sent, Failed }
  */
 data class ImageRef(val id: String, val hue: Float, val aspect: Float = 1f, val source: String? = null)
 
+/** 没发出去的草稿：输入框里的字和选好的附件。 */
+data class Draft(val text: String = "", val attachments: List<Attachment> = emptyList()) {
+    val isEmpty: Boolean get() = text.isBlank() && attachments.isEmpty()
+}
+
 /** 消息里附带的文件（只用来显示：文件名、大小、说明）。 */
 data class FileRef(val name: String, val sizeBytes: Long? = null, val note: String? = null)
 

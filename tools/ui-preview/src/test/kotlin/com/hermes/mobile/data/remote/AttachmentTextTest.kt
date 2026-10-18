@@ -44,4 +44,30 @@ class AttachmentTextTest {
         assertEquals(text to emptyList(), ImageMarkers.parse(text).let { it.first to it.second })
         assertEquals(text, AttachmentText.parse(text).first)
     }
+
+    @Test
+    fun mediaTagsInRepliesBecomeImagesAndFiles() {
+        val reply = "送你一只在月亮上钓星星的小猫 🌙\n用程序画的。\n\nMEDIA:/data/data/com.termux/files/home/.hermes/cache/scratch/mooncat-3v/mooncat.png\n" +
+            "录音在这：MEDIA:/tmp/a/voice.ogg"
+        val (text, media) = MediaTags.parse(reply)
+        assertEquals("送你一只在月亮上钓星星的小猫 🌙\n用程序画的。\n\n录音在这：", text)
+        assertEquals(listOf(true, false), media.map { it.isImage })
+        assertEquals("/data/data/com.termux/files/home/.hermes/cache/scratch/mooncat-3v/mooncat.png", media[0].path)
+    }
+
+    @Test
+    fun bareScreenshotMarkersStillCountAsImages() {
+        val (text, images) = ImageMarkers.parse("看这两张\n[screenshot]\n[screenshot]")
+        assertEquals("看这两张", text)
+        assertEquals(2, images.size)
+        assertTrue(images.all { it.sha256 == null && it.path == null })
+    }
+
+    @Test
+    fun assistantMediaIsMappedToRemoteImages() {
+        val dto = MessageDto(role = "assistant", content = kotlinx.serialization.json.JsonPrimitive("画好了\nMEDIA:/gen/cat.png"))
+        val item = dto.toChatItem(3, 0L)!!
+        assertEquals("画好了", item.text)
+        assertEquals(RemoteMediaPrefix + "/gen/cat.png", item.images.single().source)
+    }
 }

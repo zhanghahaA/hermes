@@ -65,7 +65,10 @@ fun HermesApp(repository: HermesRepository, navigator: Navigator) {
     LaunchedEffect(repository) { repository.errors.collect { showMessage(it) } }
 
     HermesTheme(themeMode = settings.themeMode, dynamicColor = settings.dynamicColor) {
-        CompositionLocalProvider(LocalShowMessage provides showMessage) {
+        CompositionLocalProvider(
+            LocalShowMessage provides showMessage,
+            com.hermes.mobile.ui.chat.LocalMediaFetcher provides repository::fetchRemoteMedia,
+        ) {
             Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
                     HermesNavHost(repository, navigator)

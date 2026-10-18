@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.background
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,6 +63,7 @@ fun SwipeBackHost(
     Box(
         modifier
             .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
             .swipeBackGesture(navigator, scope),
     ) {
         val entries = navigator.entries
@@ -100,11 +103,13 @@ internal fun Modifier.topPage(fraction: () -> Float): Modifier = graphicsLayer {
     }
 }
 
-/** 下面一层：从左侧视差滑回，同时由暗变亮。静止时完全不绘制。 */
+/**
+ * 下面一层：原地不动，由暗变亮。静止时完全不绘制。
+ * 不做左右视差：上层页面拖动时会缩小，下层要是往左偏，右边就会露出一条没有内容的白边。
+ */
 internal fun Modifier.underPage(topFraction: () -> Float): Modifier = graphicsLayer {
     val f = topFraction()
     alpha = if (f <= 0f) 0f else 1f
-    translationX = -0.25f * size.width * (1f - f)
 }.drawWithContent {
     drawContent()
     drawRect(Color.Black.copy(alpha = 0.22f * (1f - topFraction())))

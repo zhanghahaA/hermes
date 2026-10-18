@@ -70,6 +70,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
@@ -94,6 +97,7 @@ fun ChatsScreen(
     onManageConnections: () -> Unit,
 ) {
     val sessions by repository.sessions.collectAsState()
+    val drafts by repository.drafts.collectAsState()
     val connections by repository.connections.collectAsState()
     val activeId by repository.activeConnectionId.collectAsState()
     val connectionState by repository.connectionState.collectAsState()
@@ -259,7 +263,7 @@ fun ChatsScreen(
                         ),
                         modifier = Modifier.animateItem(),
                     ) {
-                        SessionRow(session, onClick = { onOpenChat(session.id) }, onLongPress = { actionTarget = session })
+                        SessionRow(session, onClick = { onOpenChat(session.id) }, onLongPress = { actionTarget = session }, draft = drafts[session.id])
                     }
                 }
             }
@@ -360,7 +364,7 @@ private fun OfflineBanner(reason: String, onRetry: () -> Unit) {
 }
 
 @Composable
-fun SessionRow(session: Session, onClick: () -> Unit, onLongPress: () -> Unit) {
+fun SessionRow(session: Session, onClick: () -> Unit, onLongPress: () -> Unit, draft: String? = null) {
     val haptics = LocalHapticFeedback.current
     Row(
         modifier = Modifier
@@ -394,6 +398,17 @@ fun SessionRow(session: Session, onClick: () -> Unit, onLongPress: () -> Unit) {
             }
             if (session.running) {
                 Text("正在回复…", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary, maxLines = 1)
+            } else if (!draft.isNullOrBlank()) {
+                Text(
+                    buildAnnotatedString {
+                        withStyle(SpanStyle(color = MaterialTheme.colorScheme.error)) { append("[草稿] ") }
+                        append(draft.replace('\n', ' '))
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             } else {
                 Text(
                     session.preview.ifEmpty { "暂无消息" },

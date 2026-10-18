@@ -27,6 +27,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
     val server = MockWebServer()
     val requests: MutableList<RecordedRequest> = java.util.Collections.synchronizedList(mutableListOf())
     var failPatch = false
+    /** 模拟有的 Hermes 模式：聊天记录里图片只记一个 [screenshot]，不记路径。 */
+    var screenshotOnly = false
     /** 前几次提交对话返回 503（带 Retry-After: 0），用来验证重试。 */
     var failRunsTimes = 0
 
@@ -73,11 +75,15 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
         fun complete() {
             val reply = when {
                 approved == "deny" -> "好的，不执行了。"
+                "画图" in input -> "画好了，送你一只猫。\\nMEDIA:/gen/cat.png"
                 imageShas.isNotEmpty() -> "收到 ${imageShas.size} 张图片"
                 else -> "最终回复：$input"
             }
             // 和真实 Hermes 一样：图片存到服务器，聊天记录里只记路径
-            val stored = input + imageShas.joinToString("") { "\n\n[Image attached at: /srv/hermes/cache/documents/native-inputs/$it/api_${it.take(32)}.jpg]\n[screenshot]" }
+            val stored = input + imageShas.joinToString("") {
+                if (screenshotOnly) "\n[screenshot]"
+                else "\n\n[Image attached at: /srv/hermes/cache/documents/native-inputs/$it/api_${it.take(32)}.jpg]\n[screenshot]"
+            }
             add("run.completed", "\"output\":\"$reply\"")
             messages.getOrPut(sessionId) { mutableListOf() }.apply {
                 add("""{"id":${size + 100},"role":"user","content":${kotlinx.serialization.json.JsonPrimitive(stored)},"timestamp":1760009000}""")

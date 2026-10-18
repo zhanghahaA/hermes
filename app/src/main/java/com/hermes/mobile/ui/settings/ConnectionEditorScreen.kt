@@ -56,6 +56,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -110,6 +111,8 @@ fun ConnectionEditorScreen(
     var publicKey by rememberSaveable { mutableStateOf(existing?.id?.let(repository::sshPublicKey).orEmpty()) }
     var sshPassword by rememberSaveable { mutableStateOf("") }
     var resetHostKey by rememberSaveable { mutableStateOf(false) }
+    // 本机 Termux / 直连：可选的“文件互通”SSH
+    var fileSsh by rememberSaveable { mutableStateOf(existing != null && existing.type != ConnectionType.Ssh && !existing.sshUser.isNullOrBlank()) }
     var showPaste by rememberSaveable { mutableStateOf(false) }
     val showMessage = LocalShowMessage.current
     fun useKey(text: String?) {
@@ -136,13 +139,67 @@ fun ConnectionEditorScreen(
         host = if (type == ConnectionType.Local) "127.0.0.1" else host,
         port = port.toIntOrNull() ?: 8642,
         profile = profileName.ifBlank { null },
-        sshUser = sshUser.ifBlank { null },
+        sshUser = sshUser.ifBlank { null }?.takeIf { type == ConnectionType.Ssh || (fileSsh && (type == ConnectionType.Local || type == ConnectionType.Direct)) },
         sshPort = sshPort.toIntOrNull() ?: 22,
         sshAuth = if (sshAuth == 0) SshAuthMethod.Key else SshAuthMethod.Password,
         sshHostKey = if (resetHostKey) null else existing?.sshHostKey,
     )
 
-    fun sshSecret(): String? = if (type != ConnectionType.Ssh) null else if (sshAuth == 0) privateKey.ifBlank { null } else sshPassword.ifBlank { null }
+    fun sshSecret(): String? {
+        val usesSsh = type == ConnectionType.Ssh || (fileSsh && (type == ConnectionType.Local || type == ConnectionType.Direct))
+        return if (!usesSsh) null else if (sshAuth == 0) privateKey.ifBlank { null } else sshPassword.ifBlank { null }
+    }
+
+    // SSH 账号（SSH 隧道用；本机 Termux / 直连的“文件互通”也用这一套）
+    val sshCredentials: @Composable () -> Unit = {
+        OutlinedTextField(
+            value = sshUser,
+            onValueChange = { sshUser = it },
+            label = { Text("用户名") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            listOf("密钥", "密码").forEachIndexed { index, label ->
+                SegmentedButton(
+                    selected = sshAuth == index,
+                    onClick = { sshAuth = index },
+                    shape = SegmentedButtonDefaults.itemShape(index, 2),
+                ) { Text(label) }
+            }
+        }
+        if (sshAuth == 0) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = pickKeyFile, modifier = Modifier.weight(1f)) { Text("导入文件") }
+                OutlinedButton(onClick = { showPaste = true }, modifier = Modifier.weight(1f)) { Text("粘贴") }
+            }
+            FilledTonalButton(
+                onClick = {
+                    val pair = SshKeys.generate()
+                    privateKey = pair.privateKey
+                    publicKey = pair.publicKey
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Rounded.Key, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (publicKey.isEmpty()) "在手机上生成新密钥" else "重新生成密钥")
+            }
+            if (publicKey.isNotEmpty()) {
+                PublicKeyCard(publicKey, saved = privateKey.isEmpty(), user = sshUser.ifBlank { "用户" })
+            }
+        } else {
+            SecretField(
+                "SSH 密码",
+                sshPassword,
+                { sshPassword = it },
+                if (!existing?.sshUser.isNullOrBlank() && existing?.sshAuth == SshAuthMethod.Password) "已保存。留空表示不修改" else null,
+            )
+        }
+        existing?.sshHostKey?.let { pinned ->
+            HostKeyRow(pinned, reset = resetHostKey, onReset = { resetHostKey = true })
+        }
+    }
 
     if (showPaste) {
         PasteKeyDialog(onDismiss = { showPaste = false }, onDone = { showPaste = false; useKey(it) })
@@ -190,7 +247,17 @@ fun ConnectionEditorScreen(
             AnimatedContent(targetState = type, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "type-fields") { current ->
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     when (current) {
-                        ConnectionType.Direct -> HostPortFields(host, { host = it }, port, { port = it }, "地址", "100.x.x.x 或 192.168.x.x")
+                        ConnectionType.Direct -> {
+                            HostPortFields(host, { host = it }, port, { port = it }, "地址", "100.x.x.x 或 192.168.x.x")
+                            FileSshSection(
+                                enabled = fileSsh,
+                                onEnabled = { fileSsh = it },
+                                hint = "同一台机器的 SSH 账号。配好后能显示 Hermes 生成的图片、发送任意文件（聊天仍然走直连）",
+                                sshPort = sshPort,
+                                onSshPort = { sshPort = it },
+                                credentials = sshCredentials,
+                            )
+                        }
                         ConnectionType.Https -> {
                             OutlinedTextField(
                                 value = host,
@@ -213,53 +280,7 @@ fun ConnectionEditorScreen(
                         }
                         ConnectionType.Ssh -> {
                             HostPortFields(host, { host = it }, sshPort, { sshPort = it }, "SSH 主机", "nas.local 或 100.x.x.x", "SSH 端口")
-                            OutlinedTextField(
-                                value = sshUser,
-                                onValueChange = { sshUser = it },
-                                label = { Text("用户名") },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                                listOf("密钥", "密码").forEachIndexed { index, label ->
-                                    SegmentedButton(
-                                        selected = sshAuth == index,
-                                        onClick = { sshAuth = index },
-                                        shape = SegmentedButtonDefaults.itemShape(index, 2),
-                                    ) { Text(label) }
-                                }
-                            }
-                            if (sshAuth == 0) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = pickKeyFile, modifier = Modifier.weight(1f)) { Text("导入文件") }
-                                    OutlinedButton(onClick = { showPaste = true }, modifier = Modifier.weight(1f)) { Text("粘贴") }
-                                }
-                                FilledTonalButton(
-                                    onClick = {
-                                        val pair = SshKeys.generate()
-                                        privateKey = pair.privateKey
-                                        publicKey = pair.publicKey
-                                    },
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Icon(Icons.Rounded.Key, null, Modifier.size(18.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(if (publicKey.isEmpty()) "在手机上生成新密钥" else "重新生成密钥")
-                                }
-                                if (publicKey.isNotEmpty()) {
-                                    PublicKeyCard(publicKey, saved = privateKey.isEmpty(), user = sshUser.ifBlank { "用户" })
-                                }
-                            } else {
-                                SecretField(
-                                    "SSH 密码",
-                                    sshPassword,
-                                    { sshPassword = it },
-                                    if (existing?.type == ConnectionType.Ssh && existing.sshAuth == SshAuthMethod.Password) "已保存。留空表示不修改" else null,
-                                )
-                            }
-                            existing?.sshHostKey?.let { pinned ->
-                                HostKeyRow(pinned, reset = resetHostKey, onReset = { resetHostKey = true })
-                            }
+                            sshCredentials()
                             OutlinedTextField(
                                 value = port,
                                 onValueChange = { port = it },
@@ -279,6 +300,17 @@ fun ConnectionEditorScreen(
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.fillMaxWidth(),
+                            )
+                            FileSshSection(
+                                enabled = fileSsh,
+                                onEnabled = { on ->
+                                    fileSsh = on
+                                    if (on && sshPort == "22") sshPort = "8022"
+                                },
+                                hint = "填 Termux 自己的 SSH（sshd，默认端口 8022）。配好后能显示 Hermes 生成的图片、发送任意文件",
+                                sshPort = sshPort,
+                                onSshPort = { sshPort = it },
+                                credentials = sshCredentials,
                             )
                             TermuxGuide()
                         }
@@ -389,6 +421,41 @@ private fun HostPortFields(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.width(104.dp),
         )
+    }
+}
+
+/** 本机 Termux / 直连的可选 SSH：只用来传文件，聊天不走它。 */
+@Composable
+private fun FileSshSection(
+    enabled: Boolean,
+    onEnabled: (Boolean) -> Unit,
+    hint: String,
+    sshPort: String,
+    onSshPort: (String) -> Unit,
+    credentials: @Composable () -> Unit,
+) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.large) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("文件互通（可选）", style = MaterialTheme.typography.titleSmall)
+                    Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = enabled, onCheckedChange = onEnabled)
+            }
+            if (enabled) {
+                OutlinedTextField(
+                    value = sshPort,
+                    onValueChange = onSshPort,
+                    label = { Text("SSH 端口") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                credentials()
+            }
+        }
     }
 }
 

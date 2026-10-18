@@ -7,6 +7,7 @@ import com.hermes.mobile.data.model.ChatNotice
 import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionState
 import com.hermes.mobile.data.model.ConnectionTestStep
+import com.hermes.mobile.data.model.Draft
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.ModelOption
@@ -66,6 +67,17 @@ interface HermesRepository {
     fun sendMessage(sessionId: String, text: String, attachments: List<Attachment>, quote: Quote? = null)
     /** 当前连接能不能发任意文件（SSH 上传到服务器、本机 Termux 存到下载目录）。图片、PDF、文本文件不受限制。 */
     fun canSendAnyFile(): Boolean = false
+
+    /** 各会话没发出去的草稿文字（会话列表里显示“[草稿]”）。 */
+    val drafts: StateFlow<Map<String, String>> get() = NoDrafts
+    fun draft(sessionId: String): Draft = Draft()
+    fun saveDraft(sessionId: String, draft: Draft) = Unit
+
+    /**
+     * 服务器上的文件（Hermes 生成的图片、聊天记录里的原图）下载到本机，返回本机路径。
+     * 当前连接拿不到（没有 SSH）时返回 null。
+     */
+    suspend fun fetchRemoteMedia(path: String): String? = null
     fun retryMessage(sessionId: String, itemId: String)
     fun regenerate(sessionId: String, itemId: String)
     fun deleteItem(sessionId: String, itemId: String)
@@ -102,4 +114,5 @@ interface HermesRepository {
     fun updateSettings(transform: (AppSettings) -> AppSettings)
 }
 
+private val NoDrafts: StateFlow<Map<String, String>> = MutableStateFlow(emptyMap<String, String>()).asStateFlow()
 private val NoActiveRuns: StateFlow<Set<String>> = MutableStateFlow(emptySet<String>()).asStateFlow()

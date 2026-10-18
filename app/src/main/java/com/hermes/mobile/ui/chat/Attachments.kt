@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -59,7 +60,22 @@ import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.formatSize
 import com.hermes.mobile.data.model.toImageRef
+import com.hermes.mobile.data.remote.RemoteMediaPrefix
 import com.hermes.mobile.platform.rememberImageBitmap
+
+/** 下载服务器上的文件（Hermes 生成的图片等），返回本机路径。由 App 根部提供。 */
+val LocalMediaFetcher = staticCompositionLocalOf<suspend (String) -> String?> { { null } }
+
+/** 服务器上的图（`hermes-media:<路径>`）先下载到本机；其它来源原样返回。下载中、拿不到时返回 null。 */
+@Composable
+fun rememberLocalSource(source: String?): String? {
+    if (source == null || !source.startsWith(RemoteMediaPrefix)) return source
+    val fetch = LocalMediaFetcher.current
+    val state = produceState<String?>(null, source) {
+        value = runCatching { fetch(source.removePrefix(RemoteMediaPrefix)) }.getOrNull()
+    }
+    return state.value
+}
 
 /** 点消息里的图片时打开大图。由聊天页提供。 */
 val LocalOpenImage = staticCompositionLocalOf<(ImageRef) -> Unit> { {} }
@@ -67,7 +83,7 @@ val LocalOpenImage = staticCompositionLocalOf<(ImageRef) -> Unit> { {} }
 /** 一张图：读得到就显示真图，读不到（服务器上的图、本机没缓存）显示渐变占位块。 */
 @Composable
 fun ImageTile(image: ImageRef, modifier: Modifier = Modifier, shape: RoundedCornerShape = RoundedCornerShape(16.dp), maxPx: Int = 720) {
-    val bitmap = rememberImageBitmap(image.source, maxPx)
+    val bitmap = rememberImageBitmap(rememberLocalSource(image.source), maxPx)
     Box(modifier.clip(shape), contentAlignment = Alignment.Center) {
         if (bitmap != null) {
             Image(bitmap, contentDescription = "图片", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
@@ -93,7 +109,7 @@ fun ImageGrid(images: List<ImageRef>, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (images.size == 1) {
             val image = images.single()
-            val bitmap = rememberImageBitmap(image.source, 720)
+            val bitmap = rememberImageBitmap(rememberLocalSource(image.source), 720)
             val aspect = (bitmap?.let { it.width.toFloat() / it.height } ?: image.aspect).coerceIn(0.5f, 2.2f)
             ImageTile(image, Modifier.width(240.dp).aspectRatio(aspect).clickable { open(image) })
         } else {
@@ -212,7 +228,7 @@ fun ImageViewer(image: ImageRef, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
-        val bitmap = rememberImageBitmap(image.source, 4096)
+        val bitmap = rememberImageBitmap(rememberLocalSource(image.source), 4096)
         Box(
             Modifier
                 .fillMaxSize()
@@ -253,7 +269,16 @@ fun ImageViewer(image: ImageRef, onDismiss: () -> Unit) {
                         },
                 )
             } else {
-                Text("这张图在服务器上，手机里没有缓存", color = Color.White.copy(alpha = 0.8f))
+                Text(
+                    if (image.source?.startsWith(RemoteMediaPrefix) == true) {
+                        "这张图在 Hermes 那台机器上。\n给连接配上 SSH（本机 Termux 也可以用 Termux 自己的 SSH）后就能显示。"
+                    } else {
+                        "这张图没有留在这台手机上"
+                    },
+                    color = Color.White.copy(alpha = 0.8f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(32.dp),
+                )
             }
             IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
                 Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)

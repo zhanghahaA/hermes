@@ -2,6 +2,7 @@ package com.hermes.mobile.data.remote
 
 import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.Draft
 import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionState
 import com.hermes.mobile.data.model.ConnectionType
@@ -28,6 +29,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** 阶段 2：发消息、收回复、审批、断线重连、只读会话、App 重启后接着等回复。 */
@@ -297,5 +299,56 @@ class ChatFlowTest {
         repo.sendMessage("s1", "压缩包", listOf(Attachment.BinaryFile("z", "a.zip", "application/zip", tmp.path, 3L)))
         repo.chatItems("s1").await("发送失败") { list -> list.filterIsInstance<ChatItem.Message>().any { it.status == DeliveryStatus.Failed } }
         assertTrue(s.requests.none { it.path == "/v1/runs" }, "不能发的文件不提交")
+    }
+
+    @Test
+    fun sentImagesComeBackEvenIfHermesOnlyKeepsScreenshotMarkers() {
+        val s = server()
+        s.screenshotOnly = true
+        val repo = connected(s)
+        val red = cachedImage(0xff0000)
+        repo.sendMessage("s1", "只记了截图标记", listOf(red))
+        val final = repo.chatItems("s1").await("对齐后的记录") { list ->
+            list.texts().any { it.second == "收到 1 张图片" } &&
+                list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+        }
+        val mine = final.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+        assertEquals(listOf(red.path), mine.images.map { it.source }, "服务器没记路径，也要用本机记住的图")
+
+        // 重新打开 App（新的仓库实例，同一个缓存目录）也还在
+        val again = connected(s)
+        val reloaded = again.chatItems("s1").await("重新加载") { list -> list.any { it is ChatItem.Message && it.text == "只记了截图标记" } }
+        assertEquals(listOf(red.path), reloaded.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }.images.map { it.source })
+    }
+
+    @Test
+    fun repliesWithMediaShowImages() {
+        val s = server()
+        val repo = connected(s)
+        repo.sendMessage("s1", "帮我画图", emptyList())
+        val final = repo.chatItems("s1").await("带图的回复") { list ->
+            list.filterIsInstance<ChatItem.Message>().any { it.role == Role.Assistant && it.text == "画好了，送你一只猫。" } &&
+                list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+        }
+        val reply = final.filterIsInstance<ChatItem.Message>().last { it.role == Role.Assistant }
+        assertEquals("hermes-media:/gen/cat.png", reply.images.single().source, "MEDIA 标签变成图片，不显示路径原文")
+        assertNull(runBlocking { repo.fetchRemoteMedia("/gen/cat.png") }, "直连没有 SSH，拿不到服务器上的文件")
+    }
+
+    @Test
+    fun draftsSurviveLeavingAndRestart() {
+        val s = server()
+        val store = MemoryLocalStore()
+        val repo = connected(s, store)
+        val image = cachedImage(0x00ff00)
+        repo.saveDraft("s1", Draft("还没写完的话", listOf(image)))
+        assertEquals("还没写完的话", repo.draft("s1").text)
+        assertEquals(listOf(image), repo.draft("s1").attachments, "附件在 App 运行期间保留")
+        assertEquals("还没写完的话", repo.drafts.value["s1"])
+        Thread.sleep(800)
+        val again = connected(s, store)
+        assertEquals("还没写完的话", again.draft("s1").text, "重启后文字还在")
+        again.saveDraft("s1", Draft(""))
+        assertTrue(again.drafts.value.isEmpty())
     }
 }

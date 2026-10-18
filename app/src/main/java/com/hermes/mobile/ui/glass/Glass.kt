@@ -26,6 +26,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
@@ -149,18 +155,34 @@ fun TransparentBarColors(): TopAppBarColors = TopAppBarDefaults.topAppBarColors(
     scrolledContainerColor = Color.Transparent,
 )
 
-/** 顶栏容器：磨砂玻璃背景 + 底部发丝线。 */
+/**
+ * 顶栏容器：渐变磨砂玻璃。最上面（状态栏）最浓，往下逐渐变淡，底边没有硬分界线，
+ * 滚动的内容从下往上“沉”进玻璃里。
+ */
 @Composable
 fun GlassTopBar(backdrop: Backdrop, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val style = rememberGlassStyle(GlassStrength.Frosted)
-    Column(modifier.fillMaxWidth().frostedBar(backdrop, style)) {
-        content()
+    val tint = if (isRenderEffectSupported()) style.tint else style.fallbackTint
+    Box(modifier.fillMaxWidth()) {
         Box(
             Modifier
-                .fillMaxWidth()
-                .height(0.5.dp)
-                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                .matchParentSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    // 用渐变当遮罩：上面完全不透明，只在最下面一小段变淡，边缘柔和但标题区依然清楚
+                    drawRect(
+                        Brush.verticalGradient(0f to Color.Black, 0.72f to Color.Black, 1f to Color.Black.copy(alpha = 0.72f)),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                .frostedBar(backdrop, style)
+                .drawBehind {
+                    // 状态栏那一段再压一层底色，保证最上面最“实”
+                    drawRect(Brush.verticalGradient(0f to tint.copy(alpha = (tint.alpha + 0.25f).coerceAtMost(1f)), 0.5f to Color.Transparent))
+                },
         )
+        Column(Modifier.fillMaxWidth()) { content() }
     }
 }
 

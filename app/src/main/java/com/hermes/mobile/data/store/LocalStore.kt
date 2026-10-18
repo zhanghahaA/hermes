@@ -13,6 +13,8 @@ data class StoredState(
     val keys: Map<String, String> = emptyMap(),
     /** 还没收到结果的对话轮次。App 被杀后重新打开，靠它接着等回复、补上没处理的审批。 */
     val runs: List<StoredRun> = emptyList(),
+    /** 会话 id → 没发出去的草稿文字。 */
+    val drafts: Map<String, String> = emptyMap(),
 )
 
 @Serializable

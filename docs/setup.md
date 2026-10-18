@@ -79,6 +79,29 @@ Hermes 不用改 `API_SERVER_HOST`。
 
 本机 Termux 要读「下载/Hermes」里的文件，需要先在 Termux 里运行一次 `termux-setup-storage` 并允许存储权限。
 
+### 显示 Hermes 生成的图片（文件互通）
+
+Hermes 画的图、生成的文件都存在它那台机器上（回复里是一行 `MEDIA:/路径`）。Hermes 的 API 不提供下载，
+所以 App 要能经 SSH 读那台机器上的文件，才能把这些图显示出来：
+
+- **SSH 隧道连接**：自动就能用。
+- **本机 Termux / 直连**：在连接设置里打开「文件互通（可选）」，填那台机器的 SSH 账号。
+  本机 Termux 填 Termux 自己的 sshd：端口 8022，用户名随便（Termux 不检查），推荐在 App 里生成密钥，
+  把「复制命令」得到的那行在 Termux 里执行一次。聊天仍然直接连 Hermes，SSH 只用来传文件。
+  打开后，发送 Word、压缩包等任意文件也会改为经 SFTP 上传到 `~/hermes-uploads/`。
+
+### 测试连接里 SSH 的常见问题
+
+| 提示 | 处理 |
+|---|---|
+| SSH 服务器不允许端口转发 | 在 sshd_config 里加 `AllowTcpForwarding local`（或 `yes`），重载 sshd。只用「文件互通」时不需要转发 |
+| SSH 已登录，但服务器上 127.0.0.1:端口 没有服务在监听 | Hermes gateway 没启动、API Server 没开，或者端口填错了 |
+
+### 直连
+
+直连要求 Hermes 的 API Server 监听在手机能访问到的地址上。默认只监听 `127.0.0.1`，所以从别的设备直连会失败；
+要直连就在那台机器的 `.env` 里设 `API_SERVER_HOST=<它的局域网或 Tailscale IP>`。在同一台手机上用 Termux 时，用「本机 Termux」就够了。
+
 发过的图片会在手机上留一份（按内容哈希命名），以后打开聊天记录还能看到原图；换了手机或清除了 App 数据，旧消息里的图片会显示成占位块。
 
 ## 让 Hermes 能向你追问（可选）

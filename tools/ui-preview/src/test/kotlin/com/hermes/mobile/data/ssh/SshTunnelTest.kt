@@ -215,4 +215,53 @@ class SshTunnelTest {
         assertEquals("数据 包.zip", mine.files.single().name, "气泡里显示原文件名")
         assertTrue(mine.files.single().note!!.startsWith("已上传：/hermes-uploads/"), mine.files.single().note)
     }
+
+    @Test
+    fun generatedImagesAreDownloadedOverSftp() {
+        val hermes = hermes()
+        val ssh = sshd()
+        java.nio.file.Files.createDirectories(ssh.home.resolve("gen"))
+        val png = ByteArray(5000) { (it % 200).toByte() }
+        java.nio.file.Files.write(ssh.home.resolve("gen/cat.png"), png)
+        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), mediaDir = kotlin.io.path.createTempDirectory("m").toFile(), backoff = { 50L })
+        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        val local = runBlocking { repo.fetchRemoteMedia("/gen/cat.png") }
+        assertNotNull(local, "经 SFTP 下载到本机")
+        assertTrue(java.io.File(local).readBytes().contentEquals(png))
+        assertEquals(local, runBlocking { repo.fetchRemoteMedia("/gen/cat.png") }, "第二次直接用缓存")
+    }
+
+    @Test
+    fun localTermuxCanUseSshForFiles() {
+        val hermes = hermes()
+        val ssh = sshd()
+        // 本机 Termux：聊天直接连 127.0.0.1，SSH 只用来传文件
+        val profile = ConnectionProfile(
+            id = "local1", name = "本机", type = ConnectionType.Local, host = "127.0.0.1", port = hermes.server.port,
+            sshUser = ssh.user, sshPort = ssh.port, sshAuth = SshAuthMethod.Key,
+        )
+        val repo = repo()
+        val steps = steps(repo.testConnection(profile, hermes.key, keys.privateKey))
+        assertEquals("文件互通（SSH）", steps.last().title)
+        assertTrue(steps.all { it.status == TestStepStatus.Passed }, steps.toString())
+        repo.saveConnection(profile, hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        assertTrue(repo.canSendAnyFile())
+        assertNotNull(repo.connections.value.single().sshHostKey, "文件互通的 SSH 也记住指纹")
+        assertTrue(hermes.requests.none { it.path == "/v1/runs" })
+    }
+
+    @Test
+    fun refusedForwardingIsExplained() {
+        val hermes = hermes()
+        val ssh = TestSshServer(authorizedKey = keys.publicKey).apply {
+            sshd.forwardingFilter = org.apache.sshd.server.forward.RejectAllForwardingFilter.INSTANCE
+        }
+        sshd(ssh)
+        val result = steps(repo().testConnection(profile(ssh, hermes), hermes.key, keys.privateKey))
+        assertEquals(TestStepStatus.Passed, result[1].status)
+        assertEquals(TestStepStatus.Failed, result[2].status)
+        assertTrue(result[2].detail!!.contains("不允许端口转发"), result[2].detail)
+    }
 }
