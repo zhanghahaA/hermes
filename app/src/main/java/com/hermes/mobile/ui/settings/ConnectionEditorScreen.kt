@@ -270,7 +270,18 @@ fun ConnectionEditorScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
-                        ConnectionType.Local -> TermuxGuide()
+                        ConnectionType.Local -> {
+                            OutlinedTextField(
+                                value = port,
+                                onValueChange = { port = it },
+                                label = { Text("Hermes 端口") },
+                                supportingText = { Text("Hermes API Server 的端口，默认 8642（不是 Termux SSH 的 8022）") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            TermuxGuide()
+                        }
                     }
                 }
             }
@@ -490,6 +501,7 @@ private fun TermuxGuide() {
         "设置 API Key" to "echo 'API_SERVER_KEY=<随机长密钥>' >> ~/.hermes/.env",
         "防止被系统杀掉" to "termux-wake-lock",
         "启动" to "hermes gateway",
+        "检查（应该返回 platform: hermes-agent）" to "curl http://127.0.0.1:8642/health",
     )
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.large) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
