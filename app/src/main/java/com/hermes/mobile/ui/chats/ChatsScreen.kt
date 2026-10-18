@@ -206,7 +206,8 @@ fun ChatsScreen(
                 if (connectionState is ConnectionState.Failed) {
                     item(key = "offline") {
                         OfflineBanner(
-                            (connectionState as ConnectionState.Failed).reason,
+                            (connectionState as ConnectionState.Failed).reason +
+                                if (sessions.isNotEmpty()) "\n下面是上次保存的内容，连上后自动更新。" else "",
                             onRetry = { activeId?.let(repository::switchConnection) },
                         )
                     }

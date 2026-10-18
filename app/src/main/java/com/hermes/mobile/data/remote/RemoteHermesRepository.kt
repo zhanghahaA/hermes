@@ -42,6 +42,7 @@ import com.hermes.mobile.data.ssh.SshAuth
 import com.hermes.mobile.data.ssh.SshException
 import com.hermes.mobile.data.ssh.SshKeys
 import com.hermes.mobile.data.ssh.SshTunnel
+import com.hermes.mobile.data.store.ChatCache
 import com.hermes.mobile.data.store.LocalStore
 import com.hermes.mobile.data.store.SecretBox
 import com.hermes.mobile.data.store.StoredRun
@@ -60,6 +61,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flow
@@ -92,6 +94,8 @@ class RemoteHermesRepository(
      * 读聊天记录时据此找回原图。为 null 时历史里的图片显示占位块。
      */
     private val mediaDir: File? = null,
+    /** 会话列表和聊天记录的本机副本放在这里（打开就显示、没网也能看）。为 null 时不缓存。 */
+    cacheDir: File? = null,
     /**
      * 本机 Termux 连接发普通文件时，把文件存到 Termux 也能读到的地方（Android 上是“下载/Hermes”），
      * 返回 Termux 里看到的路径；不支持时返回 null。
@@ -102,6 +106,10 @@ class RemoteHermesRepository(
     /** 断线重连的等待时间（毫秒），第 n 次失败等多久。测试里调短。 */
     private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
 ) : HermesRepository {
+    private val cache = cacheDir?.let(::ChatCache)
+
+    /** 这个连接的会话列表已经从服务器读到过（之后才把列表写回缓存，免得用旧数据覆盖）。 */
+    @Volatile private var sessionsFresh = false
 
     private val state = MutableStateFlow(store.load() ?: StoredState())
 
@@ -161,7 +169,9 @@ class RemoteHermesRepository(
         closeTunnel()
         val profile = _connections.value.firstOrNull { it.id == id } ?: return
         _connectionState.value = ConnectionState.Connecting
-        _sessions.value = emptyList()
+        // 先显示上次存下的列表，连上之后再换成服务器的
+        sessionsFresh = false
+        _sessions.value = cache?.sessions(id).orEmpty()
         chats.value = emptyMap()
         connectJob = scope.launch {
             try {
@@ -259,6 +269,7 @@ class RemoteHermesRepository(
     }
 
     override fun deleteConnection(id: String) {
+        cache?.removeConnection(id)
         _connections.update { list -> list.filterNot { it.id == id } }
         persist { s ->
             s.copy(connections = _connections.value, keys = s.keys - id - (SshSecretPrefix + id), runs = s.runs.filterNot { it.connectionId == id })
@@ -540,6 +551,8 @@ class RemoteHermesRepository(
                     )
                 }
             }
+            sessionsFresh = true
+            saveSessionsToCache()
         } catch (e: HermesError) {
             _connectionState.value = ConnectionState.Failed(e.message ?: "读取会话失败")
         }
@@ -592,6 +605,7 @@ class RemoteHermesRepository(
             draftSessions.update { it - real }
             return
         }
+        connectedId?.let { c -> cache?.removeSession(c, real) }
         val before = _sessions.value
         _sessions.update { list -> list.filterNot { it.id == real } }
         scope.launch {
@@ -713,7 +727,14 @@ class RemoteHermesRepository(
 
     override fun chatItems(sessionId: String): Flow<List<ChatItem>> =
         chatOf(sessionId).map { it?.display().orEmpty() }.onStart {
-            scope.launch { resolve(sessionId).takeUnless { it.startsWith(DraftPrefix) }?.let { loadMessages(it) } }
+            val key = resolve(sessionId).takeUnless { it.startsWith(DraftPrefix) } ?: return@onStart
+            // 先显示本机存的记录，同时去服务器拉最新的
+            val connection = _activeConnectionId.value
+            if (cache != null && connection != null && chats.value[key] == null) {
+                val cached = withContext(Dispatchers.IO) { cache.messages(connection, key) }
+                if (!cached.isNullOrEmpty()) chats.update { m -> if (m[key] == null) m + (key to ChatState(server = cached)) else m }
+            }
+            scope.launch { loadMessages(key) }
         }
 
     override fun runPhase(sessionId: String): Flow<RunPhase> = chatOf(sessionId).map { it?.phase ?: RunPhase.Idle }
@@ -733,6 +754,8 @@ class RemoteHermesRepository(
                 .withSentImages(sessionId)
             val running = runs.containsKey(sessionId)
             updateChat(sessionId) { st -> st.copy(server = items, local = st.local.reconcile(items, running), loaded = true) }
+            val connection = connectedId
+            if (cache != null && connection != null) withContext(Dispatchers.IO) { cache.saveMessages(connection, sessionId, items) }
         } catch (e: HermesError) {
             _errors.tryEmit(e.message ?: "读取聊天记录失败")
         }
@@ -1840,7 +1863,22 @@ class RemoteHermesRepository(
     }
 
     // 放在最后：自动连接会用到上面所有状态，必须等它们都初始化完（否则重启 App 时会崩溃）
+    /** 会话列表变了（改名、新消息预览……）就写回缓存，攒一会儿再写。 */
+    private fun saveSessionsToCache() {
+        val connection = connectedId ?: return
+        if (cache == null || !sessionsFresh) return
+        val snapshot = _sessions.value
+        scope.launch(Dispatchers.IO) { cache.saveSessions(connection, snapshot) }
+    }
+
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun watchSessionsForCache() {
+        if (cache == null) return
+        scope.launch { _sessions.debounce(1_000).collect { saveSessionsToCache() } }
+    }
+
     init {
+        watchSessionsForCache()
         _activeConnectionId.value?.let { connect(it) }
     }
 }

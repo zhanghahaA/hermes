@@ -31,6 +31,7 @@ class HermesApplication : Application() {
             store = FileLocalStore(this),
             secrets = KeystoreSecretBox(),
             mediaDir = mediaDirectory(this),
+            cacheDir = java.io.File(filesDir, "chat-cache"),
             localFileExporter = { path, name, mime -> AttachmentImporter.exportForTermux(this, path, name, mime) },
         )
     }

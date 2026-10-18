@@ -45,6 +45,7 @@ data class ConnectionTestStep(val title: String, val status: TestStepStatus, val
  * 会话的来源，对应服务器返回的 `source` 字段。不同版本的 Hermes 可能出现新的来源，
  * 所以不用枚举：认识的给个好看的名字，不认识的原样显示。
  */
+@Serializable
 data class SessionSource(val id: String) {
     val label: String
         get() = when (id.lowercase()) {
@@ -68,6 +69,7 @@ data class SessionSource(val id: String) {
     }
 }
 
+@Serializable
 data class Session(
     val id: String,
     val title: String,
@@ -85,14 +87,17 @@ data class Session(
     val external: Boolean get() = source != SessionSource.Api
 }
 
+@Serializable
 enum class Role { User, Assistant }
 
+@Serializable
 enum class DeliveryStatus { Sending, Sent, Failed }
 
 /**
  * 消息里的一张图片。[source] 是能读到图片的地方：本机文件路径、`data:` URL 或 http(s) 地址；
  * 读不到（例如服务器上的图、本机没缓存）时为 null，界面用 [hue] 画一个渐变占位块。
  */
+@Serializable
 data class ImageRef(val id: String, val hue: Float, val aspect: Float = 1f, val source: String? = null)
 
 /** 没发出去的草稿：输入框里的字和选好的附件。 */
@@ -104,6 +109,7 @@ data class Draft(val text: String = "", val attachments: List<Attachment> = empt
  * 消息里附带的文件。点开时按顺序找内容：[localPath]（手机上的文件）→ [inlineText]（消息里带着的文本）
  * → [remotePath]（Hermes 那台机器上的文件，经 SSH 下载）。
  */
+@Serializable
 data class FileRef(
     val name: String,
     val sizeBytes: Long? = null,
@@ -137,6 +143,7 @@ sealed interface Attachment {
  * 思考过程、工具调用这些从来不进消息列表，所以也不可能被引用。
  * [partial] 为 true 表示只引用了选中的一段。
  */
+@Serializable
 data class Quote(val messageId: String, val text: String, val partial: Boolean) {
     companion object {
         /** 只有 Hermes 已完成的回复可以引用；其它消息返回 null。 */
@@ -156,6 +163,7 @@ sealed interface ChatItem {
      * 一条消息。Hermes 的消息 [text] 只有最终回复正文：接入 API 时只拼接 assistant.delta，
      * reasoning / commentary / tool.* 事件一律丢弃，不进这里。
      */
+    @Serializable
     data class Message(
         override val id: String,
         override val time: Long,
