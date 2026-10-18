@@ -21,10 +21,13 @@ kotlin {
 sourceSets {
     main {
         kotlin {
-            // 直接编译 app 里的界面代码，只排除依赖 Android 的两个文件（桌面版替身在 src/main/kotlin）
+            // 直接编译 app 里的界面和数据代码，只排除依赖 Android 的文件（需要替身的放在 src/main/kotlin）
             srcDir("../../app/src/main/java")
             exclude(
                 "com/hermes/mobile/MainActivity.kt",
+                "com/hermes/mobile/HermesApplication.kt",
+                "com/hermes/mobile/platform/RunService.kt",
+                "com/hermes/mobile/platform/ReplyNotifier.kt",
                 "com/hermes/mobile/platform/Platform.kt",
                 "com/hermes/mobile/platform/AndroidStorage.kt",
             )

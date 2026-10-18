@@ -3,6 +3,10 @@ package com.hermes.mobile.data.remote
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.serialization.json.put
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -35,7 +39,7 @@ sealed class HermesError(message: String) : Exception(message) {
     class Unauthorized : HermesError("API Key 不对，或者服务器没有配置 API_SERVER_KEY")
     class NotSupported(val what: String) : HermesError("这台 Hermes 的版本不支持$what")
     class Conflict(val code: String?, detail: String) : HermesError(detail)
-    class Server(val status: Int, val code: String?, detail: String) : HermesError(detail)
+    class Server(val status: Int, val code: String?, detail: String, val retryAfterSeconds: Long? = null) : HermesError(detail)
     class BadUrl(detail: String) : HermesError(detail)
 }
 
@@ -52,6 +56,9 @@ class HermesClient(
     private val base: HttpUrl = baseUrl.trim().trimEnd('/').toHttpUrlOrNull()
         ?: throw HermesError.BadUrl("地址格式不对：$baseUrl")
     private val http = http
+
+    /** 事件流用的客户端：服务器每 10 秒发一次心跳，30 秒没有任何数据就认为连接已死。 */
+    private val streamHttp: OkHttpClient = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
 
     internal suspend fun health(): HealthDto =
         get("/health", HealthDto.serializer(), auth = false, profileScoped = false)
@@ -73,6 +80,62 @@ class HermesClient(
     suspend fun deleteSession(id: String) {
         execute(request("/api/sessions/${id.encode()}").delete().build()).close()
     }
+
+    internal suspend fun createSession(title: String?): SessionDto? =
+        send("POST", "/api/sessions", patch { if (title != null) put("title", title) }, SessionEnvelopeDto.serializer()).session
+
+    internal suspend fun forkSession(id: String): SessionDto? =
+        send("POST", "/api/sessions/${id.encode()}/fork", JsonObject(emptyMap()), SessionEnvelopeDto.serializer()).session
+
+    /** 提交一轮对话。[idempotencyKey] 相同的重试不会让 Hermes 重复执行。 */
+    internal suspend fun startRun(sessionId: String, input: String, idempotencyKey: String): RunAcceptedDto {
+        val body = patch {
+            put("input", input)
+            put("session_id", sessionId)
+        }
+        val request = request("/v1/runs")
+            .header("Idempotency-Key", idempotencyKey)
+            .post(body.toString().toRequestBody(JsonMedia))
+            .build()
+        return decode(execute(request), RunAcceptedDto.serializer())
+    }
+
+    internal suspend fun runStatus(runId: String): RunStatusDto = get("/v1/runs/${runId.encode()}", RunStatusDto.serializer())
+
+    internal suspend fun respondApproval(runId: String, body: JsonObject) {
+        execute(request("/v1/runs/${runId.encode()}/approval").post(body.toString().toRequestBody(JsonMedia)).build()).close()
+    }
+
+    internal suspend fun respondClarify(runId: String, body: JsonObject) {
+        execute(request("/v1/runs/${runId.encode()}/clarify").post(body.toString().toRequestBody(JsonMedia)).build()).close()
+    }
+
+    internal suspend fun stopRun(runId: String) {
+        execute(request("/v1/runs/${runId.encode()}/stop").post("{}".toRequestBody(JsonMedia)).build()).close()
+    }
+
+    /**
+     * 订阅一轮对话的事件（SSE）。[afterSeq] 是已经处理过的最后一个序号，服务器会补发之后的事件。
+     * 流正常结束（任务结束）时 Flow 完成；网络断开时抛 [HermesError]，由调用方决定是否重连。
+     */
+    internal fun runEvents(runId: String, afterSeq: Long): Flow<SseEvent> = flow {
+        val request = request("/v1/runs/${runId.encode()}/events")
+            .header("Accept", "text/event-stream")
+            .apply { if (afterSeq >= 0) header("Last-Event-ID", afterSeq.toString()) }
+            .get()
+            .build()
+        val response = execute(request, streamHttp)
+        response.use { r ->
+            val source = r.body.source()
+            try {
+                readSse(source) { emit(it) }
+            } catch (e: SocketTimeoutException) {
+                throw HermesError.Timeout()
+            } catch (e: IOException) {
+                throw HermesError.Unreachable(e.message ?: "连接断开")
+            }
+        }
+    }.flowOn(Dispatchers.IO)
 
     /** 用一个必须鉴权、又在所有版本都有的接口验证 Key（旧版本没有 /v1/capabilities 时用）。 */
     suspend fun verifyKey() {
@@ -117,9 +180,9 @@ class HermesClient(
         }
     }
 
-    private suspend fun execute(request: Request): Response {
+    private suspend fun execute(request: Request, client: OkHttpClient = http): Response {
         val response = try {
-            http.newCall(request).await()
+            client.newCall(request).await()
         } catch (e: SocketTimeoutException) {
             throw HermesError.Timeout()
         } catch (e: UnknownHostException) {
@@ -141,7 +204,7 @@ class HermesClient(
             401, 403 -> HermesError.Unauthorized()
             404, 405 -> HermesError.NotSupported("这个功能")
             409 -> HermesError.Conflict(code, message)
-            else -> HermesError.Server(response.code, code, message)
+            else -> HermesError.Server(response.code, code, message, response.header("Retry-After")?.trim()?.toLongOrNull())
         }
     }
 

@@ -11,7 +11,12 @@ data class StoredState(
     val activeConnectionId: String? = null,
     val settings: AppSettings = AppSettings(),
     val keys: Map<String, String> = emptyMap(),
+    /** 还没收到结果的对话轮次。App 被杀后重新打开，靠它接着等回复、补上没处理的审批。 */
+    val runs: List<StoredRun> = emptyList(),
 )
+
+@Serializable
+data class StoredRun(val connectionId: String, val sessionId: String, val runId: String)
 
 /** 状态读写。Android 上是 App 私有目录里的一个 JSON 文件。 */
 interface LocalStore {

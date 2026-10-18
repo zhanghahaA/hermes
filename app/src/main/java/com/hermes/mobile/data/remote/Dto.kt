@@ -72,6 +72,8 @@ internal data class MessageDto(
     val content: JsonElement? = null,
     val timestamp: JsonElement? = null,
     val display_kind: String? = null,
+    /** "tool_calls" 表示这是调用工具的中间步骤，不是给你的回复。 */
+    val finish_reason: String? = null,
 )
 
 @Serializable
@@ -85,3 +87,23 @@ internal data class ErrorBodyDto(val error: ErrorDto? = null)
 
 @Serializable
 internal data class ErrorDto(val message: String? = null, val type: String? = null, val code: String? = null)
+
+// ---- 阶段 2：聊天 ----
+
+@Serializable
+internal data class RunAcceptedDto(val run_id: String? = null, val status: String? = null)
+
+@Serializable
+internal data class RunStatusDto(
+    val run_id: String? = null,
+    val status: String? = null,
+    val session_id: String? = null,
+    val output: String? = null,
+    val error: String? = null,
+    /** 新版：等待用户处理的审批/追问。 */
+    val pending_controls: List<JsonObject>? = null,
+    /** 旧版：等待中的审批。 */
+    val approval: JsonObject? = null,
+    /** 新版：回复审批/追问时要带上的执行代号（pending_controls 里没有时用这个）。 */
+    val execution_generation: JsonElement? = null,
+)

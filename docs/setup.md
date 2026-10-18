@@ -43,6 +43,24 @@ API Server 默认只监听本机（`127.0.0.1`），手机访问不到。按你�
 | API Key 鉴权 | Key 填错了，或者和 `.env` 里的 `API_SERVER_KEY` 不一致 |
 | 能力探测 | Hermes 版本太旧（早于 2026.6），没有会话接口，建议升级 |
 
+## 让 Hermes 能向你追问（可选）
+
+Hermes 默认不给 API Server 用“追问”工具，遇到不确定的地方它会自己拿主意。想让它在手机上弹出追问卡片问你，
+在 `~/.hermes/config.yaml` 里加上（然后重启 gateway）：
+
+```yaml
+platform_toolsets:
+  api_server:
+    - hermes-api-server
+    - clarify
+```
+
+## 后台和通知
+
+等 Hermes 回复时，App 会在通知栏显示“Hermes 正在回复…”，这样切到后台、锁屏也不会断。
+回复到了、或者需要你批准时会发通知。第一次打开 App 时请允许通知。
+如果手机厂商的省电策略比较激进，建议把本 App 设为“不限制后台”。
+
 ## 多个 Profile
 
 如果你用 Hermes 的多 Profile，在连接里填 Profile 名字。

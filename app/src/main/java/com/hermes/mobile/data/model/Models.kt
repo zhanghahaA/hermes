@@ -130,7 +130,8 @@ sealed interface ChatItem {
         override val time: Long,
         val summary: String,
         val command: String,
-        val choices: List<String> = listOf("允许一次", "本会话内允许", "拒绝"),
+        /** 服务器给的选项 id：once / session / always / deny（界面上显示成中文）。 */
+        val choices: List<String> = listOf("once", "session", "deny"),
         val resolvedChoice: String? = null,
     ) : ChatItem
 
@@ -145,6 +146,11 @@ sealed interface ChatItem {
 }
 
 enum class RunPhase { Idle, Working, AwaitingInput }
+
+/** App 在后台时要发通知的事。 */
+data class ChatNotice(val sessionId: String, val title: String, val text: String, val kind: Kind) {
+    enum class Kind { Reply, NeedsInput, Failed }
+}
 
 // ---- 模型 / 能力 ----
 

@@ -85,11 +85,74 @@ App 只保留：
 `content` 可能是字符串，也可能是 OpenAI 风格的分段数组（`[{"type":"text","text":...},{"type":"image_url",...}]`），
 两种都要处理。
 
-## 流式聊天（阶段 2 详细核对）
+## 聊天（阶段 2）
 
-- `POST /api/sessions/{id}/chat/stream`：SSE，事件 `assistant.delta`（回复正文）、`assistant.commentary`、
-  `tool.started/completed/failed`、`approval.request`、`run.completed/failed/cancelled`。
-  App 只拼 `assistant.delta`。
-- `approval.request` 带 `choices`（`once` / `session` / `always` / `deny` 的子集）和 `run_id`，
-  回复走 `POST /v1/runs/{run_id}/approval`。
-- 每 10 秒无数据会发 `: keepalive` 注释行。
+### 为什么走 `/v1/runs`，不走 `/api/sessions/{id}/chat/stream`
+
+`chat/stream` 在 SSE 断开时会**中断正在运行的任务**（源码：`SSE client disconnected; interrupted live run`）。
+手机切后台、锁屏、换网络都会断开，所以 App 用 `/v1/runs`：提交任务和订阅事件是分开的，
+断开只是取消订阅，任务继续跑；每个事件带 `seq`，重连时用 `Last-Event-ID` 补回漏掉的事件。
+
+### 发消息
+
+`POST /v1/runs`，头部 `Idempotency-Key: <本地消息 id>`（网络重试不会重复执行），
+`X-Hermes-Session-Id` 不需要，会话写在 body 里：
+```json
+{"input": "用户说的话（带引用时前面是 > 引用块）", "session_id": "<会话 id>"}
+```
+→ 202 `{"run_id":"run_...","status":"started","replayed":false}`。
+会话第一次发消息前先 `POST /api/sessions {"title": ...}` 建会话（返回 201 和 session）。
+
+### 事件 `GET /v1/runs/{run_id}/events`
+
+SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
+
+| 事件 | App 怎么处理 |
+|---|---|
+| `message.delta` `{delta}` | 打开“逐字显示”时拼到临时气泡里；否则只显示“正在输入” |
+| `message.interim`、`subagent.*`、`reasoning.*` | 忽略（旁白、思考不显示） |
+| `tool.started` / `tool.completed` | 不显示；同时清掉逐字显示里之前那段（那只是调用工具前的过程话） |
+| `approval.request` | 显示审批卡片。字段：`command`、`description`、`choices`（`once/session/always/deny` 子集），新版还有 `prompt_id`、`execution_generation` |
+| `approval.responded` / `approval.settled` | 卡片收起 |
+| `clarify.request` | 追问卡片：`question`、`choices`、`prompt_id`、`execution_generation`、`multi_select`。`question` 末尾的 `Reply "skip"…` 提示和选项上的 `(Recommended)` 后缀 App 去掉再显示（Hermes 匹配回答时本来就忽略这个后缀） |
+| `run.completed` `{output}` | `output` 就是最终回复，作为 Hermes 的消息显示 |
+| `run.failed` `{error}` / `run.cancelled` / `run.interrupted` | 结束“正在输入”，失败时提示原因 |
+| `replay.truncated` | 断线太久、漏掉的事件已经过期：改为查询状态 + 重新拉聊天记录 |
+
+注释行 `: keepalive`、`: open`、`: stream closed` 跳过。思考内容（`_thinking`）服务器端就不发。
+
+### 状态、审批、追问、停止
+
+- `GET /v1/runs/{id}` → `{"status": "queued|running|waiting_for_approval|stopping|completed|failed|cancelled|interrupted", "output", "error", "approval"}`。
+  断线重连失败、或 App 被杀后重新打开，用它判断任务是否已经结束。
+- 审批 `POST /v1/runs/{id}/approval`：事件里有 `execution_generation` 时发
+  `{"request_id": <prompt_id>, "execution_generation": ..., "choice": ...}`，否则发 `{"choice": ...}`（有 `request_id` 就带上）。
+- 追问 `POST /v1/runs/{id}/clarify`：`{"request_id", "execution_generation", "answer"}`。
+  **Hermes 默认不给 API Server 追问工具**（`hermes-api-server` 工具集去掉了 clarify），要在 `config.yaml` 里加：
+  ```yaml
+  platform_toolsets:
+    api_server: [hermes-api-server, clarify]
+  ```
+  新版追问工具的参数是 `questions` 数组（一次最多 5 个问题），每个问题单独发一个 `clarify.request`。
+- 新版（session authority）的 `GET /v1/runs/{id}` 有 `pending_controls`（等待中的审批/追问，格式同事件）和顶层 `execution_generation`；
+  App 重连、重启后用它补上卡片。
+- 停止 `POST /v1/runs/{id}/stop` → `{"status":"stopping"}`，随后事件流收到 `run.cancelled`。
+
+### 其它
+
+- 并发上限 429、gateway 繁忙 503（带 `Retry-After`）：按服务器给的时间退避重试。
+- 不允许从 API 继续的会话：提交返回 409 `permission_denied` → App 把会话标为只读，提供“分叉后继续”。
+  409 `session_active_turn`：这个会话正在别处回复，提示稍后再发。
+- 分叉 `POST /api/sessions/{id}/fork {"title"?}` → 201，复制整个会话（不能只复制到某条消息）。
+
+### App 端的实现要点
+
+- 新建会话先是本地草稿，第一条消息发出时才 `POST /api/sessions`；界面一直用草稿 id，内部映射到服务器 id。
+- 本地还没被服务器记录确认的条目（自己刚发的消息、刚收到的回复、审批/追问卡片）和服务器记录合并显示；
+  一轮结束后重新拉记录，以服务器为准。卡片不在服务器记录里，按“它前面有几条消息”插回原位。
+- 服务器记录里 `finish_reason == "tool_calls"` 的回复是调用工具的中间步骤，不显示。
+- 用户消息开头是 `> ` 引用块的，拆成引用样式显示，并找回被引用的那条回复。
+- 等待中的轮次（连接 id、会话 id、run id）存在手机上；App 被杀后重新打开会接着订阅（不带 `Last-Event-ID`，服务器从头补发），
+  或直接从状态接口拿结果。
+- Android：有轮次在等时开前台服务（`dataSync` 类型）保持连接；App 不在前台时回复到了、需要审批都会发通知，点通知直接打开那个对话；
+  系统报告网络恢复时立刻重连，不等退避时间。

@@ -2,6 +2,7 @@ package com.hermes.mobile.data.remote
 
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.ImageRef
+import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.Role
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.model.SessionSource
@@ -55,6 +56,8 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long): ChatItem.Mes
         "assistant" -> Role.Assistant
         else -> return null
     }
+    // 调用工具的中间步骤：就算带了几句话（“我先查一下”），也属于过程，不显示
+    if (role == Role.Assistant && finish_reason == "tool_calls") return null
     val (text, images) = content.parseContent(idSeed = index)
     if (role == Role.Assistant && text.isBlank()) return null
     if (role == Role.User && text.isBlank() && images.isEmpty()) return null
@@ -62,13 +65,44 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long): ChatItem.Mes
         is JsonPrimitive -> raw.contentOrNull
         else -> null
     } ?: "idx-$index"
+    val (quote, body) = if (role == Role.User) splitQuote(text.trim()) else null to text.trim()
     return ChatItem.Message(
         id = messageId,
         time = timestamp.epochMillis() ?: fallbackTime,
         role = role,
-        text = text.trim(),
+        text = body,
         images = images,
+        quote = quote,
     )
+}
+
+/** App 发引用时，把引用内容写成 Markdown 引用块放在正文前面。 */
+internal fun quotedInput(quote: Quote?, text: String): String {
+    if (quote == null) return text
+    val block = quote.text.trim().lines().joinToString("\n") { "> $it" }
+    return "$block\n\n$text"
+}
+
+/**
+ * 反过来：用户消息以引用块开头时拆出引用，聊天记录里照样显示成引用样式。
+ * 引用指向哪条回复先留空，由 [linkQuotes] 补上。
+ */
+private fun splitQuote(text: String): Pair<Quote?, String> {
+    if (!text.startsWith(">")) return null to text
+    val lines = text.lines()
+    val quoteLines = lines.takeWhile { it.startsWith(">") }
+    val rest = lines.drop(quoteLines.size).joinToString("\n").trim()
+    if (rest.isEmpty()) return null to text
+    val quoted = quoteLines.joinToString("\n") { it.removePrefix(">").removePrefix(" ") }.trim()
+    return Quote(messageId = "", text = quoted, partial = true) to rest
+}
+
+/** 给拆出来的引用找到被引用的那条回复（往前找第一条包含这段文字的回复）。 */
+internal fun List<ChatItem.Message>.linkQuotes(): List<ChatItem.Message> = mapIndexed { i, m ->
+    val quote = m.quote ?: return@mapIndexed m
+    if (quote.messageId.isNotEmpty()) return@mapIndexed m
+    val target = subList(0, i).lastOrNull { it.role == Role.Assistant && it.text.contains(quote.text) }
+    m.copy(quote = quote.copy(messageId = target?.id.orEmpty(), partial = target?.text?.trim() != quote.text))
 }
 
 /** content 可能是字符串，也可能是 `[{"type":"text","text":...},{"type":"image_url",...}]`。 */

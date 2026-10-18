@@ -93,7 +93,7 @@ object SampleData {
                 "a1", now - 11 * MIN,
                 "修改路由器 DNS 并重启",
                 "uci set network.wan.dns='223.5.5.5'\nuci commit network && reboot",
-                resolvedChoice = "允许一次",
+                resolvedChoice = "once",
             ),
             ChatItem.Message(
                 "m4", now - 6 * MIN, Role.Assistant,

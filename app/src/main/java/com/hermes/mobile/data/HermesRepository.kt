@@ -3,6 +3,7 @@ package com.hermes.mobile.data
 import com.hermes.mobile.data.model.AppFeature
 import com.hermes.mobile.data.model.AppSettings
 import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.ChatNotice
 import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionState
 import com.hermes.mobile.data.model.ConnectionTestStep
@@ -15,7 +16,10 @@ import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.model.Skill
 import com.hermes.mobile.data.model.Toolset
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 
 /**
  * UI 只依赖这个接口。骨架阶段由 [com.hermes.mobile.data.fake.FakeHermesRepository] 提供假数据，
@@ -78,6 +82,11 @@ interface HermesRepository {
     fun saveJob(job: CronJob)
     fun deleteJob(id: String)
 
+    /** 正在等 Hermes 回复的会话。Android 上不为空时保持一个前台服务，切到后台也不断线。 */
+    val activeRuns: StateFlow<Set<String>> get() = NoActiveRuns
+    /** 回复到了、需要审批……App 在后台时据此发通知。 */
+    val notices: Flow<ChatNotice> get() = emptyFlow()
+
     /** 要提示给用户的错误或说明（一次性事件）。 */
     val errors: Flow<String>
 
@@ -85,3 +94,5 @@ interface HermesRepository {
     val settings: StateFlow<AppSettings>
     fun updateSettings(transform: (AppSettings) -> AppSettings)
 }
+
+private val NoActiveRuns: StateFlow<Set<String>> = MutableStateFlow(emptySet<String>()).asStateFlow()

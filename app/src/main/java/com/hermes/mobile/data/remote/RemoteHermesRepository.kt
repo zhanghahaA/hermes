@@ -4,14 +4,17 @@ import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.AppFeature
 import com.hermes.mobile.data.model.AppSettings
 import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.ChatNotice
 import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionState
 import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.ConnectionType
 import com.hermes.mobile.data.model.CronJob
+import com.hermes.mobile.data.model.DeliveryStatus
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.ModelOption
 import com.hermes.mobile.data.model.Quote
+import com.hermes.mobile.data.model.Role
 import com.hermes.mobile.data.model.RunPhase
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.model.Skill
@@ -19,23 +22,38 @@ import com.hermes.mobile.data.model.TestStepStatus
 import com.hermes.mobile.data.model.Toolset
 import com.hermes.mobile.data.store.LocalStore
 import com.hermes.mobile.data.store.SecretBox
+import com.hermes.mobile.data.store.StoredRun
 import com.hermes.mobile.data.store.StoredState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.put
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 连接真实 Hermes 的仓库（阶段 1：连接、会话列表、聊天记录、重命名/置顶/删除）。
- * 发消息、模型、任务等在后续阶段接入，对应的 [features] 还没打开，界面会显示“暂不支持”。
+ * 连接真实 Hermes 的仓库。
+ *
+ * 阶段 1：连接、会话列表、聊天记录、重命名/置顶/删除。
+ * 阶段 2：发消息（走 /v1/runs，断线不会打断 Hermes）、断线重连、审批和追问卡片、停止、新建和分叉会话。
+ * 模型、任务等在后续阶段接入，对应的 [features] 还没打开，界面会显示“暂不支持”。
  */
 class RemoteHermesRepository(
     private val scope: CoroutineScope,
@@ -44,6 +62,8 @@ class RemoteHermesRepository(
     private val clientFactory: (baseUrl: String, apiKey: String?, profile: String?) -> HermesClient =
         { url, key, profile -> HermesClient(url, key, profile) },
     private val clock: () -> Long = System::currentTimeMillis,
+    /** 断线重连的等待时间（毫秒），第 n 次失败等多久。测试里调短。 */
+    private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
 ) : HermesRepository {
 
     private val state = MutableStateFlow(store.load() ?: StoredState())
@@ -70,7 +90,13 @@ class RemoteHermesRepository(
     /** 当前连接的客户端和能力；切换连接时整体替换。 */
     private var client: HermesClient? = null
     private var capabilities: ServerCapabilities? = null
+    private var connectedId: String? = null
     private var connectJob: Job? = null
+
+    /** 当前连接上所有“等回复”的协程。切换连接时整体取消。 */
+    private var runScope = newRunScope()
+
+    private fun newRunScope() = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
 
     private fun keyOf(id: String): String? = state.value.keys[id]?.let(secrets::decrypt)
 
@@ -82,10 +108,16 @@ class RemoteHermesRepository(
 
     private fun connect(id: String) {
         connectJob?.cancel()
+        runScope.cancel()
+        runScope = newRunScope()
+        runs.clear()
+        controls.clear()
+        outbox.clear()
+        _activeRuns.value = emptySet()
         val profile = _connections.value.firstOrNull { it.id == id } ?: return
         _connectionState.value = ConnectionState.Connecting
         _sessions.value = emptyList()
-        messages.value = emptyMap()
+        chats.value = emptyMap()
         connectJob = scope.launch {
             try {
                 val newClient = clientFor(profile, keyOf(id))
@@ -95,15 +127,18 @@ class RemoteHermesRepository(
                 val caps = newClient.probeCapabilities(health.version)
                 client = newClient
                 capabilities = caps
+                connectedId = id
                 _features.value = featuresFor(caps)
                 _connectionState.value = ConnectionState.Connected(
                     latencyMs = (clock() - started).toInt().coerceAtLeast(1),
                     serverVersion = health.knownVersion() ?: "未知版本",
                 )
                 loadSessions()
+                resumeStoredRuns(id)
             } catch (e: HermesError) {
                 client = null
                 capabilities = null
+                connectedId = null
                 _features.value = emptySet()
                 _connectionState.value = ConnectionState.Failed(e.message ?: "连接失败")
             }
@@ -113,7 +148,21 @@ class RemoteHermesRepository(
     /** 服务器支持、且 App 已经开发完的功能。 */
     private fun featuresFor(caps: ServerCapabilities): Set<AppFeature> = buildSet {
         if (caps.sessionUpdate || caps.sessionDelete) add(AppFeature.ManageSessions)
-        // 发消息、模型、技能、任务：后续阶段接入
+        if (caps.runs && caps.sessions) add(AppFeature.SendMessages)
+        // 模型、技能、任务：后续阶段接入
+    }
+
+    /** 网络恢复了（Android 上由系统网络回调触发）：正在等的重连立刻重试，连接失败的重新连。 */
+    fun onNetworkAvailable() {
+        networkKick.tryEmit(Unit)
+        if (_connectionState.value is ConnectionState.Failed) _activeConnectionId.value?.let(::connect)
+    }
+
+    private val networkKick = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** 等一会儿再重试；网络恢复时提前结束。 */
+    private suspend fun pause(millis: Long) {
+        withTimeoutOrNull(millis) { networkKick.first() }
     }
 
     override fun saveConnection(profile: ConnectionProfile, apiKey: String?) {
@@ -134,15 +183,18 @@ class RemoteHermesRepository(
 
     override fun deleteConnection(id: String) {
         _connections.update { list -> list.filterNot { it.id == id } }
-        persist { s -> s.copy(connections = _connections.value, keys = s.keys - id) }
+        persist { s -> s.copy(connections = _connections.value, keys = s.keys - id, runs = s.runs.filterNot { it.connectionId == id }) }
         if (_activeConnectionId.value == id) {
             val next = _connections.value.firstOrNull()?.id
             _activeConnectionId.value = next
             persist { it.copy(activeConnectionId = next) }
             if (next != null) connect(next) else {
                 connectJob?.cancel()
+                runScope.cancel()
                 client = null
+                connectedId = null
                 _sessions.value = emptyList()
+                _activeRuns.value = emptySet()
                 _connectionState.value = ConnectionState.Disconnected
             }
         }
@@ -237,7 +289,22 @@ class RemoteHermesRepository(
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
     override val sessions: StateFlow<List<Session>> = _sessions.asStateFlow()
 
-    override fun session(id: String): Flow<Session?> = _sessions.map { list -> list.firstOrNull { it.id == id } }
+    /**
+     * 新建的会话先是本地草稿（id 以 [DraftPrefix] 开头），发第一条消息时才在服务器上创建，
+     * 之后草稿 id 通过 [aliases] 指向服务器 id。界面一直拿着草稿 id 也没关系。
+     */
+    private val drafts = MutableStateFlow<Map<String, Session>>(emptyMap())
+    private val aliases = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    private fun resolve(id: String): String = aliases.value[id] ?: id
+
+    /** 本机刚建出来的会话 → 建好的时间。见 [loadSessions]。 */
+    private val createdAt = ConcurrentHashMap<String, Long>()
+
+    override fun session(id: String): Flow<Session?> = combine(_sessions, drafts, aliases) { list, draftMap, aliasMap ->
+        val real = aliasMap[id] ?: id
+        list.firstOrNull { it.id == real } ?: draftMap[id]
+    }
 
     private suspend fun loadSessions() {
         val c = client ?: return
@@ -246,10 +313,22 @@ class RemoteHermesRepository(
             return
         }
         try {
-            val now = clock()
-            _sessions.value = c.sessions(limit = 100).data
+            val started = clock()
+            val fetched = c.sessions(limit = 100).data
                 .filter { it.visibleInList() }
-                .map { it.toSession(now) }
+                .map { it.toSession(started) }
+            _sessions.update { current ->
+                val before = current.associateBy { it.id }
+                // 列表请求发出之后才在本机新建/分叉的会话，这次结果里还没有，不能被冲掉
+                val newer = current.filter { s -> (createdAt[s.id] ?: Long.MIN_VALUE) >= started && fetched.none { it.id == s.id } }
+                newer + fetched.map { s ->
+                    s.copy(
+                        running = runs.containsKey(s.id),
+                        // 服务器不告诉我们哪些会话不能继续，只能记住 409 过的
+                        readOnly = before[s.id]?.readOnly == true,
+                    )
+                }
+            }
         } catch (e: HermesError) {
             _connectionState.value = ConnectionState.Failed(e.message ?: "读取会话失败")
         }
@@ -281,20 +360,33 @@ class RemoteHermesRepository(
         }
     }
 
-    override fun renameSession(id: String, title: String) =
-        optimistic(id, { it.copy(title = title) }) { patchSession(id, HermesClient.patch { put("title", title) }) }
+    override fun renameSession(id: String, title: String) {
+        val real = resolve(id)
+        if (real.startsWith(DraftPrefix)) {
+            drafts.update { m -> m[real]?.let { m + (real to it.copy(title = title)) } ?: m }
+            return
+        }
+        optimistic(real, { it.copy(title = title) }) { patchSession(real, HermesClient.patch { put("title", title) }) }
+    }
 
     override fun togglePin(id: String) {
-        val pinned = _sessions.value.firstOrNull { it.id == id }?.pinned ?: return
-        optimistic(id, { it.copy(pinned = !pinned) }) { patchSession(id, HermesClient.patch { put("pinned", !pinned) }) }
+        val real = resolve(id)
+        val pinned = _sessions.value.firstOrNull { it.id == real }?.pinned ?: return
+        optimistic(real, { it.copy(pinned = !pinned) }) { patchSession(real, HermesClient.patch { put("pinned", !pinned) }) }
     }
 
     override fun deleteSession(id: String) {
+        val real = resolve(id)
+        if (real.startsWith(DraftPrefix)) {
+            drafts.update { it - real }
+            return
+        }
         val before = _sessions.value
-        _sessions.update { list -> list.filterNot { it.id == id } }
+        _sessions.update { list -> list.filterNot { it.id == real } }
         scope.launch {
             try {
-                client?.deleteSession(id) ?: throw HermesError.Unreachable("未连接")
+                client?.deleteSession(real) ?: throw HermesError.Unreachable("未连接")
+                chats.update { it - real }
             } catch (e: HermesError) {
                 _sessions.value = before
                 _errors.tryEmit(e.message ?: "删除失败")
@@ -303,47 +395,533 @@ class RemoteHermesRepository(
     }
 
     override fun createSession(): String? {
-        notYet<Unit>("新建会话")
-        return null
+        if (AppFeature.SendMessages !in _features.value || capabilities?.sessionCreate == false) {
+            _errors.tryEmit(if (client == null) "还没连上 Hermes" else "这台 Hermes 的版本不支持从手机新建会话")
+            return null
+        }
+        val id = DraftPrefix + UUID.randomUUID()
+        drafts.update { it + (id to Session(id = id, title = "新对话", preview = "", updatedAt = clock())) }
+        return id
+    }
+
+    /** 草稿在服务器上还不存在：现在创建，并把草稿上的本地消息搬过去。 */
+    private suspend fun ensureServerSession(uiId: String): String {
+        aliases.value[uiId]?.let { return it }
+        if (!uiId.startsWith(DraftPrefix)) return uiId
+        val c = client ?: throw HermesError.Unreachable("未连接")
+        val draft = drafts.value[uiId]
+        val created = withRetry { c.createSession(draft?.title?.takeIf { it != "新对话" }) } ?: throw HermesError.NotHermes()
+        val session = created.toSession(clock()).copy(running = true)
+        createdAt[created.id] = clock()
+        _sessions.update { list -> listOf(session) + list.filterNot { it.id == created.id } }
+        // 先把聊天状态复制到新 id，再切别名，最后删草稿：界面任何时刻都能看到消息
+        chats.update { m -> m[uiId]?.let { m + (created.id to it) } ?: m }
+        aliases.update { it + (uiId to created.id) }
+        chats.update { it - uiId }
+        drafts.update { it - uiId }
+        return created.id
     }
 
     override fun forkSession(id: String, fromItemId: String?): String? {
-        notYet<Unit>("分叉会话")
-        return null
+        val c = client
+        if (c == null || capabilities?.sessionFork != true) {
+            _errors.tryEmit(if (c == null) "还没连上 Hermes" else "这台 Hermes 的版本不支持分叉会话")
+            return null
+        }
+        val source = resolve(id)
+        val title = _sessions.value.firstOrNull { it.id == source }?.title ?: "会话"
+        val placeholder = DraftPrefix + UUID.randomUUID()
+        drafts.update { it + (placeholder to Session(placeholder, "$title（分叉）", "正在分叉…", clock())) }
+        if (fromItemId != null) _errors.tryEmit("Hermes 只能分叉整个会话，已从最新一条开始分叉")
+        runScope.launch {
+            try {
+                val forked = c.forkSession(source) ?: throw HermesError.NotHermes()
+                createdAt[forked.id] = clock()
+                _sessions.update { list -> listOf(forked.toSession(clock())) + list.filterNot { it.id == forked.id } }
+                aliases.update { it + (placeholder to forked.id) }
+                drafts.update { it - placeholder }
+                loadMessages(forked.id)
+            } catch (e: HermesError) {
+                drafts.update { m -> m[placeholder]?.let { m + (placeholder to it.copy(preview = "分叉失败")) } ?: m }
+                _errors.tryEmit("分叉失败：${e.message}")
+            }
+        }
+        return placeholder
     }
 
-    // ---- 聊天记录 ----
+    // ---- 聊天 ----
 
-    private val messages = MutableStateFlow<Map<String, List<ChatItem>>>(emptyMap())
+    /**
+     * 本地的聊天条目：还没被服务器记录确认的用户消息、刚收到的回复、审批/追问卡片。
+     * 卡片不在服务器的聊天记录里，用 [anchor]（它前面有几条消息）决定插在哪。
+     */
+    private data class LocalEntry(val item: ChatItem, val anchor: Int, val runId: String? = null)
+
+    private data class ChatState(
+        val server: List<ChatItem.Message> = emptyList(),
+        val local: List<LocalEntry> = emptyList(),
+        val phase: RunPhase = RunPhase.Idle,
+        val streaming: String? = null,
+        /** 服务器记录拉过了。卡片的位置靠消息数量定，所以加卡片前必须先拉。 */
+        val loaded: Boolean = false,
+    ) {
+        val messageCount: Int get() = server.size + local.count { it.item is ChatItem.Message }
+
+        fun display(): List<ChatItem> {
+            val messages = server + local.mapNotNull { it.item as? ChatItem.Message }
+            val cards = local.filter { it.item !is ChatItem.Message }
+            if (cards.isEmpty()) return messages
+            val out = ArrayList<ChatItem>(messages.size + cards.size)
+            messages.forEachIndexed { i, m ->
+                cards.forEach { if (it.anchor == i) out += it.item }
+                out += m
+            }
+            cards.forEach { if (it.anchor >= messages.size) out += it.item }
+            return out
+        }
+
+        fun pendingCards(runId: String): Boolean = local.any { e ->
+            e.runId == runId && when (val item = e.item) {
+                is ChatItem.Approval -> item.resolvedChoice == null
+                is ChatItem.Clarify -> item.answer == null
+                else -> false
+            }
+        }
+    }
+
+    /** 服务器会话 id（草稿发出前是草稿 id）→ 聊天状态。 */
+    private val chats = MutableStateFlow<Map<String, ChatState>>(emptyMap())
+
+    private fun updateChat(sessionId: String, transform: (ChatState) -> ChatState) =
+        chats.update { it + (sessionId to transform(it[sessionId] ?: ChatState())) }
+
+    private fun chatOf(uiId: String): Flow<ChatState?> = combine(chats, aliases) { map, aliasMap -> map[aliasMap[uiId] ?: uiId] }
 
     override fun chatItems(sessionId: String): Flow<List<ChatItem>> =
-        messages.map { it[sessionId].orEmpty() }.onStart { scope.launch { loadMessages(sessionId) } }
+        chatOf(sessionId).map { it?.display().orEmpty() }.onStart {
+            scope.launch { resolve(sessionId).takeUnless { it.startsWith(DraftPrefix) }?.let { loadMessages(it) } }
+        }
 
+    override fun runPhase(sessionId: String): Flow<RunPhase> = chatOf(sessionId).map { it?.phase ?: RunPhase.Idle }
+
+    override fun streamingText(sessionId: String): Flow<String?> = chatOf(sessionId).map { st ->
+        st?.streaming?.takeIf { it.isNotBlank() && _settings.value.streamReplies }
+    }
+
+    /** 拉服务器上的聊天记录，和本地还没确认的条目合并。 */
     private suspend fun loadMessages(sessionId: String) {
         val c = client ?: return
         if (capabilities?.sessionMessages == false) return
         try {
             val now = clock()
-            val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now) }
-            messages.update { it + (sessionId to items) }
+            val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now) }.linkQuotes()
+            val running = runs.containsKey(sessionId)
+            updateChat(sessionId) { st -> st.copy(server = items, local = st.local.reconcile(items, running), loaded = true) }
         } catch (e: HermesError) {
             _errors.tryEmit(e.message ?: "读取聊天记录失败")
         }
     }
 
-    override fun runPhase(sessionId: String): Flow<RunPhase> = MutableStateFlow(RunPhase.Idle)
-    override fun streamingText(sessionId: String): Flow<String?> = MutableStateFlow(null)
-
-    override fun sendMessage(sessionId: String, text: String, images: List<ImageRef>, quote: Quote?) {
-        notYet<Unit>("发送消息")
+    /**
+     * 服务器记录到了的本地消息就去掉，避免出现两份。
+     * 卡片、没发出去的消息一直保留；这一轮结束了（[running] 为 false）就完全以服务器为准。
+     */
+    private fun List<LocalEntry>.reconcile(server: List<ChatItem.Message>, running: Boolean): List<LocalEntry> {
+        val tail = server.takeLast(8)
+        return filter { entry ->
+            val m = entry.item as? ChatItem.Message ?: return@filter true
+            when {
+                m.status != DeliveryStatus.Sent -> true
+                tail.any { it.role == m.role && it.text.trim() == m.text.trim() } -> false
+                else -> running
+            }
+        }
     }
 
-    override fun retryMessage(sessionId: String, itemId: String) = notYet<Unit>("重发")
+    /** 已提交、还在等结果的一轮对话。 */
+    private class ActiveRun(val runId: String, val sessionId: String, var lastSeq: Long = -1)
+
+    /** 会话 id → 正在进行的一轮。 */
+    private val runs = ConcurrentHashMap<String, ActiveRun>()
+    private val _activeRuns = MutableStateFlow<Set<String>>(emptySet())
+    override val activeRuns: StateFlow<Set<String>> = _activeRuns.asStateFlow()
+
+    /** 卡片 id → (run id, 回复时要带的信息)。 */
+    private val controls = ConcurrentHashMap<String, Pair<String, ControlRequest>>()
+
+    /** 还没被服务器接受的消息：本地消息 id → (界面上的会话 id, 发出去的全文)。重发时用同一个 id 做幂等键。 */
+    private val outbox = ConcurrentHashMap<String, Pair<String, String>>()
+
+    private fun publishRuns() {
+        _activeRuns.value = runs.keys.toSet()
+        val connection = connectedId ?: return
+        persist { s ->
+            s.copy(runs = s.runs.filterNot { it.connectionId == connection } +
+                runs.values.map { StoredRun(connection, it.sessionId, it.runId) })
+        }
+    }
+
+    override fun sendMessage(sessionId: String, text: String, images: List<ImageRef>, quote: Quote?) {
+        if (images.isNotEmpty()) _errors.tryEmit("发送图片在后续阶段接入，这次只发文字")
+        if (text.isBlank()) return
+        val localId = "local-" + UUID.randomUUID()
+        val key = resolve(sessionId)
+        val message = ChatItem.Message(localId, clock(), Role.User, text.trim(), quote = quote, status = DeliveryStatus.Sending)
+        updateChat(key) { it.copy(local = it.local + LocalEntry(message, it.messageCount), phase = RunPhase.Working, streaming = null) }
+        outbox[localId] = sessionId to quotedInput(quote, text.trim())
+        runScope.launch { submit(localId) }
+    }
+
+    override fun retryMessage(sessionId: String, itemId: String) {
+        val key = resolve(sessionId)
+        val message = chats.value[key]?.local?.firstNotNullOfOrNull { (it.item as? ChatItem.Message)?.takeIf { m -> m.id == itemId } } ?: return
+        if (message.status != DeliveryStatus.Failed || runs.containsKey(key)) return
+        outbox.putIfAbsent(itemId, sessionId to quotedInput(message.quote, message.text))
+        setLocalStatus(key, itemId, DeliveryStatus.Sending)
+        updateChat(key) { it.copy(phase = RunPhase.Working) }
+        runScope.launch { submit(itemId) }
+    }
+
+    private suspend fun submit(localId: String) {
+        val (uiId, input) = outbox[localId] ?: return
+        try {
+            val c = client ?: throw HermesError.Unreachable("还没连上 Hermes")
+            val sessionId = ensureServerSession(uiId)
+            val accepted = withRetry { c.startRun(sessionId, input, idempotencyKey = localId) }
+            val runId = accepted.run_id ?: throw HermesError.NotHermes()
+            outbox.remove(localId)
+            setLocalStatus(sessionId, localId, DeliveryStatus.Sent)
+            updateSession(sessionId) { it.copy(preview = input.lineSequence().last().take(80), updatedAt = clock()) }
+            track(sessionId, runId, fromSeq = -1)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HermesError) {
+            val key = resolve(uiId)
+            setLocalStatus(key, localId, DeliveryStatus.Failed)
+            updateChat(key) { it.copy(phase = RunPhase.Idle) }
+            _errors.tryEmit(sendErrorText(key, e))
+        }
+    }
+
+    private fun sendErrorText(sessionId: String, e: HermesError): String = when {
+        e is HermesError.Conflict && e.code == "permission_denied" -> {
+            updateSession(sessionId) { it.copy(readOnly = true) }
+            "这个会话不能从手机继续，可以分叉一份再聊"
+        }
+        e is HermesError.Conflict && e.code == "session_active_turn" -> "这个会话正在别处回复中，等它结束再发"
+        e is HermesError.Server && e.status == 429 -> "Hermes 同时处理的任务太多了，稍后点消息重发"
+        else -> "发送失败：${e.message}"
+    }
+
+    private fun setLocalStatus(sessionId: String, itemId: String, status: DeliveryStatus) = updateChat(sessionId) { st ->
+        st.copy(local = st.local.map { e ->
+            val m = e.item as? ChatItem.Message
+            if (m?.id == itemId) e.copy(item = m.copy(status = status)) else e
+        })
+    }
+
+    /** 网络错误和“服务器忙”（429/503）重试几次，其它错误直接抛出。幂等键保证重试不会重复执行。 */
+    private suspend fun <T> withRetry(block: suspend () -> T): T {
+        var attempt = 0
+        while (true) {
+            try {
+                return block()
+            } catch (e: HermesError) {
+                attempt++
+                val wait = when {
+                    attempt >= 4 -> throw e
+                    e is HermesError.Unreachable || e is HermesError.Timeout -> backoff(attempt)
+                    e is HermesError.Server && (e.status == 429 || e.status == 503 || e.status == 502) ->
+                        e.retryAfterSeconds?.times(1000)?.coerceAtMost(30_000) ?: backoff(attempt)
+                    else -> throw e
+                }
+                pause(wait)
+            }
+        }
+    }
+
+    private fun track(sessionId: String, runId: String, fromSeq: Long) {
+        val run = ActiveRun(runId, sessionId, fromSeq)
+        runs[sessionId] = run
+        publishRuns()
+        updateSession(sessionId) { it.copy(running = true) }
+        updateChat(sessionId) { it.copy(phase = if (it.pendingCards(runId)) RunPhase.AwaitingInput else RunPhase.Working) }
+        runScope.launch { follow(run) }
+    }
+
+    /** App 被杀之前还没等到结果的轮次：重新订阅（服务器会从头补发事件），或者直接拿最终结果。 */
+    private fun resumeStoredRuns(connectionId: String) {
+        state.value.runs.filter { it.connectionId == connectionId }.forEach { stored ->
+            if (!runs.containsKey(stored.sessionId)) track(stored.sessionId, stored.runId, fromSeq = -1)
+        }
+    }
+
+    /**
+     * 跟着一轮对话直到结束。事件流断了就等一会儿重连（带上最后的序号，服务器补发漏掉的事件）；
+     * 重连之前先查一下状态，可能已经结束了。
+     */
+    private suspend fun follow(run: ActiveRun) {
+        if (chats.value[run.sessionId]?.loaded != true) loadMessages(run.sessionId)
+        var failures = 0
+        while (runs[run.sessionId] === run) {
+            val c = client ?: return
+            try {
+                val terminal = c.runEvents(run.runId, run.lastSeq).firstOrNull { frame ->
+                    val event = parseRunEvent(frame)
+                    val seq = event.seq
+                    if (seq != null && seq <= run.lastSeq) return@firstOrNull false
+                    if (seq != null) run.lastSeq = seq
+                    failures = 0
+                    handle(run, event)
+                }
+                if (terminal != null) return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HermesError.NotSupported) {
+                // 服务器不认识这个任务了（重启过，或者早就结束、记录已清理）
+                if (!settleFromStatus(run, c)) end(run, error = null)
+                return
+            } catch (e: HermesError) {
+                failures++
+            }
+            // 事件流结束了却没有结束事件，或者网络断了：问一下状态
+            if (settleFromStatus(run, c)) return
+            pause(backoff(failures.coerceAtLeast(1)))
+        }
+    }
+
+    /** 查状态；已结束就收尾并返回 true，还在进行就补上等待中的审批/追问。 */
+    private suspend fun settleFromStatus(run: ActiveRun, c: HermesClient): Boolean {
+        val status = try {
+            c.runStatus(run.runId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: HermesError.NotSupported) {
+            end(run, error = null)
+            return true
+        } catch (e: HermesError) {
+            return false
+        }
+        when (status.status) {
+            "completed" -> complete(run, status.output.orEmpty())
+            "failed" -> end(run, status.error ?: "Hermes 处理失败")
+            "cancelled", "interrupted" -> end(run, error = null)
+            "unknown" -> end(run, "Hermes 不确定这一轮有没有完成，请在电脑上确认")
+            else -> {
+                status.pending_controls.orEmpty().forEach { obj ->
+                    ControlRequest.from(obj, ControlRequest.Kind.Approval, status.execution_generation)?.let { addControl(run, it, seq = null) }
+                }
+                status.approval?.let { obj -> ControlRequest.from(obj, ControlRequest.Kind.Approval)?.let { addControl(run, it, seq = null) } }
+                return false
+            }
+        }
+        return true
+    }
+
+    /** 处理一个事件；返回 true 表示这一轮结束了。 */
+    private fun handle(run: ActiveRun, event: RunEvent): Boolean {
+        when (event) {
+            is RunEvent.Delta -> if (_settings.value.streamReplies) {
+                updateChat(run.sessionId) { it.copy(streaming = ((it.streaming ?: "") + event.text).trimStart()) }
+            }
+            // 工具调用开始/结束：之前那段只是过程中的话，不是最终回复
+            is RunEvent.Step -> updateChat(run.sessionId) { if (it.streaming != null) it.copy(streaming = null) else it }
+            is RunEvent.Control -> addControl(run, event.request, event.seq)
+            is RunEvent.ControlSettled -> settleControl(run, event.promptId, event.choice)
+            is RunEvent.Completed -> complete(run, event.output)
+            is RunEvent.Failed -> end(run, event.error)
+            is RunEvent.Cancelled -> end(run, error = null)
+            is RunEvent.Truncated, is RunEvent.Ignored -> Unit
+        }
+        return event is RunEvent.Completed || event is RunEvent.Failed || event is RunEvent.Cancelled
+    }
+
+    private fun addControl(run: ActiveRun, request: ControlRequest, seq: Long?) {
+        val itemId = "ctl-${run.runId}-${request.promptId ?: seq ?: UUID.randomUUID()}"
+        if (controls.containsKey(itemId)) return
+        val exists = chats.value[run.sessionId]?.local?.any { it.item.id == itemId } == true
+        if (exists) return
+        controls[itemId] = run.runId to request
+        val item: ChatItem = when (request.kind) {
+            ControlRequest.Kind.Approval -> ChatItem.Approval(
+                id = itemId,
+                time = clock(),
+                summary = request.description.ifBlank { "执行一条命令" },
+                command = request.command,
+                // 不同版本给的顺序不一样，统一成：允许一次、本会话、始终、拒绝
+                choices = request.choices.ifEmpty { listOf("once", "deny") }
+                    .sortedBy { ApprovalOrder.indexOf(it).let { i -> if (i < 0) ApprovalOrder.size else i } },
+            )
+            ControlRequest.Kind.Clarify -> ChatItem.Clarify(
+                id = itemId,
+                time = clock(),
+                question = request.question.ifBlank { request.description },
+                options = request.choices,
+            )
+        }
+        updateChat(run.sessionId) {
+            it.copy(local = it.local + LocalEntry(item, it.messageCount, run.runId), phase = RunPhase.AwaitingInput, streaming = null)
+        }
+        notify(run.sessionId, ChatNotice.Kind.NeedsInput,
+            if (request.kind == ControlRequest.Kind.Approval) "需要你批准：${(item as ChatItem.Approval).summary}" else "Hermes 在问你：${(item as ChatItem.Clarify).question}")
+    }
+
+    /** 审批/追问在别处（或者刚才在这里）处理掉了。 */
+    private fun settleControl(run: ActiveRun, promptId: String?, choice: String?) {
+        val itemId = controls.entries.firstOrNull { (_, v) -> v.first == run.runId && (promptId == null || v.second.promptId == promptId) }?.key
+            ?: promptId?.let { "ctl-${run.runId}-$it" }
+            ?: return
+        controls.remove(itemId)
+        updateChat(run.sessionId) { st ->
+            val local = st.local.map { e ->
+                if (e.item.id != itemId) return@map e
+                when (val item = e.item) {
+                    is ChatItem.Approval -> if (item.resolvedChoice == null) e.copy(item = item.copy(resolvedChoice = choice.orEmpty())) else e
+                    is ChatItem.Clarify -> if (item.answer == null) e.copy(item = item.copy(answer = choice ?: "已在其他设备回答")) else e
+                    else -> e
+                }
+            }
+            val next = st.copy(local = local)
+            next.copy(phase = if (next.pendingCards(run.runId)) RunPhase.AwaitingInput else RunPhase.Working)
+        }
+    }
+
+    private fun finish(run: ActiveRun) {
+        if (!runs.remove(run.sessionId, run)) return
+        publishRuns()
+        updateSession(run.sessionId) { it.copy(running = false) }
+        controls.entries.removeIf { it.value.first == run.runId }
+        // 这一轮结束时还没处理的卡片已经失效
+        updateChat(run.sessionId) { st ->
+            st.copy(local = st.local.map { e ->
+                if (e.runId != run.runId) return@map e
+                when (val item = e.item) {
+                    is ChatItem.Approval -> if (item.resolvedChoice == null) e.copy(item = item.copy(resolvedChoice = "")) else e
+                    is ChatItem.Clarify -> if (item.answer == null) e.copy(item = item.copy(answer = "（已失效）")) else e
+                    else -> e
+                }
+            })
+        }
+    }
+
+    private fun complete(run: ActiveRun, output: String) {
+        if (runs[run.sessionId] !== run) return
+        val text = output.trim().ifEmpty { chats.value[run.sessionId]?.streaming?.trim().orEmpty() }
+        finish(run)
+        // 先把结果显示出来，再去服务器拉正式记录对齐
+        updateChat(run.sessionId) { st ->
+            val reply = text.takeIf { it.isNotEmpty() }?.let {
+                LocalEntry(ChatItem.Message("reply-${run.runId}", clock(), Role.Assistant, it), st.messageCount, run.runId)
+            }
+            st.copy(phase = RunPhase.Idle, streaming = null, local = st.local + listOfNotNull(reply))
+        }
+        updateSession(run.sessionId) { it.copy(preview = text.replace('\n', ' ').take(80), updatedAt = clock()) }
+        if (text.isNotEmpty()) notify(run.sessionId, ChatNotice.Kind.Reply, text)
+        scope.launch { reconcileAfterRun(run.sessionId, text) }
+    }
+
+    private fun end(run: ActiveRun, error: String?) {
+        if (runs[run.sessionId] !== run) return
+        finish(run)
+        updateChat(run.sessionId) { it.copy(phase = RunPhase.Idle, streaming = null) }
+        if (error != null) {
+            _errors.tryEmit("Hermes 出错了：$error")
+            notify(run.sessionId, ChatNotice.Kind.Failed, error)
+        }
+        scope.launch { reconcileAfterRun(run.sessionId, expectedReply = null) }
+    }
+
+    /** 一轮结束后以服务器记录为准。服务器写入记录可能比结束事件晚一点，所以没看到回复就稍等再拉。 */
+    private suspend fun reconcileAfterRun(sessionId: String, expectedReply: String?) {
+        repeat(3) { attempt ->
+            loadMessages(sessionId)
+            val server = chats.value[sessionId]?.server.orEmpty()
+            val seen = expectedReply.isNullOrEmpty() || server.takeLast(4).any { it.role == Role.Assistant && it.text.trim() == expectedReply }
+            if (seen) return
+            if (attempt < 2) delay(800)
+        }
+    }
+
+    override fun resolveApproval(sessionId: String, itemId: String, choice: String) {
+        val key = resolve(sessionId)
+        val (runId, request) = controls[itemId] ?: return
+        setCard(key, itemId, runId) { if (it is ChatItem.Approval) it.copy(resolvedChoice = choice) else it }
+        runScope.launch {
+            try {
+                withRetry { client?.respondApproval(runId, request.approvalBody(choice)) ?: throw HermesError.Unreachable("未连接") }
+                controls.remove(itemId)
+            } catch (e: HermesError.Conflict) {
+                // 已经在别处处理过了
+                controls.remove(itemId)
+            } catch (e: HermesError) {
+                setCard(key, itemId, runId) { if (it is ChatItem.Approval) it.copy(resolvedChoice = null) else it }
+                _errors.tryEmit("审批没发出去：${e.message}")
+            }
+        }
+    }
+
+    override fun answerClarify(sessionId: String, itemId: String, answer: String) {
+        val key = resolve(sessionId)
+        val (runId, request) = controls[itemId] ?: return
+        setCard(key, itemId, runId) { if (it is ChatItem.Clarify) it.copy(answer = answer) else it }
+        runScope.launch {
+            try {
+                withRetry { client?.respondClarify(runId, request.clarifyBody(answer)) ?: throw HermesError.Unreachable("未连接") }
+                controls.remove(itemId)
+            } catch (e: HermesError.Conflict) {
+                controls.remove(itemId)
+            } catch (e: HermesError) {
+                setCard(key, itemId, runId) { if (it is ChatItem.Clarify) it.copy(answer = null) else it }
+                _errors.tryEmit("回答没发出去：${e.message}")
+            }
+        }
+    }
+
+    private fun setCard(sessionId: String, itemId: String, runId: String, transform: (ChatItem) -> ChatItem) = updateChat(sessionId) { st ->
+        val next = st.copy(local = st.local.map { if (it.item.id == itemId) it.copy(item = transform(it.item)) else it })
+        if (runs[sessionId]?.runId == runId) {
+            next.copy(phase = if (next.pendingCards(runId)) RunPhase.AwaitingInput else RunPhase.Working)
+        } else {
+            next
+        }
+    }
+
+    override fun stop(sessionId: String) {
+        val run = runs[resolve(sessionId)] ?: return
+        runScope.launch {
+            try {
+                withRetry { client?.stopRun(run.runId) ?: throw HermesError.Unreachable("未连接") }
+            } catch (e: HermesError.Conflict) {
+                // 已经结束了
+            } catch (e: HermesError) {
+                _errors.tryEmit("停止失败：${e.message}")
+            }
+        }
+    }
+
     override fun regenerate(sessionId: String, itemId: String) = notYet<Unit>("重新生成")
-    override fun deleteItem(sessionId: String, itemId: String) = notYet<Unit>("删除单条消息")
-    override fun stop(sessionId: String) = Unit
-    override fun resolveApproval(sessionId: String, itemId: String, choice: String) = notYet<Unit>("审批")
-    override fun answerClarify(sessionId: String, itemId: String, answer: String) = notYet<Unit>("回答追问")
+    override fun deleteItem(sessionId: String, itemId: String) {
+        val key = resolve(sessionId)
+        // 只有没发出去的消息能删；服务器上的记录 Hermes 不提供单条删除
+        val removable = chats.value[key]?.local?.any { (it.item as? ChatItem.Message)?.let { m -> m.id == itemId && m.status == DeliveryStatus.Failed } == true } == true
+        if (removable) {
+            outbox.remove(itemId)
+            updateChat(key) { st -> st.copy(local = st.local.filterNot { it.item.id == itemId }) }
+        } else {
+            _errors.tryEmit("Hermes 不支持删除单条聊天记录")
+        }
+    }
+
+    // ---- 通知 ----
+
+    private val _notices = MutableSharedFlow<ChatNotice>(extraBufferCapacity = 16)
+    override val notices: Flow<ChatNotice> = _notices
+
+    private fun notify(sessionId: String, kind: ChatNotice.Kind, text: String) {
+        val uiId = aliases.value.entries.firstOrNull { it.value == sessionId }?.key ?: sessionId
+        val title = _sessions.value.firstOrNull { it.id == sessionId }?.title ?: "Hermes"
+        _notices.tryEmit(ChatNotice(uiId, title, text.take(200), kind))
+    }
 
     // ---- 后续阶段的功能 ----
 
@@ -372,13 +950,18 @@ class RemoteHermesRepository(
 
     // ---- 提示 ----
 
-    private val _errors = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 8)
+    private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 8)
     override val errors: Flow<String> = _errors
 
     @Suppress("UNCHECKED_CAST")
     private fun <T> notYet(what: String): T {
         _errors.tryEmit("「$what」会在后续开发阶段接入真实 Hermes")
         return Unit as T
+    }
+
+    private companion object {
+        const val DraftPrefix = "draft-"
+        val ApprovalOrder = listOf("once", "session", "always", "deny")
     }
 
     // 放在最后：自动连接会用到上面所有状态，必须等它们都初始化完（否则重启 App 时会崩溃）

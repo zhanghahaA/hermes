@@ -21,11 +21,15 @@ data class ServerCapabilities(
     val sessionDelete: Boolean get() = "session_delete" in endpoints
     val streamingChat: Boolean get() = "session_chat_stream" in endpoints || "responses" in endpoints
     val approvals: Boolean get() = "approval_events" in features || "run_approval" in endpoints
+    val sessionCreate: Boolean get() = "session_create" in endpoints
+    val sessionFork: Boolean get() = "session_fork" in endpoints
+    /** 聊天走 /v1/runs：提交、事件流都要有。断开不会打断 Hermes，可以重连接着收。 */
+    val runs: Boolean get() = "runs" in endpoints && "run_events" in endpoints
 
     /** 给“测试连接”看的一句话总结。 */
     fun summary(): String = buildList {
         add(if (sessions) "会话 ✓" else "会话 ✗")
-        add(if (streamingChat) "聊天 ✓" else "聊天 ✗")
+        add(if (runs) "聊天 ✓" else "聊天 ✗")
         add(if (approvals) "审批 ✓" else "审批 ✗")
     }.joinToString(" · ")
 

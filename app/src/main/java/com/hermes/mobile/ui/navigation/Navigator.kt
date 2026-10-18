@@ -36,6 +36,9 @@ class Navigator(root: Any) {
 
     val canGoBack: Boolean get() = entries.size > 1
 
+    /** 最上面的页面。 */
+    val current: Any get() = entries.last().route
+
     /** 打开新页面。[clearAboveRoot] 为 true 时，新页面滑入后把它和首页之间的页面都移除。 */
     fun push(route: Any, clearAboveRoot: Boolean = false) {
         val scope = scope

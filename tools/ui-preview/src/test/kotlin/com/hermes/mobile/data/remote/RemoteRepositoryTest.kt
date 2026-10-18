@@ -135,7 +135,7 @@ class RemoteRepositoryTest {
         assertEquals("周五开会提醒", s2.title, "没有标题时用预览的第一行")
         assertEquals("kanban", sessions[2].source.label, "不认识的来源原样显示")
         assertTrue(AppFeature.ManageSessions in repo.features.value)
-        assertFalse(AppFeature.SendMessages in repo.features.value, "发消息在阶段 2 才打开")
+        assertTrue(AppFeature.SendMessages in repo.features.value, "有 /v1/runs 和事件流就能发消息")
     }
 
     @Test

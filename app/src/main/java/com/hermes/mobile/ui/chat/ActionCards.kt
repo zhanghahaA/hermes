@@ -68,10 +68,10 @@ fun ApprovalCard(item: ChatItem.Approval, onChoose: (String) -> Unit) {
         label = "approval",
     ) { resolved ->
         if (resolved != null) {
-            val denied = resolved == "拒绝"
+            val denied = resolved == "deny"
             ResolvedNote(
                 icon = if (denied) Icons.Rounded.Block else Icons.Rounded.CheckCircle,
-                text = "${if (denied) "已拒绝" else "已$resolved"} · ${item.summary}",
+                text = "${resolvedLabel(resolved)} · ${item.summary}",
                 tint = if (denied) MaterialTheme.colorScheme.error else LocalHermesColors.current.online,
             )
         } else {
@@ -125,17 +125,37 @@ private fun PendingApproval(item: ChatItem.Approval, onChoose: (String) -> Unit)
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                // 约定：最后一个选项是拒绝，第一个是推荐选项
+                // 服务器给的第一个选项（一般是“允许一次”）用实心按钮，拒绝用描边按钮
                 item.choices.asReversed().forEach { choice ->
+                    val label = choiceLabel(choice)
                     when (choice) {
-                        "拒绝" -> OutlinedButton(onClick = { onChoose(choice) }) { Text(choice) }
-                        item.choices.first() -> Button(onClick = { onChoose(choice) }) { Text(choice) }
-                        else -> FilledTonalButton(onClick = { onChoose(choice) }) { Text(choice) }
+                        "deny" -> OutlinedButton(onClick = { onChoose(choice) }) { Text(label) }
+                        item.choices.first() -> Button(onClick = { onChoose(choice) }) { Text(label) }
+                        else -> FilledTonalButton(onClick = { onChoose(choice) }) { Text(label) }
                     }
                 }
             }
         }
     }
+}
+
+/** 审批选项 id → 按钮文字。新版本多出来的选项原样显示。 */
+internal fun choiceLabel(choice: String): String = when (choice) {
+    "once" -> "允许一次"
+    "session" -> "本会话允许"
+    "always" -> "始终允许"
+    "deny" -> "拒绝"
+    else -> choice
+}
+
+private fun resolvedLabel(choice: String): String = when (choice) {
+    "once" -> "已允许一次"
+    "session" -> "本会话已允许"
+    "always" -> "已始终允许"
+    "deny" -> "已拒绝"
+    // 在别的设备上处理掉的，App 不知道选了什么
+    "" -> "已处理"
+    else -> "已选择$choice"
 }
 
 /** 追问卡片：给出选项，也可以直接打字回答。 */

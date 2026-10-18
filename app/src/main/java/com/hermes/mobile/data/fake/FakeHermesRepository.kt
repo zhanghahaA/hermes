@@ -235,7 +235,7 @@ class FakeHermesRepository(
         startRun(sessionId) {
             setPhase(sessionId, RunPhase.Working)
             delay(1000)
-            reply(sessionId, if (choice == "拒绝") "好的，这一步我不执行了。还需要我做别的吗？" else "已经执行完成，服务重启后运行正常。")
+            reply(sessionId, if (choice == "deny") "好的，这一步我不执行了。还需要我做别的吗？" else "已经执行完成，服务重启后运行正常。")
         }
     }
 
