@@ -15,7 +15,7 @@ fun dynamicColorScheme(dark: Boolean): ColorScheme? = null
 
 @Suppress("UNUSED_PARAMETER")
 @Composable
-fun SystemBackHandler(enabled: Boolean, onBack: suspend (progress: Flow<Float>) -> Unit) = Unit
+fun SystemBackHandler(enabled: Boolean, onBack: suspend (gesture: Flow<BackGesture>) -> Unit) = Unit
 
 @Suppress("UNUSED_PARAMETER")
 @Composable

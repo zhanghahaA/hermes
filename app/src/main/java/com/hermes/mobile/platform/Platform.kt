@@ -6,7 +6,6 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.runtime.Composable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -29,26 +28,13 @@ fun dynamicColorScheme(dark: Boolean): ColorScheme? {
 }
 
 /**
- * 系统返回（手势或返回键）。[onBack] 收到的 Flow 是手指横向走过的距离占屏宽的比例 0..1，
- * 页面按它移动就和手指同步（和底部面板的预测性返回一样跟手）。
- * 支持预测性返回的系统会边拖边发；不支持的系统在松手时直接结束 Flow。
- * Flow 被取消表示用户放弃了返回。
+ * 系统返回（手势或返回键）。支持预测性返回的系统会边拖边发 [BackGesture]；
+ * 不支持的系统在松手时直接结束 Flow。Flow 被取消表示用户放弃了返回。
  */
 @Composable
-fun SystemBackHandler(enabled: Boolean, onBack: suspend (progress: Flow<Float>) -> Unit) {
-    val width = LocalWindowInfo.current.containerSize.width.toFloat()
+fun SystemBackHandler(enabled: Boolean, onBack: suspend (gesture: Flow<BackGesture>) -> Unit) {
     PredictiveBackHandler(enabled) { events ->
-        onBack(
-            events.map { e ->
-                if (width <= 0f || (e.touchX == 0f && e.touchY == 0f)) {
-                    e.progress
-                } else {
-                    // 手势从屏幕边缘开始：左边缘按手指离左边的距离，右边缘按离右边的距离
-                    val travelled = if (e.swipeEdge == BackEventCompat.EDGE_RIGHT) width - e.touchX else e.touchX
-                    (travelled / width).coerceIn(0f, 1f)
-                }
-            },
-        )
+        onBack(events.map { BackGesture(it.progress, it.swipeEdge == BackEventCompat.EDGE_RIGHT) })
     }
 }
 

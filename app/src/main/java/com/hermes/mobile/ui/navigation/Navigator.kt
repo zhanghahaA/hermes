@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
@@ -23,6 +24,12 @@ class Navigator(root: Any) {
 
     class Entry internal constructor(val route: Any, internal val key: Int, initialOffset: Float) {
         internal val offset = Animatable(initialOffset)
+
+        /** 系统预测性返回的进度 0..1：页面按比例缩小、往手势那一侧偏一点（和底部面板的返回效果一致）。 */
+        internal val back = Animatable(0f)
+
+        /** 预测性返回从右边缘开始（页面往左偏）。 */
+        internal var backFromRight by mutableStateOf(false)
 
         /** 正在播放返回动画，避免重复返回。 */
         internal var leaving by mutableStateOf(false)
@@ -82,7 +89,10 @@ class Navigator(root: Any) {
             }
         } else {
             entry.leaving = false
-            entry.offset.animateTo(0f, CancelSpec, initialVelocity = velocity)
+            coroutineScope {
+                launch { entry.back.animateTo(0f, CancelSpec) }
+                entry.offset.animateTo(0f, CancelSpec, initialVelocity = velocity)
+            }
         }
     }
 

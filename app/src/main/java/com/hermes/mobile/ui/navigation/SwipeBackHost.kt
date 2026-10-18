@@ -48,11 +48,14 @@ fun SwipeBackHost(
         onDispose { navigator.scope = null }
     }
 
-    SystemBackHandler(enabled = navigator.canGoBack) { progress ->
+    SystemBackHandler(enabled = navigator.canGoBack) { gesture ->
         val top = navigator.entries.last()
         try {
-            // 系统手势：页面跟着手指走（和应用内的右滑一样），缩成卡片；松手后再滑出
-            progress.collect { p -> top.offset.snapTo(p) }
+            // 系统手势：页面按进度缩小、往手势那一侧偏一点（和底部面板一样）；松手后照常滑出
+            gesture.collect { g ->
+                top.backFromRight = g.fromRightEdge
+                top.back.snapTo(g.progress)
+            }
             navigator.settle(top, commit = true, velocity = 0f)
         } catch (e: CancellationException) {
             scope.launch { navigator.settle(top, commit = false, velocity = 0f) }
@@ -73,8 +76,12 @@ fun SwipeBackHost(
             key(entry.key) {
                 val pageModifier = when {
                     entries.size == 1 -> Modifier
-                    entry === top -> Modifier.topPage { entry.offset.value }
-                    else -> Modifier.underPage { top.offset.value }
+                    entry === top -> Modifier.topPage(
+                        fraction = { entry.offset.value },
+                        back = { entry.back.value },
+                        backFromRight = { entry.backFromRight },
+                    )
+                    else -> Modifier.underPage { maxOf(top.offset.value, top.back.value * 0.02f) }
                 }
                 Box(pageModifier.fillMaxSize().blockTouchesBehind()) {
                     stateHolder.SaveableStateProvider(entry.key) { content(entry.route) }
@@ -84,15 +91,27 @@ fun SwipeBackHost(
     }
 }
 
-/** 顶层页面：跟着进度右移，同时缩小、出现圆角和阴影（Android 预测性返回的样式）。 */
-internal fun Modifier.topPage(fraction: () -> Float): Modifier = graphicsLayer {
+/**
+ * 顶层页面。
+ * - [fraction]：滑出的比例（应用内右滑、返回动画），页面右移，同时缩小、出现圆角和阴影；
+ * - [back]：系统预测性返回的进度，页面原地按比例缩到 90%，并往手势那一侧偏一点（Material 的预测性返回样式）。
+ */
+internal fun Modifier.topPage(
+    fraction: () -> Float,
+    back: () -> Float = { 0f },
+    backFromRight: () -> Boolean = { false },
+): Modifier = graphicsLayer {
     val f = fraction()
-    translationX = f * size.width
-    val s = 1f - 0.08f * (f * 3f).coerceAtMost(1f)
+    val b = back()
+    // Material 规范：最多偏移 屏宽/20 - 8dp，左边缘滑往右偏，右边缘滑往左偏
+    val shift = (size.width / 20f - 8.dp.toPx()).coerceAtLeast(0f) * b * (if (backFromRight()) -1f else 1f)
+    translationX = f * size.width + shift
+    val s = minOf(1f - 0.08f * (f * 3f).coerceAtMost(1f), 1f - 0.1f * b)
     scaleX = s
     scaleY = s
-    if (f > 0f) {
-        shape = RoundedCornerShape(28.dp.toPx() * (f * 4f).coerceAtMost(1f))
+    val corner = maxOf((f * 4f).coerceAtMost(1f), (b * 3f).coerceAtMost(1f))
+    if (corner > 0f) {
+        shape = RoundedCornerShape(28.dp.toPx() * corner)
         clip = true
         shadowElevation = 18.dp.toPx()
     } else {

@@ -140,6 +140,8 @@ private val scenes = listOf(
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
     Scene("23-predictive-back") { repo, _ -> PredictiveBackStill(repo, progress = 0.4f) },
+    Scene("23b-system-back-left") { repo, _ -> PredictiveBackStill(repo, progress = 0f, systemBack = 0.8f) },
+    Scene("23c-system-back-right") { repo, _ -> PredictiveBackStill(repo, progress = 0f, systemBack = 0.8f, fromRight = true) },
     Scene(
         "24-chat-quote",
         prepare = { repo ->
@@ -156,10 +158,15 @@ private val scenes = listOf(
 
 /** 向右滑返回拖到一半的静帧，用的就是 SwipeBackHost 里的同一套页面变换。 */
 @Composable
-private fun PredictiveBackStill(repo: HermesRepository, progress: Float) {
+private fun PredictiveBackStill(repo: HermesRepository, progress: Float, systemBack: Float = 0f, fromRight: Boolean = false) {
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().underPage { progress }) { mainScreen(repo, MainTab.Chats)() }
-        Box(Modifier.fillMaxSize().topPage { progress }.background(MaterialTheme.colorScheme.background)) {
+        Box(Modifier.fillMaxSize().underPage { maxOf(progress, systemBack * 0.02f) }) { mainScreen(repo, MainTab.Chats)() }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .topPage(fraction = { progress }, back = { systemBack }, backFromRight = { fromRight })
+                .background(MaterialTheme.colorScheme.background),
+        ) {
             ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {})
         }
     }
