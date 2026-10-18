@@ -48,6 +48,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.material.icons.automirrored.rounded.Reply
+import androidx.compose.runtime.remember
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import com.hermes.mobile.data.model.Quote
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.ui.glass.GlassCircleButton
@@ -74,9 +79,15 @@ fun ChatInputBar(
     onSend: () -> Unit,
     onStop: () -> Unit,
     enterToSend: Boolean,
-    placeholder: String = "给 Hermes 发消息",
+    quote: Quote? = null,
+    onClearQuote: () -> Unit = {},
+    focusRequester: FocusRequester = remember { FocusRequester() },
+    placeholder: String = if (quote != null) "针对这段追问…" else "给 Hermes 发消息",
 ) {
     val canSend = text.isNotBlank() || attachments.isNotEmpty()
+    // 引用消失时继续显示上一次的内容，收起动画才不会空白
+    val lastQuote = remember { arrayOfNulls<Quote>(1) }
+    if (quote != null) lastQuote[0] = quote
     Row(
         Modifier
             .fillMaxWidth()
@@ -103,6 +114,9 @@ fun ChatInputBar(
         ) {
             // animateContentSize 会按矩形裁剪，放在玻璃里面，避免把玻璃的投影裁成方角
             Column(Modifier.animateContentSize(spring(dampingRatio = 0.8f, stiffness = 500f))) {
+                AnimatedVisibility(quote != null, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                    lastQuote[0]?.let { QuotePreview(it, onClearQuote) }
+                }
                 AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
                     AttachmentRow(attachments, onRemoveAttachment)
                 }
@@ -124,12 +138,42 @@ fun ChatInputBar(
                             maxLines = 6,
                             keyboardOptions = KeyboardOptions(imeAction = if (enterToSend) ImeAction.Send else ImeAction.Default),
                             keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(focusRequester),
                         )
                     }
                     SendStopButton(mode, canSend, onSend, onStop, Modifier.padding(end = 6.dp, bottom = 6.dp))
                 }
             }
+        }
+    }
+}
+
+/** 输入框顶部的引用预览：正在针对哪段回复追问，右边可以取消。 */
+@Composable
+private fun QuotePreview(quote: Quote, onClear: () -> Unit) {
+    Row(
+        Modifier.padding(start = 10.dp, end = 4.dp, top = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.AutoMirrored.Rounded.Reply,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        QuoteBlock(
+            quote = quote,
+            tint = MaterialTheme.colorScheme.onSurface,
+            onClick = null,
+            maxLines = 1,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 8.dp),
+        )
+        IconButton(onClick = onClear, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Rounded.Close, contentDescription = "取消引用", modifier = Modifier.size(18.dp))
         }
     }
 }

@@ -12,6 +12,7 @@ import com.hermes.mobile.data.model.DeliveryStatus
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.JobRunResult
 import com.hermes.mobile.data.model.ModelOption
+import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.Role
 import com.hermes.mobile.data.model.RunPhase
 import com.hermes.mobile.data.model.Session
@@ -177,8 +178,8 @@ class FakeHermesRepository(
         updateSession(sessionId) { it.copy(running = phase == RunPhase.Working) }
     }
 
-    override fun sendMessage(sessionId: String, text: String, images: List<ImageRef>) {
-        val message = ChatItem.Message(newId("m"), clock(), Role.User, text, images, DeliveryStatus.Sending)
+    override fun sendMessage(sessionId: String, text: String, images: List<ImageRef>, quote: Quote?) {
+        val message = ChatItem.Message(newId("m"), clock(), Role.User, text, images, DeliveryStatus.Sending, quote)
         editItems(sessionId) { it + message }
         updateSession(sessionId) { session ->
             session.copy(
@@ -202,7 +203,7 @@ class FakeHermesRepository(
                 }
                 setPhase(sessionId, RunPhase.AwaitingInput)
             } else {
-                reply(sessionId, placeholderReply(text, images.size))
+                reply(sessionId, placeholderReply(text, images.size, quote))
             }
         }
     }
@@ -210,7 +211,7 @@ class FakeHermesRepository(
     override fun retryMessage(sessionId: String, itemId: String) {
         val failed = itemsOf(sessionId).firstOrNull { it.id == itemId } as? ChatItem.Message ?: return
         editItems(sessionId) { list -> list.filterNot { it.id == itemId } }
-        sendMessage(sessionId, failed.text, failed.images)
+        sendMessage(sessionId, failed.text, failed.images, failed.quote)
     }
 
     override fun regenerate(sessionId: String, itemId: String) {
@@ -266,7 +267,8 @@ class FakeHermesRepository(
         setPhase(sessionId, RunPhase.Idle)
     }
 
-    private fun placeholderReply(text: String, imageCount: Int) = buildString {
+    private fun placeholderReply(text: String, imageCount: Int, quote: Quote?) = buildString {
+        if (quote != null) append("（占位回复）关于你引用的「${quote.text.lineSequence().first().take(24)}」——\n\n")
         append("（占位回复）收到")
         if (imageCount > 0) append(" $imageCount 张图片和")
         append("你的消息：\n\n> ${text.ifBlank { "[图片]" }.take(60)}\n\n")

@@ -8,6 +8,7 @@ import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.ModelOption
+import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.RunPhase
 import com.hermes.mobile.data.model.Session
 import com.hermes.mobile.data.model.Skill
@@ -44,7 +45,11 @@ interface HermesRepository {
     fun chatItems(sessionId: String): Flow<List<ChatItem>>
     fun runPhase(sessionId: String): Flow<RunPhase>
     fun streamingText(sessionId: String): Flow<String?>
-    fun sendMessage(sessionId: String, text: String, images: List<ImageRef>)
+    /**
+     * 发消息。带 [quote] 时，真实实现会把引用内容以 Markdown 引用块（"> ..."）放在正文前面发给 Hermes，
+     * 让它知道你在追问哪一段。
+     */
+    fun sendMessage(sessionId: String, text: String, images: List<ImageRef>, quote: Quote? = null)
     fun retryMessage(sessionId: String, itemId: String)
     fun regenerate(sessionId: String, itemId: String)
     fun deleteItem(sessionId: String, itemId: String)

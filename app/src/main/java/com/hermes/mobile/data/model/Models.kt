@@ -62,10 +62,30 @@ enum class DeliveryStatus { Sending, Sent, Failed }
 /** 图片占位：真实实现里是 Uri / 远端 URL，这里用一个色相值画渐变块。 */
 data class ImageRef(val id: String, val hue: Float, val aspect: Float = 1f)
 
+/**
+ * 引用。只能引用 Hermes 回复给你的消息正文（[ChatItem.Message.text]），
+ * 思考过程、工具调用这些从来不进消息列表，所以也不可能被引用。
+ * [partial] 为 true 表示只引用了选中的一段。
+ */
+data class Quote(val messageId: String, val text: String, val partial: Boolean) {
+    companion object {
+        /** 只有 Hermes 已完成的回复可以引用；其它消息返回 null。 */
+        fun of(message: ChatItem.Message, selected: String? = null): Quote? {
+            if (!message.quotable) return null
+            val text = selected?.trim()?.takeIf { it.isNotEmpty() } ?: message.text.trim()
+            return Quote(message.id, text, partial = selected != null && text != message.text.trim())
+        }
+    }
+}
+
 sealed interface ChatItem {
     val id: String
     val time: Long
 
+    /**
+     * 一条消息。Hermes 的消息 [text] 只有最终回复正文：接入 API 时只拼接 assistant.delta，
+     * reasoning / commentary / tool.* 事件一律丢弃，不进这里。
+     */
     data class Message(
         override val id: String,
         override val time: Long,
@@ -73,7 +93,11 @@ sealed interface ChatItem {
         val text: String,
         val images: List<ImageRef> = emptyList(),
         val status: DeliveryStatus = DeliveryStatus.Sent,
-    ) : ChatItem
+        /** 这条（用户）消息引用了哪条回复。 */
+        val quote: Quote? = null,
+    ) : ChatItem {
+        val quotable: Boolean get() = role == Role.Assistant && status == DeliveryStatus.Sent && text.isNotBlank()
+    }
 
     /** Hermes 想执行需要批准的操作（对应 /v1/runs/{id}/approval）。 */
     data class Approval(

@@ -133,6 +133,16 @@ private val scenes = listOf(
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
     Scene("23-predictive-back") { repo, _ -> PredictiveBackStill(repo, progress = 0.4f) },
+    Scene(
+        "24-chat-quote",
+        prepare = { repo ->
+            val reply = SampleData.chat("s-2", System.currentTimeMillis()).filterIsInstance<com.hermes.mobile.data.model.ChatItem.Message>().last()
+            repo.chatItems("s-2")
+            repo.sendMessage("s-2", "灵隐寺需要提前预约吗？", emptyList(), com.hermes.mobile.data.model.Quote(reply.id, "第二天上午建议先去灵隐寺，人少一些。", partial = true))
+            null
+        },
+        waitMs = 2000,
+    ) { repo, _ -> ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {}) },
     Scene("21-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
     Scene("22-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
 )

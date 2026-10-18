@@ -1,7 +1,6 @@
 package com.hermes.mobile.ui.chats
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -44,8 +43,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
@@ -57,7 +54,6 @@ import com.hermes.mobile.ui.glass.TransparentBarColors
 import com.hermes.mobile.ui.main.LocalBottomBarSpace
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -83,6 +79,8 @@ import com.hermes.mobile.ui.components.ConnectionPill
 import com.hermes.mobile.ui.components.EmptyState
 import com.hermes.mobile.ui.components.NoInsets
 import com.hermes.mobile.ui.components.SessionAvatar
+import com.hermes.mobile.ui.components.SwipeAction
+import com.hermes.mobile.ui.components.SwipeActionsRow
 import com.hermes.mobile.ui.components.TagLabel
 import com.hermes.mobile.ui.components.listTime
 import kotlinx.coroutines.launch
@@ -106,6 +104,7 @@ fun ChatsScreen(
     var refreshing by remember { mutableStateOf(false) }
     var showSwitcher by remember { mutableStateOf(false) }
     var actionTarget by remember { mutableStateOf<Session?>(null) }
+    var openRow by remember { mutableStateOf<String?>(null) }
     var renameTarget by remember { mutableStateOf<Session?>(null) }
 
     val scope = rememberCoroutineScope()
@@ -115,6 +114,8 @@ fun ChatsScreen(
     val backdrop = rememberLayerBackdrop()
     val bottomSpace = LocalBottomBarSpace.current
     val pullState = rememberPullToRefreshState()
+    // 列表一滚动就收起展开的那一行
+    LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) openRow = null }
 
     val visible = sessions
         .filter { query.isBlank() || it.title.contains(query, true) || it.preview.contains(query, true) }
@@ -230,14 +231,27 @@ fun ChatsScreen(
                     }
                 }
                 items(visible, key = { it.id }) { session ->
-                    SwipeableSessionRow(
-                        session = session,
-                        onClick = { onOpenChat(session.id) },
-                        onLongPress = { actionTarget = session },
-                        onDelete = { delete(session) },
-                        onTogglePin = { repository.togglePin(session.id) },
+                    SwipeActionsRow(
+                        isOpen = openRow == session.id,
+                        onOpenChange = { open -> openRow = if (open) session.id else null },
+                        actions = listOf(
+                            SwipeAction(
+                                if (session.pinned) "取消置顶" else "置顶",
+                                Icons.Rounded.PushPin,
+                                MaterialTheme.colorScheme.secondaryContainer,
+                                MaterialTheme.colorScheme.onSecondaryContainer,
+                            ) { repository.togglePin(session.id) },
+                            SwipeAction(
+                                "删除",
+                                Icons.Rounded.Delete,
+                                MaterialTheme.colorScheme.error,
+                                MaterialTheme.colorScheme.onError,
+                            ) { delete(session) },
+                        ),
                         modifier = Modifier.animateItem(),
-                    )
+                    ) {
+                        SessionRow(session, onClick = { onOpenChat(session.id) }, onLongPress = { actionTarget = session })
+                    }
                 }
             }
         }
@@ -333,60 +347,6 @@ private fun OfflineBanner(reason: String, onRetry: () -> Unit) {
             Text(reason, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             TextButton(onClick = onRetry) { Text("重试") }
         }
-    }
-}
-
-@Composable
-private fun SwipeableSessionRow(
-    session: Session,
-    onClick: () -> Unit,
-    onLongPress: () -> Unit,
-    onDelete: () -> Unit,
-    onTogglePin: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val state = rememberSwipeToDismissBoxState()
-    LaunchedEffect(state.currentValue) {
-        when (state.currentValue) {
-            SwipeToDismissBoxValue.EndToStart -> onDelete()
-            SwipeToDismissBoxValue.StartToEnd -> {
-                onTogglePin()
-                state.reset()
-            }
-            SwipeToDismissBoxValue.Settled -> Unit
-        }
-    }
-    SwipeToDismissBox(
-        state = state,
-        modifier = modifier,
-        backgroundContent = {
-            val direction = state.dismissDirection
-            val color by animateColorAsState(
-                when (direction) {
-                    SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.errorContainer
-                    SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.tertiaryContainer
-                    SwipeToDismissBoxValue.Settled -> Color.Transparent
-                },
-                label = "swipe-bg",
-            )
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(color)
-                    .padding(horizontal = 28.dp),
-                contentAlignment = if (direction == SwipeToDismissBoxValue.EndToStart) Alignment.CenterEnd else Alignment.CenterStart,
-            ) {
-                when (direction) {
-                    SwipeToDismissBoxValue.EndToStart ->
-                        Icon(Icons.Rounded.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.onErrorContainer)
-                    SwipeToDismissBoxValue.StartToEnd ->
-                        Icon(Icons.Rounded.PushPin, contentDescription = "置顶", tint = MaterialTheme.colorScheme.onTertiaryContainer)
-                    SwipeToDismissBoxValue.Settled -> Unit
-                }
-            }
-        },
-    ) {
-        SessionRow(session, onClick, onLongPress)
     }
 }
 

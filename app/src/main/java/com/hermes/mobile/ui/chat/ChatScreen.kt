@@ -76,6 +76,11 @@ import com.hermes.mobile.ui.components.SessionAvatar
 import com.hermes.mobile.ui.components.dayLabel
 import com.hermes.mobile.ui.components.sameDay
 import com.hermes.mobile.ui.rememberPlaceholder
+import com.hermes.mobile.data.model.Quote
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalTextToolbar
+import kotlinx.coroutines.delay
 import com.hermes.mobile.ui.glass.GlassCircleButton
 import com.hermes.mobile.ui.glass.GlassTopBar
 import com.hermes.mobile.ui.glass.TransparentBarColors
@@ -138,6 +143,10 @@ fun ChatScreen(
     var showAttach by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var actionTarget by remember { mutableStateOf<ChatItem.Message?>(null) }
+    var quote by remember(sessionId) { mutableStateOf<Quote?>(null) }
+    var selection by remember { mutableStateOf<MessageSelection?>(null) }
+    var highlightId by remember { mutableStateOf<String?>(null) }
+    val inputFocus = remember { FocusRequester() }
 
     val showMessage = LocalShowMessage.current
     val placeholder = rememberPlaceholder()
@@ -151,10 +160,33 @@ fun ChatScreen(
     }
 
     fun send() {
-        repository.sendMessage(sessionId, draft.trim(), attachments)
+        repository.sendMessage(sessionId, draft.trim(), attachments, quote)
         draft = ""
         attachments = emptyList()
+        quote = null
         scope.launch { listState.animateScrollToItem(0) }
+    }
+
+    fun startQuote(q: Quote) {
+        quote = q
+        selection?.clear()
+        selection = null
+        runCatching { inputFocus.requestFocus() }
+    }
+
+    /** 点引用块：滚回被引用的那条消息并闪一下。 */
+    fun jumpTo(messageId: String) {
+        val index = rows.indexOfFirst { it.key == messageId }
+        if (index < 0) {
+            showMessage("原消息已不在这个会话里")
+            return
+        }
+        scope.launch {
+            listState.animateScrollToItem(index)
+            highlightId = messageId
+            delay(700)
+            highlightId = null
+        }
     }
 
     val backdrop = rememberLayerBackdrop()
@@ -200,7 +232,21 @@ fun ChatScreen(
                     listState = listState,
                     maxWidth = bubbleWidth,
                     contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = bottomBarSpace + 12.dp),
-                    onLongPress = { actionTarget = it },
+                    highlightId = highlightId,
+                    onSelectionChange = { id, sel ->
+                        val current = selection
+                        when {
+                            sel != null -> {
+                                // 新的选择出现时，清掉另一条消息里的旧选择
+                                if (current != null && current.message.id != id) current.clear()
+                                selection = sel
+                            }
+                            current?.message?.id == id -> selection = null
+                        }
+                    },
+                    onQuote = ::startQuote,
+                    onQuoteClick = ::jumpTo,
+                    onMore = { actionTarget = it },
                     onRetry = { repository.retryMessage(sessionId, it.id) },
                     onCopyCode = { showMessage("代码已复制") },
                     onApprove = { item, choice -> repository.resolveApproval(sessionId, item.id, choice) },
@@ -227,9 +273,29 @@ fun ChatScreen(
                         onSend = ::send,
                         onStop = { repository.stop(sessionId) },
                         enterToSend = settings.enterToSend,
+                        quote = quote,
+                        onClearQuote = { quote = null },
+                        focusRequester = inputFocus,
                     )
                 }
             }
+            SelectionBar(
+                backdrop = backdrop,
+                selection = selection,
+                onAsk = { sel -> Quote.of(sel.message, sel.text)?.let(::startQuote) },
+                onCopy = { sel ->
+                    clipboard.setText(AnnotatedString(sel.text))
+                    sel.clear()
+                    showMessage("已复制")
+                },
+                onMore = { sel ->
+                    sel.clear()
+                    actionTarget = sel.message
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = with(density) { bottomBarHeight.toDp() } + 4.dp),
+            )
             JumpToBottom(
                 backdrop,
                 listState,
@@ -311,37 +377,48 @@ private fun MessageList(
     listState: LazyListState,
     maxWidth: Dp,
     contentPadding: PaddingValues,
-    onLongPress: (ChatItem.Message) -> Unit,
+    highlightId: String?,
+    onSelectionChange: (String, MessageSelection?) -> Unit,
+    onQuote: (Quote) -> Unit,
+    onQuoteClick: (String) -> Unit,
+    onMore: (ChatItem.Message) -> Unit,
     onRetry: (ChatItem.Message) -> Unit,
     onCopyCode: (String) -> Unit,
     onApprove: (ChatItem.Approval, String) -> Unit,
     onAnswer: (ChatItem.Clarify, String) -> Unit,
 ) {
-    // reverseLayout：最新的消息在底部，新消息进来时自然贴底
-    LazyColumn(
-        state = listState,
-        reverseLayout = true,
-        contentPadding = contentPadding,
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        items(rows, key = { it.key }, contentType = { it::class }) { row ->
-            Box(Modifier.animateItem()) {
-                when (row) {
-                    is ChatRow.Date -> DateSeparator(row.label)
-                    is ChatRow.Typing -> TypingRow()
-                    is ChatRow.Streaming -> StreamingRow(row.text, maxWidth)
-                    is ChatRow.Item -> when (val item = row.item) {
-                        is ChatItem.Message -> MessageBubble(
-                            message = item,
-                            first = row.first,
-                            last = row.last,
-                            maxWidth = maxWidth,
-                            onLongPress = { onLongPress(item) },
-                            onRetry = { onRetry(item) },
-                            onCopyCode = onCopyCode,
-                        )
-                        is ChatItem.Approval -> ApprovalCard(item) { onApprove(item, it) }
-                        is ChatItem.Clarify -> ClarifyCard(item) { onAnswer(item, it) }
+    // 选中文字时用我们自己的玻璃操作栏，屏蔽系统的浮动工具条，避免两套菜单同时出现
+    CompositionLocalProvider(LocalTextToolbar provides NoTextToolbar) {
+        // reverseLayout：最新的消息在底部，新消息进来时自然贴底
+        LazyColumn(
+            state = listState,
+            reverseLayout = true,
+            contentPadding = contentPadding,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            items(rows, key = { it.key }, contentType = { it::class }) { row ->
+                Box(Modifier.animateItem()) {
+                    when (row) {
+                        is ChatRow.Date -> DateSeparator(row.label)
+                        is ChatRow.Typing -> TypingRow()
+                        is ChatRow.Streaming -> StreamingRow(row.text, maxWidth)
+                        is ChatRow.Item -> when (val item = row.item) {
+                            is ChatItem.Message -> MessageBubble(
+                                message = item,
+                                first = row.first,
+                                last = row.last,
+                                maxWidth = maxWidth,
+                                onRetry = { onRetry(item) },
+                                onCopyCode = onCopyCode,
+                                highlighted = item.id == highlightId,
+                                onSelectionChange = onSelectionChange,
+                                onQuote = onQuote,
+                                onQuoteClick = onQuoteClick,
+                                onMore = { onMore(item) },
+                            )
+                            is ChatItem.Approval -> ApprovalCard(item) { onApprove(item, it) }
+                            is ChatItem.Clarify -> ClarifyCard(item) { onAnswer(item, it) }
+                        }
                     }
                 }
             }
