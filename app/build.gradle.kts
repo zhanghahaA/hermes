@@ -12,8 +12,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
     }
 
     buildTypes {
@@ -57,6 +57,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.backdrop)
     implementation(libs.okhttp)
+    // SSH 隧道。Android 自带的 BouncyCastle 是阉割版，打包完整版（启动时替换掉系统的）
+    implementation(libs.sshj)
+    implementation(libs.bouncycastle.prov)
+    implementation(libs.bouncycastle.pkix)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

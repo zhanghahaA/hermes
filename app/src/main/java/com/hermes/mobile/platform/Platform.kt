@@ -31,3 +31,36 @@ fun dynamicColorScheme(dark: Boolean): ColorScheme? {
 fun SystemBackHandler(enabled: Boolean, onBack: suspend (progress: Flow<Float>) -> Unit) {
     PredictiveBackHandler(enabled) { events -> onBack(events.map { it.progress }) }
 }
+
+/**
+ * 选一个文本文件（例如 SSH 私钥）并读出内容。返回的函数调用后弹出系统文件选择器。
+ * 文件太大（超过 64 KB）或读不出来时 [onText] 收到 null。
+ */
+@Composable
+fun rememberTextFilePicker(onText: (String?) -> Unit): () -> Unit {
+    val context = LocalContext.current
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val bytes = input.readNBytesCompat(64 * 1024 + 1)
+                if (bytes.size > 64 * 1024) null else String(bytes, Charsets.UTF_8)
+            }
+        }.getOrNull()
+        onText(text)
+    }
+    return { launcher.launch(arrayOf("*/*")) }
+}
+
+private fun java.io.InputStream.readNBytesCompat(limit: Int): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    while (out.size() < limit) {
+        val n = read(buffer, 0, minOf(buffer.size, limit - out.size()))
+        if (n < 0) break
+        out.write(buffer, 0, n)
+    }
+    return out.toByteArray()
+}

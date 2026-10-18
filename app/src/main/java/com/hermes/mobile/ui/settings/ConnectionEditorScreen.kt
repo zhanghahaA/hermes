@@ -7,6 +7,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.hermes.mobile.data.model.SshAuthMethod
+import com.hermes.mobile.data.ssh.SshKeys
+import com.hermes.mobile.platform.rememberTextFilePicker
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,7 +104,27 @@ fun ConnectionEditorScreen(
     var profileName by rememberSaveable { mutableStateOf(existing?.profile.orEmpty()) }
     var sshUser by rememberSaveable { mutableStateOf(existing?.sshUser.orEmpty()) }
     var sshPort by rememberSaveable { mutableStateOf((existing?.sshPort ?: 22).toString()) }
-    var sshAuth by rememberSaveable { mutableIntStateOf(0) }
+    var sshAuth by rememberSaveable { mutableIntStateOf(if (existing?.sshAuth == SshAuthMethod.Password) 1 else 0) }
+    // 这次编辑里新生成/导入的私钥，和输入的 SSH 密码；留空表示沿用已保存的
+    var privateKey by rememberSaveable { mutableStateOf("") }
+    var publicKey by rememberSaveable { mutableStateOf(existing?.id?.let(repository::sshPublicKey).orEmpty()) }
+    var sshPassword by rememberSaveable { mutableStateOf("") }
+    var resetHostKey by rememberSaveable { mutableStateOf(false) }
+    var showPaste by rememberSaveable { mutableStateOf(false) }
+    val showMessage = LocalShowMessage.current
+    fun useKey(text: String?) {
+        if (text.isNullOrBlank()) {
+            showMessage("没读到内容（文件太大或不是文本）")
+            return
+        }
+        try {
+            publicKey = SshKeys.publicKeyLine(text)
+            privateKey = text
+        } catch (e: Exception) {
+            showMessage(e.message ?: "看不懂这个私钥")
+        }
+    }
+    val pickKeyFile = rememberTextFilePicker(::useKey)
     var steps by remember { mutableStateOf<List<ConnectionTestStep>>(emptyList()) }
     val scope = rememberCoroutineScope()
     val placeholder = rememberPlaceholder()
@@ -110,7 +138,15 @@ fun ConnectionEditorScreen(
         profile = profileName.ifBlank { null },
         sshUser = sshUser.ifBlank { null },
         sshPort = sshPort.toIntOrNull() ?: 22,
+        sshAuth = if (sshAuth == 0) SshAuthMethod.Key else SshAuthMethod.Password,
+        sshHostKey = if (resetHostKey) null else existing?.sshHostKey,
     )
+
+    fun sshSecret(): String? = if (type != ConnectionType.Ssh) null else if (sshAuth == 0) privateKey.ifBlank { null } else sshPassword.ifBlank { null }
+
+    if (showPaste) {
+        PasteKeyDialog(onDismiss = { showPaste = false }, onDone = { showPaste = false; useKey(it) })
+    }
 
     Scaffold(
         topBar = {
@@ -120,7 +156,7 @@ fun ConnectionEditorScreen(
                 actions = {
                     Button(
                         onClick = {
-                            repository.saveConnection(currentProfile(), apiKey.ifBlank { null })
+                            repository.saveConnection(currentProfile(), apiKey.ifBlank { null }, sshSecret())
                             onClose()
                         },
                         modifier = Modifier.padding(end = 8.dp),
@@ -195,15 +231,34 @@ fun ConnectionEditorScreen(
                             }
                             if (sshAuth == 0) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(onClick = { placeholder("导入私钥") }, modifier = Modifier.weight(1f)) { Text("导入私钥") }
-                                    FilledTonalButton(onClick = { placeholder("生成 Ed25519 密钥") }, modifier = Modifier.weight(1f)) {
-                                        Icon(Icons.Rounded.Key, null, Modifier.size(18.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("生成新密钥")
-                                    }
+                                    OutlinedButton(onClick = pickKeyFile, modifier = Modifier.weight(1f)) { Text("导入文件") }
+                                    OutlinedButton(onClick = { showPaste = true }, modifier = Modifier.weight(1f)) { Text("粘贴") }
+                                }
+                                FilledTonalButton(
+                                    onClick = {
+                                        val pair = SshKeys.generate()
+                                        privateKey = pair.privateKey
+                                        publicKey = pair.publicKey
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Icon(Icons.Rounded.Key, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(if (publicKey.isEmpty()) "在手机上生成新密钥" else "重新生成密钥")
+                                }
+                                if (publicKey.isNotEmpty()) {
+                                    PublicKeyCard(publicKey, saved = privateKey.isEmpty(), user = sshUser.ifBlank { "用户" })
                                 }
                             } else {
-                                SecretField("SSH 密码", "", {})
+                                SecretField(
+                                    "SSH 密码",
+                                    sshPassword,
+                                    { sshPassword = it },
+                                    if (existing?.type == ConnectionType.Ssh && existing.sshAuth == SshAuthMethod.Password) "已保存。留空表示不修改" else null,
+                                )
+                            }
+                            existing?.sshHostKey?.let { pinned ->
+                                HostKeyRow(pinned, reset = resetHostKey, onReset = { resetHostKey = true })
                             }
                             OutlinedTextField(
                                 value = port,
@@ -236,7 +291,7 @@ fun ConnectionEditorScreen(
             )
 
             ConnectionTestPanel(steps) {
-                scope.launch { repository.testConnection(currentProfile(), apiKey.ifBlank { null }).collect { steps = it } }
+                scope.launch { repository.testConnection(currentProfile(), apiKey.ifBlank { null }, sshSecret()).collect { steps = it } }
             }
 
             if (existing != null) {
@@ -324,6 +379,84 @@ private fun HostPortFields(
             modifier = Modifier.width(104.dp),
         )
     }
+}
+
+/** 公钥：用户要把它加到服务器上。给出可以直接粘贴到服务器终端执行的命令。 */
+@Composable
+private fun PublicKeyCard(publicKey: String, saved: Boolean, user: String) {
+    val clipboard = LocalClipboardManager.current
+    val showMessage = LocalShowMessage.current
+    val command = "mkdir -p ~/.ssh && echo '$publicKey' >> ~/.ssh/authorized_keys"
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                if (saved) "已保存私钥。对应的公钥：" else "把公钥加到服务器上（以 $user 登录后执行下面的命令）：",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                if (saved) publicKey else command,
+                style = CodeTextStyle,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(LocalHermesColors.current.codeBackground, MaterialTheme.shapes.small)
+                    .padding(10.dp),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(publicKey)); showMessage("公钥已复制") }) {
+                    Icon(Icons.Rounded.ContentCopy, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("复制公钥")
+                }
+                if (!saved) {
+                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(command)); showMessage("命令已复制") }) { Text("复制命令") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HostKeyRow(pinned: String, reset: Boolean, onReset: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(Icons.Rounded.Fingerprint, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text(if (reset) "主机指纹已重置" else "已记住主机指纹", style = MaterialTheme.typography.labelLarge)
+            Text(
+                if (reset) "保存后，下次连接时重新记住" else pinned,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (!reset) OutlinedButton(onClick = onReset) { Text("重置") }
+    }
+}
+
+/** 粘贴私钥全文。 */
+@Composable
+private fun PasteKeyDialog(onDismiss: () -> Unit, onDone: (String) -> Unit) {
+    var text by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("粘贴私钥") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = { Text("-----BEGIN OPENSSH PRIVATE KEY-----\n…") },
+                textStyle = CodeTextStyle,
+                minLines = 6,
+                maxLines = 10,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = { Button(onClick = { onDone(text) }, enabled = text.isNotBlank()) { Text("使用") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable

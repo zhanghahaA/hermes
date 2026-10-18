@@ -31,11 +31,16 @@ interface HermesRepository {
     val activeConnectionId: StateFlow<String?>
     val connectionState: StateFlow<ConnectionState>
     fun switchConnection(id: String)
-    /** [apiKey] 为 null 表示不改已保存的 Key。 */
-    fun saveConnection(profile: ConnectionProfile, apiKey: String?)
+    /**
+     * [apiKey] / [sshSecret] 为 null 表示不改已保存的。
+     * [sshSecret] 是 SSH 私钥全文（密钥登录）或密码（密码登录），按 [ConnectionProfile.sshAuth] 解释。
+     */
+    fun saveConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String? = null)
     fun deleteConnection(id: String)
-    /** [apiKey] 为 null 时用已保存的 Key。 */
-    fun testConnection(profile: ConnectionProfile, apiKey: String?): Flow<List<ConnectionTestStep>>
+    /** [apiKey] / [sshSecret] 为 null 时用已保存的。 */
+    fun testConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String? = null): Flow<List<ConnectionTestStep>>
+    /** 已保存的 SSH 私钥对应的公钥（一行，可以直接贴进 authorized_keys）；没有就是 null。 */
+    fun sshPublicKey(connectionId: String): String? = null
     /** 当前连接能用的功能。 */
     val features: StateFlow<Set<AppFeature>>
 

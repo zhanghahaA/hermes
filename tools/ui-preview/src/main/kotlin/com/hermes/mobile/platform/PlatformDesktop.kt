@@ -15,3 +15,7 @@ fun dynamicColorScheme(dark: Boolean): ColorScheme? = null
 @Suppress("UNUSED_PARAMETER")
 @Composable
 fun SystemBackHandler(enabled: Boolean, onBack: suspend (progress: Flow<Float>) -> Unit) = Unit
+
+@Suppress("UNUSED_PARAMETER")
+@Composable
+fun rememberTextFilePicker(onText: (String?) -> Unit): () -> Unit = {}

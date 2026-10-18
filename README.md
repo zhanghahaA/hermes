@@ -2,8 +2,9 @@
 
 在手机上像发消息一样使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：只显示最终回复，不显示思考链和工具调用；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 
-> **当前状态：阶段 2 完成（聊天核心）。** 能连接真实的 Hermes 聊天：发消息、只显示最终回复（不显示思考和工具过程）、
-> 审批和追问卡片、停止、断线自动重连、App 被杀后接着等回复、后台回复通知；会话的新建/分叉/重命名/置顶/删除。怎么让手机连上 Hermes 见 [docs/setup.md](docs/setup.md)，接口和版本兼容见 [docs/protocol.md](docs/protocol.md)。
+> **当前状态：阶段 3 完成（SSH 隧道）。** 能连接真实的 Hermes 聊天：发消息、只显示最终回复（不显示思考和工具过程）、
+> 审批和追问卡片、停止、断线自动重连、App 被杀后接着等回复、后台回复通知；会话的新建/分叉/重命名/置顶/删除；
+> 直连 / HTTPS / 本机 Termux / **SSH 隧道**（手机上生成密钥或导入私钥、密码登录、主机指纹锁定、断线自动重连）。怎么让手机连上 Hermes 见 [docs/setup.md](docs/setup.md)，接口和版本兼容见 [docs/protocol.md](docs/protocol.md)。
 
 ## 界面一览
 
@@ -80,7 +81,7 @@ gradle test           # 返回手势的自动化测试
 |---|---|---|
 | 1 | 接通 Hermes：连接、测试连接、会话列表、聊天记录、重命名/置顶/删除 | ✅ |
 | 2 | 聊天核心：发消息、只显示最终回复、审批/追问、停止、断线恢复、通知 | ✅ |
-| 3 | SSH 隧道 | 待开发 |
+| 3 | SSH 隧道：密钥生成/导入、密码登录、主机指纹锁定、自动重连 | ✅ |
 | 4 | 图片、模型切换、定时任务、技能/工具集、Profile | 待开发 |
 | 5 | 本地缓存、SSH 管理功能、打磨 | 待开发 |
 
@@ -91,3 +92,5 @@ App 连接时先探测服务器能力（`/v1/capabilities`，旧版本逐个探�
 设置 `HERMES_IT_HOST` / `HERMES_IT_KEY` 环境变量后，`gradle test` 还会对真实运行的 Hermes 跑集成测试。
 聊天的集成测试配合 `tools/fake-llm/fake_llm.py`（一个按剧本回复的假模型，会故意输出思考内容、触发审批和追问），不需要任何模型 Key；
 再加 `HERMES_IT_REAL_MODEL=1` 会跑一个接真实模型的测试，检查服务器上存着的思考内容一个字都不出现在 App 里。
+SSH 隧道的单元测试在测试里起一个真的 SSH 服务器（Apache MINA SSHD）；设置 `HERMES_IT_SSH_DIR` / `HERMES_IT_SSH_PORT` / `HERMES_IT_SSH_USER`
+后还会对真正的 OpenSSH 跑互通测试（ssh-keygen 生成的 Ed25519/RSA/ECDSA 密钥、App 生成的密钥、主机指纹和 `ssh-keygen -lf` 一致）。

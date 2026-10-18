@@ -41,6 +41,8 @@ sealed class HermesError(message: String) : Exception(message) {
     class Conflict(val code: String?, detail: String) : HermesError(detail)
     class Server(val status: Int, val code: String?, detail: String, val retryAfterSeconds: Long? = null) : HermesError(detail)
     class BadUrl(detail: String) : HermesError(detail)
+    /** SSH 隧道建不起来；[hostKeyChanged] 为 true 表示主机指纹和记录的不一致。 */
+    class Ssh(detail: String, val hostKeyChanged: Boolean = false) : HermesError(detail)
 }
 
 /**

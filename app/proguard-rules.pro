@@ -8,3 +8,14 @@
 -keepclasseswithmembers class com.hermes.mobile.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
+
+# SSH 隧道（sshj + BouncyCastle）：大量通过反射/名字加载算法，整体保留
+-keep class net.schmizz.** { *; }
+-keep class com.hierynomus.** { *; }
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+-dontwarn net.schmizz.**
+-dontwarn com.hierynomus.**
+-dontwarn org.slf4j.**
+-dontwarn javax.naming.**
+-dontwarn org.ietf.jgss.**

@@ -13,6 +13,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import org.bouncycastle.jce.provider.BouncyCastleProvider
+import java.security.Security
 
 /**
  * 仓库跟着进程活，而不是跟着界面：退回桌面、界面被系统回收后，正在等的回复照样能收到。
@@ -27,6 +29,9 @@ class HermesApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Android 自带的 BouncyCastle（名字也叫 "BC"）是阉割版，没有 Ed25519 等 SSH 要用的算法：换成打包进来的完整版
+        Security.removeProvider("BC")
+        Security.addProvider(BouncyCastleProvider())
         val notifier = ReplyNotifier(this)
         appScope.launch { repository.notices.collect(notifier::show) }
         appScope.launch {

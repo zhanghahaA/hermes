@@ -21,7 +21,12 @@ data class ConnectionProfile(
     val profile: String? = null,
     val sshUser: String? = null,
     val sshPort: Int = 22,
+    val sshAuth: SshAuthMethod = SshAuthMethod.Key,
+    /** 记住的 SSH 主机指纹（`SHA256:...`）。为空表示还没连过，第一次连上时记住。 */
+    val sshHostKey: String? = null,
 )
+
+enum class SshAuthMethod { Key, Password }
 
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState

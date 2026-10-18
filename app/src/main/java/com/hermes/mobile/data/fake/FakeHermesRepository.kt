@@ -68,7 +68,7 @@ class FakeHermesRepository(
 
     override val features: StateFlow<Set<AppFeature>> = MutableStateFlow(AppFeature.entries.toSet())
 
-    override fun saveConnection(profile: ConnectionProfile, apiKey: String?) {
+    override fun saveConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?) {
         _connections.update { list ->
             if (list.any { it.id == profile.id }) list.map { if (it.id == profile.id) profile else it } else list + profile
         }
@@ -79,7 +79,7 @@ class FakeHermesRepository(
         if (_activeConnectionId.value == id) _activeConnectionId.value = _connections.value.firstOrNull()?.id
     }
 
-    override fun testConnection(profile: ConnectionProfile, apiKey: String?): Flow<List<ConnectionTestStep>> = flow {
+    override fun testConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?): Flow<List<ConnectionTestStep>> = flow {
         val titles = buildList {
             add("网络可达")
             if (profile.type == ConnectionType.Ssh) add("建立 SSH 隧道")

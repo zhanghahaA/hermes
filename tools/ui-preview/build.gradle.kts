@@ -43,9 +43,15 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:5.3.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.10.2")
+    implementation("com.hierynomus:sshj:0.41.2")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.84")
 
     testImplementation(kotlin("test"))
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
+    // 测试里起一个真正的 SSH 服务器，验证隧道
+    testImplementation("org.apache.sshd:sshd-core:2.20.0")
+    testImplementation("org.slf4j:slf4j-simple:2.0.17")
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.uiTest)
 }

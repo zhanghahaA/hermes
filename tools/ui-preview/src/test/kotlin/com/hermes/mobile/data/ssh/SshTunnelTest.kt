@@ -1,0 +1,183 @@
+package com.hermes.mobile.data.ssh
+
+import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.ConnectionProfile
+import com.hermes.mobile.data.model.ConnectionState
+import com.hermes.mobile.data.model.ConnectionTestStep
+import com.hermes.mobile.data.model.ConnectionType
+import com.hermes.mobile.data.model.Role
+import com.hermes.mobile.data.model.SshAuthMethod
+import com.hermes.mobile.data.model.TestStepStatus
+import com.hermes.mobile.data.remote.FakeHermesServer
+import com.hermes.mobile.data.remote.RemoteHermesRepository
+import com.hermes.mobile.platform.FakeSecretBox
+import com.hermes.mobile.platform.MemoryLocalStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.last
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+
+/** 阶段 3：SSH 隧道。用真的 SSH 服务器把请求转发到模拟的 Hermes。 */
+class SshTunnelTest {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val cleanup = mutableListOf<() -> Unit>()
+
+    @AfterTest
+    fun tearDown() {
+        scope.cancel()
+        cleanup.asReversed().forEach { runCatching(it) }
+    }
+
+    private val keys = SshKeys.generate()
+
+    private fun hermes() = FakeHermesServer(FakeHermesServer.Version.Modern).start().also { s -> cleanup += { s.shutdown() } }
+    private fun sshd(server: TestSshServer = TestSshServer(authorizedKey = keys.publicKey)) = server.start().also { s -> cleanup += { s.stop() } }
+
+    private fun profile(ssh: TestSshServer, hermes: FakeHermesServer, auth: SshAuthMethod = SshAuthMethod.Key, pin: String? = null) = ConnectionProfile(
+        id = "ssh1", name = "家里 NAS", type = ConnectionType.Ssh,
+        host = "127.0.0.1", port = hermes.server.port,
+        sshUser = ssh.user, sshPort = ssh.port, sshAuth = auth, sshHostKey = pin,
+    )
+
+    private fun repo(store: MemoryLocalStore = MemoryLocalStore()) = RemoteHermesRepository(scope, store, FakeSecretBox(), backoff = { 50L })
+
+    private fun steps(flow: Flow<List<ConnectionTestStep>>) = runBlocking { withTimeout(20_000) { flow.toList().last() } }
+
+    private fun RemoteHermesRepository.awaitState(): ConnectionState = runBlocking {
+        withTimeout(20_000) { connectionState.first { it is ConnectionState.Connected || it is ConnectionState.Failed } }
+    }
+
+    @Test
+    fun generatedKeyIsValidOpenSsh() {
+        assertTrue(keys.privateKey.startsWith("-----BEGIN OPENSSH PRIVATE KEY-----"))
+        assertTrue(keys.publicKey.startsWith("ssh-ed25519 AAAA"))
+        assertEquals(keys.publicKey.substringBeforeLast(' '), SshKeys.publicKeyLine(keys.privateKey).substringBeforeLast(' '), "能从私钥还原出同一个公钥")
+    }
+
+    @Test
+    fun keyLoginThroughTunnelWorksEndToEnd() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        val profile = profile(ssh, hermes)
+
+        val result = steps(repo.testConnection(profile, hermes.key, keys.privateKey))
+        assertEquals(listOf("SSH 连接", "SSH 登录", "网络可达", "识别 Hermes", "API Key 鉴权", "能力探测"), result.map { it.title })
+        assertTrue(result.all { it.status == TestStepStatus.Passed }, result.toString())
+        assertTrue(result[0].detail!!.contains("首次连接") && result[0].detail!!.contains("SHA256:"), result[0].detail)
+
+        repo.saveConnection(profile, hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected, repo.connectionState.value.toString())
+        runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
+        val pinned = repo.connections.value.single().sshHostKey
+        assertNotNull(pinned, "第一次连上就记住主机指纹")
+        assertTrue(pinned.startsWith("SHA256:"))
+        assertEquals(keys.publicKey.substringBeforeLast(' '), repo.sshPublicKey("ssh1")?.substringBeforeLast(' '), "可以再次查看公钥")
+
+        // 隧道里聊天
+        repo.sendMessage("s1", "隧道里你好", emptyList())
+        runBlocking {
+            withTimeout(10_000) {
+                repo.chatItems("s1").first { list -> list.any { it is ChatItem.Message && it.role == Role.Assistant && it.text == "最终回复：隧道里你好" } }
+            }
+        }
+    }
+
+    @Test
+    fun secretsAreStoredEncrypted() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val store = MemoryLocalStore()
+        repo(store).saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        val saved = assertNotNull(store.state)
+        assertTrue(saved.keys.values.none { "OPENSSH PRIVATE KEY" in it }, "私钥必须加密保存")
+        assertTrue(saved.keys.containsKey("ssh:ssh1"))
+    }
+
+    @Test
+    fun passwordLogin() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        val ok = steps(repo.testConnection(profile(ssh, hermes, SshAuthMethod.Password), hermes.key, ssh.password))
+        assertTrue(ok.all { it.status == TestStepStatus.Passed }, ok.toString())
+
+        val bad = steps(repo.testConnection(profile(ssh, hermes, SshAuthMethod.Password), hermes.key, "wrong"))
+        assertEquals(TestStepStatus.Passed, bad[0].status)
+        assertEquals(TestStepStatus.Failed, bad[1].status)
+        assertTrue(bad[1].detail!!.contains("密码不对"), bad[1].detail)
+    }
+
+    @Test
+    fun unknownKeyIsRejectedWithHint() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val other = SshKeys.generate()
+        val result = steps(repo().testConnection(profile(ssh, hermes), hermes.key, other.privateKey))
+        assertEquals(TestStepStatus.Failed, result[1].status)
+        assertTrue(result[1].detail!!.contains("authorized_keys"), result[1].detail)
+    }
+
+    @Test
+    fun changedHostKeyIsRefused() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val fakePin = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        val result = steps(repo().testConnection(profile(ssh, hermes, pin = fakePin), hermes.key, keys.privateKey))
+        assertEquals(TestStepStatus.Failed, result[0].status)
+        assertTrue(result[0].detail!!.contains("指纹变了"), result[0].detail)
+
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes, pin = fakePin), hermes.key, keys.privateKey)
+        val state = repo.awaitState()
+        assertTrue(state is ConnectionState.Failed && state.reason.contains("指纹变了"), state.toString())
+        assertEquals(0, ssh.logins.get(), "指纹不对时绝不能把密钥/密码发过去")
+    }
+
+    @Test
+    fun wrongHermesPortIsExplained() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val profile = profile(ssh, hermes).copy(port = 1) // 远端没有服务
+        val result = steps(repo().testConnection(profile, hermes.key, keys.privateKey))
+        assertEquals(TestStepStatus.Passed, result[1].status)
+        assertEquals(TestStepStatus.Failed, result[2].status)
+        assertTrue(result[2].detail!!.contains("SSH 已登录"), result[2].detail)
+    }
+
+    @Test
+    fun tunnelReconnectsAfterSshServerRestart() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
+
+        // SSH 服务器重启（同一台机器，指纹不变）
+        val port = ssh.port
+        ssh.stop()
+        val restarted = sshd(TestSshServer(authorizedKey = keys.publicKey, hostKeyFile = ssh.hostKeyFile, port = port))
+        repo.onNetworkAvailable()
+
+        repo.sendMessage("s1", "重启之后", emptyList())
+        runBlocking {
+            withTimeout(15_000) {
+                repo.chatItems("s1").first { list -> list.any { it is ChatItem.Message && it.text == "最终回复：重启之后" } }
+            }
+        }
+        assertTrue(restarted.logins.get() >= 1, "隧道自动重新登录")
+        assertTrue(repo.connectionState.value is ConnectionState.Connected)
+    }
+}
