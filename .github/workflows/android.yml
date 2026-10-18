@@ -39,6 +39,9 @@ jobs:
           gradle-version: "8.14.3"
       - name: Install CJK font
         run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      - name: Gesture tests
+        working-directory: tools/ui-preview
+        run: gradle --no-daemon test
       - name: Render screenshots
         working-directory: tools/ui-preview
         run: gradle --no-daemon run

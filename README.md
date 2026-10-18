@@ -22,7 +22,8 @@
 - **液态玻璃**（`ui/glass/`，基于 [Kyant0/backdrop](https://github.com/Kyant0/AndroidLiquidGlass)）：悬浮底栏、底栏右侧的圆形操作按钮、聊天输入框、回到最新按钮是带折射和高光的玻璃；各页顶栏是磨砂玻璃，内容会滚到它们下面。
   - Android 13+：折射 + 模糊；Android 12：只有模糊；更早的系统退化为半透明底色。
 - **悬浮底栏**（`ui/main/FloatingTabBar.kt`）：切换 Tab 时选中块会像液体一样拉长再回弹；右侧圆形按钮随页面变化（聊天页是“新对话”，任务页是“新建任务”）。
-- **跟手返回动画**（`ui/navigation/Transitions.kt`）：系统返回手势拖动时，当前页缩小成圆角卡片并跟着手指移动，上一页从左侧滑回；松手完成返回，取消则弹回。
+- **跟手返回**（`ui/navigation/`）：在页面任意位置向右滑，页面实时跟着手指走（缩成圆角卡片），上一页从左侧露出；松手按位置和速度决定返回还是弹回。动画进行中手指按下会立刻接住页面，可以继续拖或推回去。不依赖系统是否支持预测性返回，任何机型都一样；支持预测性返回的系统，侧边返回手势也会实时驱动同一套动画。
+  - `tools/ui-preview/src/test` 里有模拟触摸的自动化测试，覆盖跟手、取消、中途接住、竖向滑动不误触、快速一甩、在真实聊天页上拖动。
 
 ## 代码结构
 
@@ -63,6 +64,7 @@ app/src/main/java/com/hermes/mobile/
 cd tools/ui-preview
 gradle run            # 截图输出到 tools/ui-preview/screenshots/
 gradle run --args="$(pwd)/screenshots chat"   # 只渲染名字里带 chat 的场景
+gradle test           # 返回手势的自动化测试
 ```
 
 在 Linux 上需要装一个中文字体（例如 `fonts-noto-cjk`），否则中文会显示成方块。

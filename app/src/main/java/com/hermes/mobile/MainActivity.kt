@@ -10,10 +10,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.fake.FakeHermesRepository
 import com.hermes.mobile.ui.HermesApp
+import com.hermes.mobile.ui.MainRoute
+import com.hermes.mobile.ui.navigation.Navigator
 
-/** 骨架阶段让假仓库跟着 ViewModel 活，转屏不丢状态。接入真实实现后改用依赖注入。 */
+/** 骨架阶段让假仓库和页面栈跟着 ViewModel 活，转屏不丢状态。接入真实实现后改用依赖注入。 */
 class AppViewModel : ViewModel() {
     val repository: HermesRepository = FakeHermesRepository(viewModelScope)
+    val navigator = Navigator(MainRoute)
 }
 
 class MainActivity : ComponentActivity() {
@@ -22,7 +25,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val app: AppViewModel = viewModel()
-            HermesApp(app.repository)
+            HermesApp(app.repository, app.navigator)
         }
     }
 }

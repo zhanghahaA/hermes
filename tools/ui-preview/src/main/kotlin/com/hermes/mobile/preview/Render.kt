@@ -46,6 +46,8 @@ import com.hermes.mobile.ui.chats.SheetAction
 import com.hermes.mobile.ui.jobs.JobEditorScreen
 import com.hermes.mobile.ui.main.MainScreen
 import com.hermes.mobile.ui.main.MainTab
+import com.hermes.mobile.ui.navigation.topPage
+import com.hermes.mobile.ui.navigation.underPage
 import com.hermes.mobile.ui.settings.ConnectionEditorScreen
 import com.hermes.mobile.ui.theme.HermesTheme
 import com.hermes.mobile.ui.welcome.WelcomeScreen
@@ -135,40 +137,14 @@ private val scenes = listOf(
     Scene("22-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
 )
 
-/**
- * 预测性返回手势进行到一半的静帧（示意）。数值和 ui/navigation/Transitions.kt 里的
- * backEnter / backExit / PredictiveBackCard 保持一致：当前页缩小、圆角、右移，上一页从左侧视差滑回。
- */
+/** 向右滑返回拖到一半的静帧，用的就是 SwipeBackHost 里的同一套页面变换。 */
 @Composable
 private fun PredictiveBackStill(repo: HermesRepository, progress: Float) {
-    val eased = androidx.compose.animation.core.CubicBezierEasing(0.2f, 0f, 0f, 1f).transform(progress)
-    val late = androidx.compose.animation.core.CubicBezierEasing(0.55f, 0f, 1f, 1f).transform(progress)
     Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    translationX = -size.width / 4f * (1f - eased)
-                    val s = 0.96f + 0.04f * eased
-                    scaleX = s
-                    scaleY = s
-                    alpha = 0.6f + 0.4f * progress
-                },
-        ) { mainScreen(repo, MainTab.Chats)() }
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    val s = 1f - 0.14f * eased
-                    scaleX = s
-                    scaleY = s
-                    translationX = size.width * late
-                    shape = RoundedCornerShape((32 * progress).dp)
-                    clip = true
-                    shadowElevation = 24.dp.toPx() * progress
-                }
-                .background(MaterialTheme.colorScheme.background),
-        ) { ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) }
+        Box(Modifier.fillMaxSize().underPage { progress }) { mainScreen(repo, MainTab.Chats)() }
+        Box(Modifier.fillMaxSize().topPage { progress }.background(MaterialTheme.colorScheme.background)) {
+            ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {})
+        }
     }
 }
 

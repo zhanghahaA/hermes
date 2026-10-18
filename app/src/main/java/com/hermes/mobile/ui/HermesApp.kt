@@ -20,29 +20,22 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.navigation.compose.NavHost
-import androidx.navigation.compose.rememberNavController
-import androidx.navigation.toRoute
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.ui.chat.ChatScreen
 import com.hermes.mobile.ui.jobs.JobEditorScreen
 import com.hermes.mobile.ui.main.MainScreen
-import com.hermes.mobile.ui.navigation.backEnter
-import com.hermes.mobile.ui.navigation.backExit
-import com.hermes.mobile.ui.navigation.forwardEnter
-import com.hermes.mobile.ui.navigation.forwardExit
-import com.hermes.mobile.ui.navigation.screen
+import com.hermes.mobile.ui.navigation.Navigator
+import com.hermes.mobile.ui.navigation.SwipeBackHost
 import com.hermes.mobile.ui.settings.ConnectionEditorScreen
 import com.hermes.mobile.ui.theme.HermesTheme
 import com.hermes.mobile.ui.welcome.WelcomeScreen
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
 
-@Serializable data object MainRoute
-@Serializable data object WelcomeRoute
-@Serializable data class ChatRoute(val sessionId: String)
-@Serializable data class ConnectionEditRoute(val connectionId: String? = null, val type: String? = null)
-@Serializable data class JobEditRoute(val jobId: String? = null)
+data object MainRoute
+data object WelcomeRoute
+data class ChatRoute(val sessionId: String)
+data class ConnectionEditRoute(val connectionId: String? = null, val type: String? = null)
+data class JobEditRoute(val jobId: String? = null)
 
 /** 全局轻提示，主要用来标注“这个功能还是占位”。 */
 val LocalShowMessage = staticCompositionLocalOf<(String) -> Unit> { {} }
@@ -55,7 +48,7 @@ fun rememberPlaceholder(): (String) -> Unit {
 }
 
 @Composable
-fun HermesApp(repository: HermesRepository) {
+fun HermesApp(repository: HermesRepository, navigator: Navigator) {
     val settings by repository.settings.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -72,7 +65,7 @@ fun HermesApp(repository: HermesRepository) {
         CompositionLocalProvider(LocalShowMessage provides showMessage) {
             Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
-                    HermesNavHost(repository)
+                    HermesNavHost(repository, navigator)
                     SnackbarHost(
                         snackbarHostState,
                         modifier = Modifier
@@ -88,59 +81,36 @@ fun HermesApp(repository: HermesRepository) {
 }
 
 @Composable
-private fun HermesNavHost(repository: HermesRepository) {
-    val navController = rememberNavController()
-
-    NavHost(
-        navController = navController,
-        startDestination = MainRoute,
-        enterTransition = forwardEnter,
-        exitTransition = forwardExit,
-        popEnterTransition = backEnter,
-        popExitTransition = backExit,
-    ) {
-        screen<MainRoute> {
-            MainScreen(
+private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
+    SwipeBackHost(navigator) { route ->
+        when (route) {
+            MainRoute -> MainScreen(
                 repository = repository,
-                onOpenChat = { navController.navigate(ChatRoute(it)) },
-                onEditConnection = { id -> navController.navigate(ConnectionEditRoute(id)) },
-                onEditJob = { id -> navController.navigate(JobEditRoute(id)) },
-                onOpenWelcome = { navController.navigate(WelcomeRoute) },
+                onOpenChat = { navigator.push(ChatRoute(it)) },
+                onEditConnection = { id -> navigator.push(ConnectionEditRoute(id)) },
+                onEditJob = { id -> navigator.push(JobEditRoute(id)) },
+                onOpenWelcome = { navigator.push(WelcomeRoute) },
             )
-        }
-        screen<ChatRoute> { entry ->
-            val route = entry.toRoute<ChatRoute>()
-            ChatScreen(
+            is ChatRoute -> ChatScreen(
                 repository = repository,
                 sessionId = route.sessionId,
-                onBack = { navController.popBackStack() },
-                onOpenChat = { id ->
-                    navController.navigate(ChatRoute(id)) { popUpTo<MainRoute>() }
-                },
+                onBack = navigator::pop,
+                onOpenChat = { id -> navigator.push(ChatRoute(id), clearAboveRoot = true) },
             )
-        }
-        screen<ConnectionEditRoute> { entry ->
-            val route = entry.toRoute<ConnectionEditRoute>()
-            ConnectionEditorScreen(
+            is ConnectionEditRoute -> ConnectionEditorScreen(
                 repository = repository,
                 connectionId = route.connectionId,
                 initialType = route.type,
-                onClose = { navController.popBackStack() },
+                onClose = navigator::pop,
             )
-        }
-        screen<JobEditRoute> { entry ->
-            JobEditorScreen(
+            is JobEditRoute -> JobEditorScreen(
                 repository = repository,
-                jobId = entry.toRoute<JobEditRoute>().jobId,
-                onClose = { navController.popBackStack() },
+                jobId = route.jobId,
+                onClose = navigator::pop,
             )
-        }
-        screen<WelcomeRoute> {
-            WelcomeScreen(
-                onPickType = { type ->
-                    navController.navigate(ConnectionEditRoute(type = type.name)) { popUpTo<MainRoute>() }
-                },
-                onSkip = { navController.popBackStack() },
+            WelcomeRoute -> WelcomeScreen(
+                onPickType = { type -> navigator.push(ConnectionEditRoute(type = type.name), clearAboveRoot = true) },
+                onSkip = navigator::pop,
             )
         }
     }
