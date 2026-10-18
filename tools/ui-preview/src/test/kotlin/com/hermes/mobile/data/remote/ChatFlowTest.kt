@@ -1,5 +1,6 @@
 package com.hermes.mobile.data.remote
 
+import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionState
@@ -25,6 +26,7 @@ import java.util.Collections
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -44,8 +46,10 @@ class ChatFlowTest {
     private fun FakeHermesServer.profile() =
         ConnectionProfile(id = "c1", name = "测试", type = ConnectionType.Direct, host = server.hostName, port = server.port)
 
+    private val mediaDir = kotlin.io.path.createTempDirectory("media").toFile()
+
     private fun connected(s: FakeHermesServer, store: MemoryLocalStore = MemoryLocalStore()): RemoteHermesRepository {
-        val repo = RemoteHermesRepository(scope, store, FakeSecretBox(), backoff = { 50L })
+        val repo = RemoteHermesRepository(scope, store, FakeSecretBox(), mediaDir = mediaDir, backoff = { 50L })
         if (store.state?.connections.isNullOrEmpty()) repo.saveConnection(s.profile(), s.key)
         runBlocking { withTimeout(10_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
         runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
@@ -242,5 +246,56 @@ class ChatFlowTest {
         assertEquals(1, card.size, "事件重放和状态查询不能产生两张卡片")
         repo.resolveApproval("s1", card.single().id, "deny")
         repo.chatItems("s1").await("拒绝后的回复") { list -> list.texts().any { it.second == "好的，不执行了。" } }
+    }
+
+    /** 和手机上一样：图片按内容的 SHA-256 存进缓存目录。 */
+    private fun cachedImage(color: Int): Attachment.Image {
+        val image = java.awt.image.BufferedImage(40, 20, java.awt.image.BufferedImage.TYPE_INT_RGB)
+        for (x in 0 until 40) for (y in 0 until 20) image.setRGB(x, y, color)
+        val bytes = java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(image, "jpg", it) }.toByteArray()
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val file = java.io.File(mediaDir, "$sha.jpg").apply { writeBytes(bytes) }
+        return Attachment.Image("img-$color", file.path, 2f)
+    }
+
+    @Test
+    fun imagesAndFilesAreSentAndComeBackFromHistory() {
+        val s = server()
+        val repo = connected(s)
+        val red = cachedImage(0xff0000)
+        val blue = cachedImage(0x0000ff)
+        val notes = Attachment.TextFile("t1", "notes.md", "# 标题\n```\ncode\n```", 30L)
+        repo.sendMessage("s1", "看看这些", listOf(red, blue, notes))
+
+        // 发送中：自己的气泡立刻显示图片和文件卡片
+        val sending = repo.chatItems("s1").await("本地气泡") { list -> list.any { it is ChatItem.Message && it.text == "看看这些" } }
+            .filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+        assertEquals(listOf(red.path, blue.path), sending.images.map { it.source })
+        assertEquals(listOf("notes.md"), sending.files.map { it.name })
+
+        val final = repo.chatItems("s1").await("对齐后的记录") { list ->
+            list.texts().any { it.second == "收到 2 张图片" } &&
+                list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+        }
+        val request = s.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
+        assertTrue(request.contains("\"type\":\"image_url\"") && request.contains("data:image/jpeg;base64,"), request.take(300))
+        assertTrue(request.contains("📎 附件：notes.md"), "文本文件的内容放进消息")
+
+        // 从服务器记录里拆回来：正文干净，图片指回本机缓存，文件变成卡片
+        val mine = final.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+        assertEquals("看看这些", mine.text)
+        assertEquals(listOf(red.path, blue.path), mine.images.map { it.source }, "按 SHA-256 找回本机缓存的原图")
+        assertEquals(listOf("notes.md"), mine.files.map { it.name })
+    }
+
+    @Test
+    fun otherFilesNeedSshOrLocal() {
+        val s = server()
+        val repo = connected(s)
+        assertFalse(repo.canSendAnyFile(), "直连不能发任意文件")
+        val tmp = java.io.File.createTempFile("upload", ".zip").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        repo.sendMessage("s1", "压缩包", listOf(Attachment.BinaryFile("z", "a.zip", "application/zip", tmp.path, 3L)))
+        repo.chatItems("s1").await("发送失败") { list -> list.filterIsInstance<ChatItem.Message>().any { it.status == DeliveryStatus.Failed } }
+        assertTrue(s.requests.none { it.path == "/v1/runs" }, "不能发的文件不提交")
     }
 }

@@ -35,7 +35,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
      * 默认：思考 → 一段过程中的话 → 工具 → 最终回复；“审批”：先要审批，批准后才回复；
      * “断线”：第一次事件流只发一半就断；“慢”：一直不结束，直到被停止。
      */
-    inner class FakeRun(val id: String, val sessionId: String, val input: String) {
+    inner class FakeRun(val id: String, val sessionId: String, val input: String, val imageShas: List<String> = emptyList()) {
         val events = mutableListOf<String>()
         var approved: String? = null
         var stopped = false
@@ -71,10 +71,16 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
         }
 
         fun complete() {
-            val reply = if (approved == "deny") "好的，不执行了。" else "最终回复：$input"
+            val reply = when {
+                approved == "deny" -> "好的，不执行了。"
+                imageShas.isNotEmpty() -> "收到 ${imageShas.size} 张图片"
+                else -> "最终回复：$input"
+            }
+            // 和真实 Hermes 一样：图片存到服务器，聊天记录里只记路径
+            val stored = input + imageShas.joinToString("") { "\n\n[Image attached at: /srv/hermes/cache/documents/native-inputs/$it/api_${it.take(32)}.jpg]\n[screenshot]" }
             add("run.completed", "\"output\":\"$reply\"")
             messages.getOrPut(sessionId) { mutableListOf() }.apply {
-                add("""{"id":${size + 100},"role":"user","content":"${input.replace("\n", "\\n")}","timestamp":1760009000}""")
+                add("""{"id":${size + 100},"role":"user","content":${kotlinx.serialization.json.JsonPrimitive(stored)},"timestamp":1760009000}""")
                 add("""{"id":${size + 100},"role":"assistant","content":"","reasoning":"SECRET-THINKING","finish_reason":"tool_calls","timestamp":1760009001}""")
                 add("""{"id":${size + 100},"role":"assistant","content":"$reply","reasoning_content":"SECRET-THINKING","finish_reason":"stop","timestamp":1760009002}""")
             }
@@ -156,12 +162,31 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 }
                 val obj = HermesJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
                 val sessionId = (obj["session_id"] as kotlinx.serialization.json.JsonPrimitive).content
-                val input = (obj["input"] as kotlinx.serialization.json.JsonPrimitive).content
+                // input 是字符串，或者 [{"role":"user","content":[{"type":"text",...},{"type":"image_url",...}]}]
+                val (input, shas) = when (val raw = obj["input"]) {
+                    is kotlinx.serialization.json.JsonPrimitive -> raw.content to emptyList()
+                    is kotlinx.serialization.json.JsonArray -> {
+                        val parts = (raw.last() as kotlinx.serialization.json.JsonObject)["content"] as kotlinx.serialization.json.JsonArray
+                        val text = parts.mapNotNull { p ->
+                            val o = p as kotlinx.serialization.json.JsonObject
+                            if ((o["type"] as kotlinx.serialization.json.JsonPrimitive).content == "text") (o["text"] as kotlinx.serialization.json.JsonPrimitive).content else null
+                        }.joinToString("\n")
+                        val images = parts.mapNotNull { p ->
+                            val o = p as kotlinx.serialization.json.JsonObject
+                            val url = ((o["image_url"] as? kotlinx.serialization.json.JsonObject)?.get("url") as? kotlinx.serialization.json.JsonPrimitive)?.content
+                            url?.substringAfter(",")?.let { b64 ->
+                                java.security.MessageDigest.getInstance("SHA-256").digest(java.util.Base64.getDecoder().decode(b64)).joinToString("") { "%02x".format(it) }
+                            }
+                        }
+                        text to images
+                    }
+                    else -> return@synchronized error(400, "Missing 'input' field")
+                }
                 if (sessionId == "s2") return@synchronized error(409, "permission denied", "permission_denied")
                 // 同一个幂等键返回同一轮
                 val key = request.getHeader("Idempotency-Key")
                 val existing = runs.values.firstOrNull { it.idempotencyKey == key && key != null }
-                val run = existing ?: FakeRun("run_${++nextRun}", sessionId, input).also { it.idempotencyKey = key; runs[it.id] = it }
+                val run = existing ?: FakeRun("run_${++nextRun}", sessionId, input, shas).also { it.idempotencyKey = key; runs[it.id] = it }
                 json("""{"run_id":"${run.id}","status":"started"}""", 202)
             }
             path.startsWith("/v1/runs/") -> {

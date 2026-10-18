@@ -1,6 +1,17 @@
 package com.hermes.mobile.data.remote
 
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.model.Attachment
+import com.hermes.mobile.data.model.MaxImagesPerMessage
+import com.hermes.mobile.data.model.displayFiles
+import com.hermes.mobile.data.model.displayImages
+import com.hermes.mobile.data.model.imageCount
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import java.io.File
+import java.util.Base64
 import com.hermes.mobile.data.model.AppFeature
 import com.hermes.mobile.data.model.AppSettings
 import com.hermes.mobile.data.model.ChatItem
@@ -11,7 +22,6 @@ import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.ConnectionType
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.DeliveryStatus
-import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.ModelOption
 import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.Role
@@ -69,6 +79,16 @@ class RemoteHermesRepository(
     private val clientFactory: (baseUrl: String, apiKey: String?, profile: String?) -> HermesClient =
         { url, key, profile -> HermesClient(url, key, profile) },
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * 发过的图片缓存在这里，文件名是内容的 SHA-256（和 Hermes 服务器上的目录名一致），
+     * 读聊天记录时据此找回原图。为 null 时历史里的图片显示占位块。
+     */
+    private val mediaDir: File? = null,
+    /**
+     * 本机 Termux 连接发普通文件时，把文件存到 Termux 也能读到的地方（Android 上是“下载/Hermes”），
+     * 返回 Termux 里看到的路径；不支持时返回 null。
+     */
+    private val localFileExporter: ((path: String, name: String, mime: String) -> String?)? = null,
     /** 断线重连的等待时间（毫秒），第 n 次失败等多久。测试里调短。 */
     private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
 ) : HermesRepository {
@@ -634,7 +654,7 @@ class RemoteHermesRepository(
         if (capabilities?.sessionMessages == false) return
         try {
             val now = clock()
-            val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now) }.linkQuotes()
+            val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now, ::cachedImage) }.linkQuotes()
             val running = runs.containsKey(sessionId)
             updateChat(sessionId) { st -> st.copy(server = items, local = st.local.reconcile(items, running), loaded = true) }
         } catch (e: HermesError) {
@@ -670,7 +690,21 @@ class RemoteHermesRepository(
     private val controls = ConcurrentHashMap<String, Pair<String, ControlRequest>>()
 
     /** 还没被服务器接受的消息：本地消息 id → (界面上的会话 id, 发出去的全文)。重发时用同一个 id 做幂等键。 */
-    private val outbox = ConcurrentHashMap<String, Pair<String, String>>()
+    private val outbox = ConcurrentHashMap<String, Outgoing>()
+
+    /** 一条待发送的消息。附件在真正提交时才变成请求内容（图片转 data URL、文件上传），重试时再来一遍。 */
+    private data class Outgoing(val uiId: String, val text: String, val attachments: List<Attachment>, val quote: Quote?)
+
+    /** 本机缓存里的图片（按 SHA-256 找）。 */
+    private fun cachedImage(sha256: String): String? {
+        val dir = mediaDir ?: return null
+        return ImageExtensions.asSequence().map { File(dir, "$sha256.$it") }.firstOrNull { it.isFile }?.path
+    }
+
+    override fun canSendAnyFile(): Boolean {
+        val profile = _connections.value.firstOrNull { it.id == connectedId } ?: return false
+        return profile.type == ConnectionType.Ssh || (profile.type == ConnectionType.Local && localFileExporter != null)
+    }
 
     private fun publishRuns() {
         _activeRuns.value = runs.keys.toSet()
@@ -681,14 +715,19 @@ class RemoteHermesRepository(
         }
     }
 
-    override fun sendMessage(sessionId: String, text: String, images: List<ImageRef>, quote: Quote?) {
-        if (images.isNotEmpty()) _errors.tryEmit("发送图片在后续阶段接入，这次只发文字")
-        if (text.isBlank()) return
+    override fun sendMessage(sessionId: String, text: String, attachments: List<Attachment>, quote: Quote?) {
+        if (text.isBlank() && attachments.isEmpty()) return
         val localId = "local-" + UUID.randomUUID()
         val key = resolve(sessionId)
-        val message = ChatItem.Message(localId, clock(), Role.User, text.trim(), quote = quote, status = DeliveryStatus.Sending)
+        val message = ChatItem.Message(
+            localId, clock(), Role.User, text.trim(),
+            images = attachments.displayImages(),
+            quote = quote,
+            status = DeliveryStatus.Sending,
+            files = attachments.displayFiles(),
+        )
         updateChat(key) { it.copy(local = it.local + LocalEntry(message, it.messageCount), phase = RunPhase.Working, streaming = null) }
-        outbox[localId] = sessionId to quotedInput(quote, text.trim())
+        outbox[localId] = Outgoing(sessionId, text.trim(), attachments, quote)
         runScope.launch { submit(localId) }
     }
 
@@ -696,22 +735,27 @@ class RemoteHermesRepository(
         val key = resolve(sessionId)
         val message = chats.value[key]?.local?.firstNotNullOfOrNull { (it.item as? ChatItem.Message)?.takeIf { m -> m.id == itemId } } ?: return
         if (message.status != DeliveryStatus.Failed || runs.containsKey(key)) return
-        outbox.putIfAbsent(itemId, sessionId to quotedInput(message.quote, message.text))
+        // App 重启过的话附件已经丢了，只能重发文字
+        outbox.putIfAbsent(itemId, Outgoing(sessionId, message.text, emptyList(), message.quote))
         setLocalStatus(key, itemId, DeliveryStatus.Sending)
         updateChat(key) { it.copy(phase = RunPhase.Working) }
         runScope.launch { submit(itemId) }
     }
 
     private suspend fun submit(localId: String) {
-        val (uiId, input) = outbox[localId] ?: return
+        val out = outbox[localId] ?: return
+        val uiId = out.uiId
         try {
             val c = client ?: throw HermesError.Unreachable("还没连上 Hermes")
             val sessionId = ensureServerSession(uiId)
+            val input = buildInput(out)
             val accepted = withRetry { c.startRun(sessionId, input, idempotencyKey = localId) }
             val runId = accepted.run_id ?: throw HermesError.NotHermes()
             outbox.remove(localId)
             setLocalStatus(sessionId, localId, DeliveryStatus.Sent)
-            updateSession(sessionId) { it.copy(preview = input.lineSequence().last().take(80), updatedAt = clock()) }
+            val preview = out.text.lineSequence().lastOrNull { it.isNotBlank() }?.take(80)
+                ?: if (out.attachments.imageCount() > 0) "[图片]" else "[文件]"
+            updateSession(sessionId) { it.copy(preview = preview, updatedAt = clock()) }
             track(sessionId, runId, fromSeq = -1)
         } catch (e: CancellationException) {
             throw e
@@ -720,6 +764,64 @@ class RemoteHermesRepository(
             setLocalStatus(key, localId, DeliveryStatus.Failed)
             updateChat(key) { it.copy(phase = RunPhase.Idle) }
             _errors.tryEmit(sendErrorText(key, e))
+        }
+    }
+
+    /**
+     * 消息 + 附件 → `/v1/runs` 的 input。只有文字时是字符串；有图片时是
+     * `[{"role":"user","content":[{"type":"text",...},{"type":"image_url",...}]}]`。
+     */
+    private suspend fun buildInput(out: Outgoing): JsonElement = withContext(Dispatchers.IO) {
+        val blocks = mutableListOf<String>()
+        val images = mutableListOf<Attachment.Image>()
+        for (attachment in out.attachments) {
+            when (attachment) {
+                is Attachment.Image -> images += attachment
+                is Attachment.Pdf -> {
+                    images += attachment.pages
+                    blocks += AttachmentText.pdf(attachment.name, attachment.totalPages, attachment.pages.size)
+                }
+                is Attachment.TextFile -> blocks += AttachmentText.textFile(attachment.name, attachment.text)
+                is Attachment.BinaryFile -> blocks += AttachmentText.uploaded(attachment.name, deliverFile(attachment))
+            }
+        }
+        if (images.size > MaxImagesPerMessage) throw HermesError.BadUrl("一条消息最多 $MaxImagesPerMessage 张图片（PDF 每页算一张）")
+        val text = (listOf(quotedInput(out.quote, out.text)) + blocks).filter { it.isNotBlank() }.joinToString("\n\n")
+        if (images.isEmpty()) return@withContext JsonPrimitive(text)
+        buildJsonArray {
+            add(buildJsonObject {
+                put("role", "user")
+                put("content", buildJsonArray {
+                    if (text.isNotBlank()) add(buildJsonObject { put("type", "text"); put("text", text) })
+                    images.forEach { image ->
+                        val file = File(image.path)
+                        if (!file.isFile) throw HermesError.BadUrl("图片文件不见了，请重新选择")
+                        val url = "data:${mimeOf(file.name)};base64," + Base64.getEncoder().encodeToString(file.readBytes())
+                        add(buildJsonObject {
+                            put("type", "image_url")
+                            put("image_url", buildJsonObject { put("url", url) })
+                        })
+                    }
+                })
+            })
+        }
+    }
+
+    /** 普通文件交给 Hermes：SSH 上传到服务器，本机 Termux 存到下载目录。返回 Hermes 那边能读到的路径。 */
+    private fun deliverFile(file: Attachment.BinaryFile): String {
+        val profile = _connections.value.firstOrNull { it.id == connectedId }
+        return when (profile?.type) {
+            ConnectionType.Ssh -> {
+                val t = tunnel ?: throw HermesError.Ssh("SSH 隧道没连上")
+                try {
+                    t.upload(file.path, file.name)
+                } catch (e: Exception) {
+                    throw HermesError.Ssh("文件上传失败：${e.message}")
+                }
+            }
+            ConnectionType.Local -> localFileExporter?.invoke(file.path, file.name, file.mime)
+                ?: throw HermesError.NotSupported("把文件交给本机 Termux")
+            else -> throw HermesError.NotSupported("发送这种文件（直连和 HTTPS 只能发图片、PDF 和文本文件，其它文件请用 SSH 连接）")
         }
     }
 
@@ -1081,6 +1183,14 @@ class RemoteHermesRepository(
 
     private companion object {
         const val DraftPrefix = "draft-"
+        val ImageExtensions = listOf("jpg", "png", "webp", "gif")
+
+        fun mimeOf(name: String): String = when (name.substringAfterLast('.').lowercase()) {
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            else -> "image/jpeg"
+        }
         /** 加密保存 SSH 私钥/密码时用的键：`ssh:<连接 id>`。 */
         const val SshSecretPrefix = "ssh:"
         val ApprovalOrder = listOf("once", "session", "always", "deny")

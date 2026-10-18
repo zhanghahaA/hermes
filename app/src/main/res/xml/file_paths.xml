@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 拍照时相机把照片写到这里（App 自己的缓存目录） -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>

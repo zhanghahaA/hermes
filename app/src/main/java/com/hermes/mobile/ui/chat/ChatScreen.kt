@@ -62,7 +62,11 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.ChatItem
+import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.ImageRef
+import com.hermes.mobile.data.model.MaxImagesPerMessage
+import com.hermes.mobile.data.model.imageCount
+import com.hermes.mobile.platform.rememberAttachmentPickers
 import com.hermes.mobile.data.model.Role
 import com.hermes.mobile.data.model.RunPhase
 import com.hermes.mobile.data.model.Session
@@ -140,7 +144,8 @@ fun ChatScreen(
     val features by repository.features.collectAsState()
 
     var draft by rememberSaveable(sessionId) { mutableStateOf("") }
-    var attachments by remember(sessionId) { mutableStateOf(listOf<ImageRef>()) }
+    var attachments by remember(sessionId) { mutableStateOf(listOf<Attachment>()) }
+    var viewing by remember { mutableStateOf<ImageRef?>(null) }
     var showModels by remember { mutableStateOf(false) }
     var showAttach by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -160,6 +165,26 @@ fun ChatScreen(
     val rows = remember(items, phase, streaming, settings.showTyping) {
         buildRows(items, phase, streaming, settings.showTyping).asReversed()
     }
+
+    /** 新选的附件：超过图片上限的丢掉，当前连接发不了的文件提示一下。 */
+    fun addAttachments(added: List<Attachment>) {
+        var accepted = added
+        if (!repository.canSendAnyFile() && accepted.any { it is Attachment.BinaryFile }) {
+            accepted = accepted.filterNot { it is Attachment.BinaryFile }
+            showMessage("直连和 HTTPS 只能发图片、PDF 和文本类文件；其它文件需要 SSH 或本机 Termux 连接")
+        }
+        val room = MaxImagesPerMessage - attachments.imageCount()
+        if (accepted.imageCount() > room) {
+            showMessage("一条消息最多 $MaxImagesPerMessage 张图片（PDF 每页算一张）")
+            var left = room
+            accepted = accepted.filter { a ->
+                val n = listOf(a).imageCount()
+                (n <= left).also { if (it) left -= n }
+            }
+        }
+        attachments = attachments + accepted
+    }
+    val pickers = rememberAttachmentPickers(onAdd = ::addAttachments, onError = showMessage)
 
     fun send() {
         repository.sendMessage(sessionId, draft.trim(), attachments, quote)
@@ -196,6 +221,7 @@ fun ChatScreen(
     var bottomBarHeight by remember { mutableIntStateOf(0) }
     val bottomBarSpace = with(density) { bottomBarHeight.toDp() }
 
+    CompositionLocalProvider(LocalOpenImage provides { viewing = it }) {
     Scaffold(
         contentWindowInsets = NoInsets,
         topBar = {
@@ -311,6 +337,7 @@ fun ChatScreen(
             }
         }
     }
+    }
 
     if (showModels) {
         ModelPickerSheet(
@@ -328,18 +355,23 @@ fun ChatScreen(
         AttachSheet(
             onPickPhotos = {
                 showAttach = false
-                // 占位：真实实现用系统 Photo Picker
-                attachments = attachments + listOf(
-                    ImageRef("pick-${attachments.size}-a", (0..360).random().toFloat(), 1.3f),
-                    ImageRef("pick-${attachments.size}-b", (0..360).random().toFloat(), 0.8f),
-                )
+                pickers.pickPhotos()
             },
             onCamera = {
                 showAttach = false
-                placeholder("拍照")
+                pickers.takePhoto()
             },
+            onPickFiles = {
+                showAttach = false
+                pickers.pickFiles()
+            },
+            anyFile = repository.canSendAnyFile(),
             onDismiss = { showAttach = false },
         )
+    }
+
+    viewing?.let { image ->
+        ImageViewer(image, onDismiss = { viewing = null })
     }
 
     if (showRename) {

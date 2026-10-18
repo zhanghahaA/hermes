@@ -232,4 +232,58 @@ class RealHermesIT {
             scope.cancel()
         }
     }
+
+    /** 阶段 4：图片和文本文件发给真实 Hermes；读回聊天记录时图片能从本机缓存找回来。 */
+    @Test
+    fun imagesAndFilesToRealHermes() {
+        if (host == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_HOST / HERMES_IT_KEY")
+            return
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val media = kotlin.io.path.createTempDirectory("media").toFile()
+        try {
+            val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), mediaDir = media)
+            repo.saveConnection(ConnectionProfile("real", "真实 Hermes", ConnectionType.Direct, host, port), key)
+            runBlocking { withTimeout(15_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
+
+            fun jpeg(color: Int): com.hermes.mobile.data.model.Attachment.Image {
+                val img = java.awt.image.BufferedImage(64, 32, java.awt.image.BufferedImage.TYPE_INT_RGB)
+                for (x in 0 until 64) for (y in 0 until 32) img.setRGB(x, y, color)
+                val bytes = java.io.ByteArrayOutputStream().also { javax.imageio.ImageIO.write(img, "jpg", it) }.toByteArray()
+                val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+                val f = java.io.File(media, "$sha.jpg").apply { writeBytes(bytes) }
+                return com.hermes.mobile.data.model.Attachment.Image("i$color", f.path, 2f)
+            }
+            val red = jpeg(0xff0000)
+            val green = jpeg(0x00ff00)
+            val csv = com.hermes.mobile.data.model.Attachment.TextFile("t", "数据.csv", "名字,数量\n苹果,3\n", 30)
+            val chat = repo.createSession()!!
+            repo.sendMessage(chat, "看看这两张图和表格", listOf(red, green, csv))
+            val items = runBlocking {
+                withTimeout(90_000) {
+                    repo.chatItems(chat).first { list ->
+                        list.any { it is ChatItem.Message && it.role == Role.Assistant } &&
+                            list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+                    }
+                }
+            }
+            val messages = items.filterIsInstance<ChatItem.Message>()
+            println("Hermes 回复：" + messages.filter { it.role == Role.Assistant }.map { it.text.take(80) })
+            val mine = messages.first { it.role == Role.User }
+            println("读回的用户消息：text=${mine.text} images=${mine.images.map { it.source?.substringAfterLast('/') }} files=${mine.files}")
+            // 模型不支持看图时，Hermes 先让视觉辅助模型描述图片，再把描述交给主模型
+            assertTrue(
+                messages.any { it.role == Role.Assistant && (it.text.contains("收到 2 张图片") || it.text.contains("attached an image")) },
+                "图片到了 Hermes",
+            )
+            assertEquals("看看这两张图和表格", mine.text, "记录里的图片路径和文件内容不显示在正文里")
+            assertEquals(listOf(red.path, green.path), mine.images.map { it.source }, "按 SHA-256 找回本机缓存的原图")
+            assertEquals(listOf("数据.csv"), mine.files.map { it.name })
+            runBlocking { repo.session(chat).first() }?.id?.let(repo::deleteSession)
+            Thread.sleep(1000)
+        } finally {
+            scope.cancel()
+        }
+    }
 }

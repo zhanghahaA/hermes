@@ -28,6 +28,7 @@ sourceSets {
                 "com/hermes/mobile/HermesApplication.kt",
                 "com/hermes/mobile/platform/RunService.kt",
                 "com/hermes/mobile/platform/ReplyNotifier.kt",
+                "com/hermes/mobile/platform/AttachmentImport.kt",
                 "com/hermes/mobile/platform/Platform.kt",
                 "com/hermes/mobile/platform/AndroidStorage.kt",
             )
@@ -51,6 +52,7 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
     // 测试里起一个真正的 SSH 服务器，验证隧道
     testImplementation("org.apache.sshd:sshd-core:2.20.0")
+    testImplementation("org.apache.sshd:sshd-sftp:2.20.0")
     testImplementation("org.slf4j:slf4j-simple:2.0.17")
     @OptIn(org.jetbrains.compose.ExperimentalComposeLibrary::class)
     testImplementation(compose.uiTest)

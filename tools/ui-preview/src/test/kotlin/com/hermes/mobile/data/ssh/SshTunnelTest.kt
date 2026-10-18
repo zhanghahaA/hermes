@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlin.test.AfterTest
@@ -179,5 +180,39 @@ class SshTunnelTest {
         }
         assertTrue(restarted.logins.get() >= 1, "隧道自动重新登录")
         assertTrue(repo.connectionState.value is ConnectionState.Connected)
+    }
+
+    @Test
+    fun otherFilesAreUploadedOverSftp() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
+        assertTrue(repo.canSendAnyFile(), "SSH 连接可以发任意文件")
+
+        val errors = java.util.Collections.synchronizedList(mutableListOf<String>())
+        scope.launch { repo.errors.collect { errors += it } }
+        val bytes = ByteArray(300_000) { (it % 251).toByte() }
+        val local = java.io.File.createTempFile("upload", ".zip").apply { writeBytes(bytes) }
+        repo.sendMessage("s1", "解压看看", listOf(com.hermes.mobile.data.model.Attachment.BinaryFile("b1", "数据 包.zip", "application/zip", local.path, bytes.size.toLong())))
+        val items = runBlocking {
+            kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                repo.chatItems("s1").first { list ->
+                    list.any { it is ChatItem.Message && it.role == Role.Assistant && it.text.startsWith("最终回复：解压看看") } &&
+                        list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+                }
+            }
+        } ?: throw AssertionError("没等到回复。错误：$errors；现在：${runBlocking { repo.chatItems("s1").first() }.takeLast(3)}")
+        val uploaded = java.nio.file.Files.list(ssh.home.resolve("hermes-uploads")).use { it.toList() }.single()
+        assertTrue(uploaded.fileName.toString().endsWith(".zip"), uploaded.toString())
+        assertTrue(java.nio.file.Files.readAllBytes(uploaded).contentEquals(bytes), "上传的内容完整")
+        val input = hermes.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
+        assertTrue(input.contains("📎 附件：数据 包.zip（已保存到 /hermes-uploads/"), input)
+        val mine = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+        assertEquals("解压看看", mine.text)
+        assertEquals("数据 包.zip", mine.files.single().name, "气泡里显示原文件名")
+        assertTrue(mine.files.single().note!!.startsWith("已上传：/hermes-uploads/"), mine.files.single().note)
     }
 }

@@ -10,7 +10,9 @@ import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.ConnectionType
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.DeliveryStatus
-import com.hermes.mobile.data.model.ImageRef
+import com.hermes.mobile.data.model.Attachment
+import com.hermes.mobile.data.model.displayFiles
+import com.hermes.mobile.data.model.displayImages
 import com.hermes.mobile.data.model.JobRunResult
 import com.hermes.mobile.data.model.ModelOption
 import com.hermes.mobile.data.model.Quote
@@ -177,12 +179,13 @@ class FakeHermesRepository(
         updateSession(sessionId) { it.copy(running = phase == RunPhase.Working) }
     }
 
-    override fun sendMessage(sessionId: String, text: String, images: List<ImageRef>, quote: Quote?) {
-        val message = ChatItem.Message(newId("m"), clock(), Role.User, text, images, DeliveryStatus.Sending, quote)
+    override fun sendMessage(sessionId: String, text: String, attachments: List<Attachment>, quote: Quote?) {
+        val images = attachments.displayImages()
+        val message = ChatItem.Message(newId("m"), clock(), Role.User, text, images, DeliveryStatus.Sending, quote = quote, files = attachments.displayFiles())
         editItems(sessionId) { it + message }
         updateSession(sessionId) { session ->
             session.copy(
-                preview = text.ifBlank { "[图片]" },
+                preview = text.ifBlank { if (images.isNotEmpty()) "[图片]" else "[文件]" },
                 updatedAt = clock(),
                 title = if (session.title == "新对话" && text.isNotBlank()) text.take(16) else session.title,
             )
@@ -210,7 +213,7 @@ class FakeHermesRepository(
     override fun retryMessage(sessionId: String, itemId: String) {
         val failed = itemsOf(sessionId).firstOrNull { it.id == itemId } as? ChatItem.Message ?: return
         editItems(sessionId) { list -> list.filterNot { it.id == itemId } }
-        sendMessage(sessionId, failed.text, failed.images, failed.quote)
+        sendMessage(sessionId, failed.text, emptyList(), failed.quote)
     }
 
     override fun regenerate(sessionId: String, itemId: String) {

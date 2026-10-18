@@ -8,7 +8,7 @@ import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionState
 import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.CronJob
-import com.hermes.mobile.data.model.ImageRef
+import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.ModelOption
 import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.RunPhase
@@ -63,7 +63,9 @@ interface HermesRepository {
      * 发消息。带 [quote] 时，真实实现会把引用内容以 Markdown 引用块（"> ..."）放在正文前面发给 Hermes，
      * 让它知道你在追问哪一段。
      */
-    fun sendMessage(sessionId: String, text: String, images: List<ImageRef>, quote: Quote? = null)
+    fun sendMessage(sessionId: String, text: String, attachments: List<Attachment>, quote: Quote? = null)
+    /** 当前连接能不能发任意文件（SSH 上传到服务器、本机 Termux 存到下载目录）。图片、PDF、文本文件不受限制。 */
+    fun canSendAnyFile(): Boolean = false
     fun retryMessage(sessionId: String, itemId: String)
     fun regenerate(sessionId: String, itemId: String)
     fun deleteItem(sessionId: String, itemId: String)

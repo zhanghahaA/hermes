@@ -93,7 +93,7 @@ class HermesClient(
         send("POST", "/api/sessions/${id.encode()}/fork", JsonObject(emptyMap()), SessionEnvelopeDto.serializer()).session
 
     /** 提交一轮对话。[idempotencyKey] 相同的重试不会让 Hermes 重复执行。 */
-    internal suspend fun startRun(sessionId: String, input: String, idempotencyKey: String): RunAcceptedDto {
+    internal suspend fun startRun(sessionId: String, input: JsonElement, idempotencyKey: String): RunAcceptedDto {
         val body = patch {
             put("input", input)
             put("session_id", sessionId)

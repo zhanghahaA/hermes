@@ -89,8 +89,31 @@ enum class Role { User, Assistant }
 
 enum class DeliveryStatus { Sending, Sent, Failed }
 
-/** 图片占位：真实实现里是 Uri / 远端 URL，这里用一个色相值画渐变块。 */
-data class ImageRef(val id: String, val hue: Float, val aspect: Float = 1f)
+/**
+ * 消息里的一张图片。[source] 是能读到图片的地方：本机文件路径、`data:` URL 或 http(s) 地址；
+ * 读不到（例如服务器上的图、本机没缓存）时为 null，界面用 [hue] 画一个渐变占位块。
+ */
+data class ImageRef(val id: String, val hue: Float, val aspect: Float = 1f, val source: String? = null)
+
+/** 消息里附带的文件（只用来显示：文件名、大小、说明）。 */
+data class FileRef(val name: String, val sizeBytes: Long? = null, val note: String? = null)
+
+/** 输入框里待发送的附件。 */
+sealed interface Attachment {
+    val id: String
+
+    /** 图片（相册、拍照）。[path] 是压缩后存在本机的文件，文件名就是内容的 SHA-256。 */
+    data class Image(override val id: String, val path: String, val aspect: Float) : Attachment
+
+    /** PDF：前 [pages] 页已经渲染成图片，模型看图片；[totalPages] 是原文件总页数。 */
+    data class Pdf(override val id: String, val name: String, val pages: List<Image>, val totalPages: Int, val sizeBytes: Long) : Attachment
+
+    /** 文本类文件（代码、日志、CSV、JSON……）：内容直接放进消息。 */
+    data class TextFile(override val id: String, val name: String, val text: String, val sizeBytes: Long) : Attachment
+
+    /** 其它文件：SSH 连接上传到服务器，本机 Termux 存到手机的下载目录，再告诉 Hermes 文件在哪。 */
+    data class BinaryFile(override val id: String, val name: String, val mime: String, val path: String, val sizeBytes: Long) : Attachment
+}
 
 /**
  * 引用。只能引用 Hermes 回复给你的消息正文（[ChatItem.Message.text]），
@@ -123,6 +146,7 @@ sealed interface ChatItem {
         val text: String,
         val images: List<ImageRef> = emptyList(),
         val status: DeliveryStatus = DeliveryStatus.Sent,
+        val files: List<FileRef> = emptyList(),
         /** 这条（用户）消息引用了哪条回复。 */
         val quote: Quote? = null,
     ) : ChatItem {

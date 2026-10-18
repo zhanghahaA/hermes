@@ -9,6 +9,7 @@
   拿到工具结果后回复“命令执行完了”。用来验证审批卡片。
 - 含“慢慢说”：用约 8 秒慢慢输出 20 段文字。用来验证断线重连、停止。
 - 含“追问我”：调用 clarify 工具向用户提问（只有支持追问的 Hermes 会转给 App）。
+- 带图片：回复“收到 N 张图片：<你的话>”。用来验证 App 发图。
 
 用法：python3 fake_llm.py --port 9900
 Hermes 的 config.yaml：
@@ -35,6 +36,17 @@ def last_user_text(messages):
                 return " ".join(p.get("text", "") for p in c if isinstance(p, dict))
             return c or ""
     return ""
+
+
+def image_count(messages):
+    """最后一条用户消息里有几张图片（验证 App 发图）。"""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            c = m.get("content")
+            if isinstance(c, list):
+                return sum(1 for p in c if isinstance(p, dict) and p.get("type") in ("image_url", "input_image", "image"))
+            return 0
+    return 0
 
 
 def has_tool_result(messages):
@@ -92,6 +104,8 @@ async def chat(request):
     elif "慢慢说" in text:
         pieces = ["第%d段。" % i for i in range(1, 21)]
         delay = 0.4
+    elif image_count(messages):
+        pieces = ["收到 %d 张图片：" % image_count(messages), text]
     else:
         pieces = ["收到：", text]
 

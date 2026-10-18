@@ -156,3 +156,16 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
   或直接从状态接口拿结果。
 - Android：有轮次在等时开前台服务（`dataSync` 类型）保持连接；App 不在前台时回复到了、需要审批都会发通知，点通知直接打开那个对话；
   系统报告网络恢复时立刻重连，不等退避时间。
+
+## 图片和文件（阶段 4）
+
+- `/v1/runs` 的 `input` 可以是消息数组：`[{"role":"user","content":[{"type":"text","text":...},{"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}]}]`。
+  只收 png/jpeg/gif/webp，一次最多 10 张（`session_api_media._IMAGE_LIMIT`）。
+- Hermes 把图片存到 `<HERMES_HOME>/cache/documents/native-inputs/<图片内容的 SHA-256>/api_<前 32 位>.<扩展名>`，
+  聊天记录里的用户消息只留文字，后面追加 `[Image attached at: <路径>]` 和 `[screenshot]` 两行。
+  App 发图时按同一个 SHA-256 在本机缓存一份，读记录时据此找回原图。新版存档里的 `hermes-retained:<sha256>` 也按这个规则找。
+- 模型不支持看图时，Hermes 先调视觉辅助模型描述图片，主模型收到的是描述文字。
+- API 不收其它文件（`/v1/artifacts/upload` 是浏览器扩展用的，默认关闭，模型也读不到）。App 的做法：
+  文本文件把内容写进消息（`📎 附件：<名字>` + 代码块）；PDF 渲染成图片；其它文件 SSH 用 SFTP 传到 `~/hermes-uploads/`，
+  本机 Termux 存到 `/storage/emulated/0/Download/Hermes/`，消息里写 `📎 附件：<名字>（已保存到 <路径>，需要时请用工具读取）`。
+  读记录时这些段落拆回文件卡片。

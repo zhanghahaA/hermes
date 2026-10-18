@@ -92,19 +92,25 @@ fun ModelPickerContent(
 
 /** “+”按钮弹出的添加内容面板。 */
 @Composable
-fun AttachSheet(onPickPhotos: () -> Unit, onCamera: () -> Unit, onDismiss: () -> Unit) {
+fun AttachSheet(onPickPhotos: () -> Unit, onCamera: () -> Unit, onPickFiles: () -> Unit, anyFile: Boolean, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        AttachSheetContent(onPickPhotos, onCamera)
+        AttachSheetContent(onPickPhotos, onCamera, onPickFiles, anyFile)
     }
 }
 
 @Composable
-fun AttachSheetContent(onPickPhotos: () -> Unit, onCamera: () -> Unit) {
+fun AttachSheetContent(onPickPhotos: () -> Unit, onCamera: () -> Unit, onPickFiles: () -> Unit = {}, anyFile: Boolean = false) {
     Column(Modifier.navigationBarsPadding().padding(bottom = 16.dp)) {
         Text("添加内容", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
         AttachRow("相册", "选择一张或多张图片", Icons.Rounded.PhotoLibrary, true, onPickPhotos)
         AttachRow("拍照", "用相机拍一张发给 Hermes", Icons.Rounded.PhotoCamera, true, onCamera)
-        AttachRow("文件", "Hermes API 暂不支持上传文件", Icons.Rounded.FolderOpen, false) {}
+        AttachRow(
+            "文件",
+            if (anyFile) "任意文件；PDF 和文本文件 Hermes 能直接看到内容" else "PDF、文本、代码、表格等；其它格式需要 SSH 或本机连接",
+            Icons.Rounded.FolderOpen,
+            true,
+            onPickFiles,
+        )
     }
 }
 

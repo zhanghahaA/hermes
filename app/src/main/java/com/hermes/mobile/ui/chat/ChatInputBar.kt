@@ -55,7 +55,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import com.hermes.mobile.data.model.Quote
 import androidx.compose.ui.unit.dp
-import com.hermes.mobile.data.model.ImageRef
+import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.ui.glass.GlassCircleButton
 import com.hermes.mobile.ui.glass.GlassSurface
 import com.kyant.backdrop.Backdrop
@@ -73,8 +73,8 @@ fun ChatInputBar(
     backdrop: Backdrop,
     text: String,
     onTextChange: (String) -> Unit,
-    attachments: List<ImageRef>,
-    onRemoveAttachment: (ImageRef) -> Unit,
+    attachments: List<Attachment>,
+    onRemoveAttachment: (Attachment) -> Unit,
     onAttach: () -> Unit,
     mode: SendButtonMode,
     onSend: () -> Unit,
@@ -207,38 +207,6 @@ private fun SendStopButton(mode: SendButtonMode, canSend: Boolean, onSend: () ->
                 modifier = Modifier.size(40.dp),
             ) {
                 Icon(Icons.Rounded.Stop, contentDescription = "停止", modifier = Modifier.size(20.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun AttachmentRow(attachments: List<ImageRef>, onRemove: (ImageRef) -> Unit) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 10.dp),
-    ) {
-        items(attachments, key = { it.id }) { image ->
-            Box {
-                ImagePlaceholder(image, Modifier.size(64.dp), RoundedCornerShape(16.dp))
-                Box(
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(3.dp)
-                        .size(20.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.75f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    IconButton(onClick = { onRemove(image) }, modifier = Modifier.size(20.dp)) {
-                        Icon(
-                            Icons.Rounded.Close,
-                            contentDescription = "移除图片",
-                            tint = MaterialTheme.colorScheme.inverseOnSurface,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
-                }
             }
         }
     }

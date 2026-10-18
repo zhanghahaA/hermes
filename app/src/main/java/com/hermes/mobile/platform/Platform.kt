@@ -9,6 +9,10 @@ import androidx.compose.runtime.Composable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.launch
 
 // 少量依赖 Android 的能力集中放在这里，界面代码只调用这些函数。
 // tools/ui-preview 里有同名的桌面版实现，用来在没有 Android SDK 的环境里渲染界面截图。
@@ -63,4 +67,109 @@ private fun java.io.InputStream.readNBytesCompat(limit: Int): ByteArray {
         out.write(buffer, 0, n)
     }
     return out.toByteArray()
+}
+
+/** “+”面板里三个入口对应的动作。 */
+class AttachmentPickers(val pickPhotos: () -> Unit, val takePhoto: () -> Unit, val pickFiles: () -> Unit)
+
+/**
+ * 相册（系统照片选择器，最多 10 张）、拍照、选文件。选好的东西在后台处理成附件后交给 [onAdd]，
+ * 出错时把能看懂的原因交给 [onError]。
+ */
+@Composable
+fun rememberAttachmentPickers(onAdd: (List<com.hermes.mobile.data.model.Attachment>) -> Unit, onError: (String) -> Unit): AttachmentPickers {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val importer = androidx.compose.runtime.remember(context) { AttachmentImporter(context.applicationContext) }
+    val currentAdd = androidx.compose.runtime.rememberUpdatedState(onAdd)
+    val currentError = androidx.compose.runtime.rememberUpdatedState(onError)
+
+    fun process(items: List<android.net.Uri>, convert: (android.net.Uri) -> com.hermes.mobile.data.model.Attachment) {
+        if (items.isEmpty()) return
+        scope.launch {
+            val results = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                items.map { uri -> runCatching { convert(uri) } }
+            }
+            results.mapNotNull { it.exceptionOrNull() }.firstOrNull()?.let { currentError.value(it.message ?: "处理失败") }
+            results.mapNotNull { it.getOrNull() }.takeIf { it.isNotEmpty() }?.let { currentAdd.value(it) }
+        }
+    }
+
+    val photos = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia(com.hermes.mobile.data.model.MaxImagesPerMessage),
+    ) { uris -> process(uris, importer::image) }
+
+    var pendingPhoto by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf<String?>(null) }
+    val camera = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val path = pendingPhoto
+        pendingPhoto = null
+        if (ok && path != null) {
+            process(listOf(android.net.Uri.fromFile(java.io.File(path)))) { uri ->
+                importer.image(uri).also { java.io.File(path).delete() }
+            }
+        }
+    }
+
+    val files = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris -> process(uris, importer::file) }
+
+    return androidx.compose.runtime.remember {
+        AttachmentPickers(
+            pickPhotos = {
+                photos.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly,
+                    ),
+                )
+            },
+            takePhoto = {
+                val dir = java.io.File(context.cacheDir, "camera").apply { mkdirs() }
+                val file = java.io.File(dir, "photo-${System.currentTimeMillis()}.jpg")
+                pendingPhoto = file.path
+                val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                try {
+                    camera.launch(uri)
+                } catch (e: android.content.ActivityNotFoundException) {
+                    currentError.value("没有找到相机应用")
+                }
+            },
+            pickFiles = { files.launch(arrayOf("*/*")) },
+        )
+    }
+}
+
+private val bitmapCache = object : android.util.LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(48 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: androidx.compose.ui.graphics.ImageBitmap) = value.width * value.height * 4
+}
+
+/**
+ * 读图片并缩到长边不超过 [maxPx]：本机文件路径或 `data:` URL。读不到返回 null（界面显示占位块）。
+ */
+@Composable
+fun rememberImageBitmap(source: String?, maxPx: Int): androidx.compose.ui.graphics.ImageBitmap? {
+    val key = source?.let { "$maxPx@$it" }
+    val state = androidx.compose.runtime.produceState(initialValue = key?.let { bitmapCache.get(it) }, key) {
+        if (key == null || source == null || value != null) return@produceState
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { decodeImage(source, maxPx) }.getOrNull()
+        }?.also { bitmapCache.put(key, it) }
+    }
+    return state.value
+}
+
+private fun decodeImage(source: String, maxPx: Int): androidx.compose.ui.graphics.ImageBitmap? {
+    val bytes = when {
+        source.startsWith("data:") -> java.util.Base64.getDecoder().decode(source.substringAfter(','))
+        source.startsWith("/") -> java.io.File(source).takeIf { it.isFile }?.readBytes()
+        else -> null
+    } ?: return null
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxPx) sample *= 2
+    val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+    return bitmap?.asImageBitmap()
 }

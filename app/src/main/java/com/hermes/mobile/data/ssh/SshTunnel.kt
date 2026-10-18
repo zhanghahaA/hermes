@@ -74,6 +74,41 @@ class SshTunnel(
         runCatching { old?.disconnect() }
     }
 
+    /**
+     * 把手机上的文件传到服务器的 `~/hermes-uploads/` 下（文件名前加时间，避免覆盖），返回服务器上的绝对路径。
+     * 连接断了会先重连一次。
+     */
+    fun upload(localPath: String, name: String): String {
+        fun once(): String = session().newSFTPClient().use { sftp ->
+            val dir = sftp.canonicalize(".").trimEnd('/') + "/hermes-uploads"
+            sftp.mkdirs(dir)
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(java.util.Date())
+            val source = net.schmizz.sshj.xfer.FileSystemFile(localPath)
+            try {
+                "$dir/$stamp-${safeName(name)}".also { sftp.put(source, it) }
+            } catch (e: net.schmizz.sshj.sftp.SFTPException) {
+                // 有的 SFTP 服务器不接受中文、空格等文件名，换成纯 ASCII 再试一次（保留扩展名）
+                "$dir/$stamp-${asciiName(name)}".also { sftp.put(source, it) }
+            }
+        }
+        return try {
+            once()
+        } catch (e: IOException) {
+            reset()
+            once()
+        }
+    }
+
+    private fun asciiName(name: String): String {
+        val ext = name.substringAfterLast('.', "").filter { it.isLetterOrDigit() && it.code < 128 }.take(10)
+        val base = name.substringBeforeLast('.').map { if (it.code < 128 && (it.isLetterOrDigit() || it in "-_")) it else '_' }
+            .joinToString("").trim('_').ifEmpty { "file" }.take(60)
+        return if (ext.isEmpty()) base else "$base.$ext"
+    }
+
+    private fun safeName(name: String): String =
+        name.replace(Regex("""[/\\\u0000-\u001f]"""), "_").trimStart('.', ' ').ifEmpty { "file" }.take(120)
+
     override fun close() {
         closed = true
         runCatching { server.close() }

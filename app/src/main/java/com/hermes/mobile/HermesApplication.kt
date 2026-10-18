@@ -5,7 +5,9 @@ import android.net.ConnectivityManager
 import android.net.Network
 import androidx.core.content.getSystemService
 import com.hermes.mobile.data.remote.RemoteHermesRepository
+import com.hermes.mobile.platform.AttachmentImporter
 import com.hermes.mobile.platform.FileLocalStore
+import com.hermes.mobile.platform.mediaDirectory
 import com.hermes.mobile.platform.KeystoreSecretBox
 import com.hermes.mobile.platform.ReplyNotifier
 import com.hermes.mobile.platform.RunService
@@ -24,7 +26,13 @@ class HermesApplication : Application() {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     val repository: RemoteHermesRepository by lazy {
-        RemoteHermesRepository(scope = appScope, store = FileLocalStore(this), secrets = KeystoreSecretBox())
+        RemoteHermesRepository(
+            scope = appScope,
+            store = FileLocalStore(this),
+            secrets = KeystoreSecretBox(),
+            mediaDir = mediaDirectory(this),
+            localFileExporter = { path, name, mime -> AttachmentImporter.exportForTermux(this, path, name, mime) },
+        )
     }
 
     override fun onCreate() {

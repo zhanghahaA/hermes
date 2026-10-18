@@ -4,6 +4,7 @@ import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.ConnectionProfile
 import com.hermes.mobile.data.model.ConnectionType
 import com.hermes.mobile.data.model.CronJob
+import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.ImageRef
 import com.hermes.mobile.data.model.JobRunResult
 import com.hermes.mobile.data.model.ModelOption
@@ -101,7 +102,11 @@ object SampleData {
                     "要继续给 NAS 设静态地址吗？我打算用下面这个配置：\n\n" +
                     "```\nhost: nas\nmac: 3c:7c:3f:aa:12:9e\nip: 192.168.1.50\n```",
             ),
-            ChatItem.Message("m5", now - 5 * MIN, Role.User, "先看看这张截图里的报错是什么意思", images = listOf(ImageRef("img1", 210f, 1.6f))),
+            ChatItem.Message(
+                "m5", now - 5 * MIN, Role.User, "先看看这张截图里的报错是什么意思",
+                images = listOf(ImageRef("img1", 210f, 1.6f)),
+                files = listOf(FileRef("smb.log", 18_400)),
+            ),
             ChatItem.Message(
                 "m6", now - 4 * MIN, Role.Assistant,
                 "截图里是 NAS 的 SMB 服务报错 *\"access denied\"*，原因是共享目录的权限只给了 `admin` 组。把你的账号加进这个组就行。",

@@ -98,6 +98,32 @@ class OpenSshIT {
                 authorized.writeText(original)
             }
 
+            // 普通文件经 SFTP 上传到真正的 OpenSSH（中文文件名保持原样）
+            repo.switchConnection("os")
+            runBlocking { withTimeout(30_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
+            val bytes = ByteArray(200_000) { (it % 253).toByte() }
+            val local = File.createTempFile("upload", ".bin").apply { writeBytes(bytes) }
+            val chat2 = repo.createSession()!!
+            repo.sendMessage(chat2, "收到文件了吗", listOf(com.hermes.mobile.data.model.Attachment.BinaryFile("b", "季度 报表.xlsx", "application/octet-stream", local.path, bytes.size.toLong())))
+            val withFile = runBlocking {
+                withTimeout(60_000) {
+                    repo.chatItems(chat2).first { list ->
+                        list.any { it is ChatItem.Message && it.role == Role.Assistant } &&
+                            list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+                    }
+                }
+            }
+            val note = withFile.filterIsInstance<ChatItem.Message>().first { it.role == Role.User }.files.single().note!!
+            println("OpenSSH 上传：$note")
+            val remotePath = note.removePrefix("已上传：")
+            assertTrue(remotePath.endsWith("-季度 报表.xlsx"), "OpenSSH 接受中文文件名：$remotePath")
+            // 测试进程可能没有 UTF-8 区域设置，按目录列出来找（Path 保留原始字节）
+            val uploaded = java.nio.file.Files.list(java.nio.file.Paths.get(remotePath.substringBeforeLast('/'))).use { files ->
+                files.toList().filter { it.toString().endsWith(".xlsx") }.maxBy { java.nio.file.Files.getLastModifiedTime(it) }
+            }
+            assertTrue(java.nio.file.Files.readAllBytes(uploaded).contentEquals(bytes), "上传内容完整")
+            runBlocking { repo.session(chat2).first() }?.id?.let(repo::deleteSession)
+
             // 带口令的私钥：给出能看懂的提示
             val protectedSteps = runBlocking {
                 withTimeout(30_000) {

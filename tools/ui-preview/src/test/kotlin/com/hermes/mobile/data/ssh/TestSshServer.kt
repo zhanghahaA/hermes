@@ -26,6 +26,9 @@ class TestSshServer(
     }
     val logins = java.util.concurrent.atomic.AtomicInteger()
 
+    /** SSH 用户的“家目录”（SFTP 的根）。 */
+    val home: Path = Files.createTempDirectory("sshhome")
+
     val sshd: SshServer = SshServer.setUpDefaultServer().apply {
         host = "127.0.0.1"
         this.port = port
@@ -37,6 +40,9 @@ class TestSshServer(
             (u == user && p == password).also { if (it) logins.incrementAndGet() }
         }
         forwardingFilter = AcceptAllForwardingFilter.INSTANCE
+        // SFTP：上传的文件落在 [home] 里
+        subsystemFactories = listOf(org.apache.sshd.sftp.server.SftpSubsystemFactory())
+        fileSystemFactory = org.apache.sshd.common.file.virtualfs.VirtualFileSystemFactory(home)
     }
 
     val port: Int get() = sshd.port

@@ -154,6 +154,9 @@ fun MessageBubble(
                                     .combinedClickable(onClick = {}, onLongClick = onMore),
                             )
                         }
+                        if (message.files.isNotEmpty()) {
+                            FileChips(message.files, content, Modifier.padding(start = 6.dp, end = 6.dp, top = 6.dp))
+                        }
                         if (message.text.isNotBlank()) {
                             SelectionContainer(state = selectionState, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                                 if (isUser) {
@@ -237,44 +240,6 @@ private fun MessageMeta(message: ChatItem.Message, onRetry: () -> Unit, modifier
                 }
             }
         }
-    }
-}
-
-/** 图片占位：渐变色块。接入真实图片后换成 Coil 的 AsyncImage。 */
-@Composable
-fun ImageGrid(images: List<ImageRef>, modifier: Modifier = Modifier) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        images.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                row.forEach { image ->
-                    ImagePlaceholder(
-                        image,
-                        Modifier
-                            .width(if (images.size == 1) 240.dp else 118.dp)
-                            .aspectRatio(if (images.size == 1) image.aspect else 1f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ImagePlaceholder(image: ImageRef, modifier: Modifier = Modifier, shape: RoundedCornerShape = RoundedCornerShape(16.dp)) {
-    Box(
-        modifier
-            .clip(shape)
-            .background(
-                Brush.linearGradient(
-                    listOf(
-                        Color.hsv(image.hue % 360f, 0.35f, 0.92f),
-                        Color.hsv((image.hue + 50f) % 360f, 0.55f, 0.70f),
-                    ),
-                ),
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(Icons.Rounded.Image, contentDescription = "图片", tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(32.dp))
     }
 }
 

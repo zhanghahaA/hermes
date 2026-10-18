@@ -49,7 +49,7 @@ internal fun SessionDto.visibleInList(): Boolean =
  * 丢弃：工具消息、系统消息、隐藏消息、只有工具调用没有文字的中间步骤。
  * 思考内容（reasoning / reasoning_content）在 [MessageDto] 里根本没有声明，到不了这里。
  */
-internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long): ChatItem.Message? {
+internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long, imageSource: (sha256: String) -> String? = { null }): ChatItem.Message? {
     if (display_kind == "hidden") return null
     val role = when (role) {
         "user" -> Role.User
@@ -58,9 +58,20 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long): ChatItem.Mes
     }
     // 调用工具的中间步骤：就算带了几句话（“我先查一下”），也属于过程，不显示
     if (role == Role.Assistant && finish_reason == "tool_calls") return null
-    val (text, images) = content.parseContent(idSeed = index)
+    val (rawText, partImages) = content.parseContent(idSeed = index, imageSource = imageSource)
+    // 用户消息：拆出 Hermes 记下的图片路径和 App 写进去的文件段
+    val (withoutImages, marked) = if (role == Role.User) ImageMarkers.parse(rawText) else rawText to emptyList()
+    val (text, files) = if (role == Role.User) AttachmentText.parse(withoutImages) else withoutImages to emptyList()
+    val images = partImages + marked.mapIndexed { i, found ->
+        ImageRef(
+            id = "img-$index-m$i",
+            hue = ((index * 47 + i * 89) % 360).toFloat(),
+            aspect = 1.3f,
+            source = found.sha256?.let(imageSource) ?: found.url,
+        )
+    }
     if (role == Role.Assistant && text.isBlank()) return null
-    if (role == Role.User && text.isBlank() && images.isEmpty()) return null
+    if (role == Role.User && text.isBlank() && images.isEmpty() && files.isEmpty()) return null
     val messageId = when (val raw = id) {
         is JsonPrimitive -> raw.contentOrNull
         else -> null
@@ -73,6 +84,7 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long): ChatItem.Mes
         text = body,
         images = images,
         quote = quote,
+        files = files,
     )
 }
 
@@ -106,7 +118,7 @@ internal fun List<ChatItem.Message>.linkQuotes(): List<ChatItem.Message> = mapIn
 }
 
 /** content 可能是字符串，也可能是 `[{"type":"text","text":...},{"type":"image_url",...}]`。 */
-private fun JsonElement?.parseContent(idSeed: Int): Pair<String, List<ImageRef>> = when (this) {
+private fun JsonElement?.parseContent(idSeed: Int, imageSource: (String) -> String?): Pair<String, List<ImageRef>> = when (this) {
     null, is JsonNull -> "" to emptyList()
     is JsonPrimitive -> contentOrNull.orEmpty() to emptyList()
     is JsonArray -> {
@@ -122,11 +134,25 @@ private fun JsonElement?.parseContent(idSeed: Int): Pair<String, List<ImageRef>>
                         text.append(t)
                     }
                 }
-                // 图片暂时用占位色块显示，阶段 4 接入真实图片
-                "image_url", "input_image", "image" -> images += ImageRef("img-$idSeed-$i", hue = ((idSeed * 47 + i * 89) % 360).toFloat(), aspect = 1.3f)
+                "image_url", "input_image", "image" -> images += ImageRef(
+                    "img-$idSeed-$i",
+                    hue = ((idSeed * 47 + i * 89) % 360).toFloat(),
+                    aspect = 1.3f,
+                    source = obj.imageUrl()?.let { url ->
+                        // 新版 Hermes 存档时把 data: 图片换成了 hermes-retained:<sha256>
+                        if (url.startsWith("hermes-retained:")) imageSource(url.removePrefix("hermes-retained:")) else url
+                    },
+                )
             }
         }
         text.toString() to images
     }
     is JsonObject -> ((this["text"] as? JsonPrimitive)?.contentOrNull.orEmpty()) to emptyList()
 }
+
+/** `{"image_url": {"url": ...}}` 或 `{"image_url": "..."}`（Responses 格式）。 */
+private fun JsonObject.imageUrl(): String? = when (val v = this["image_url"]) {
+    is JsonPrimitive -> v.contentOrNull
+    is JsonObject -> (v["url"] as? JsonPrimitive)?.contentOrNull
+    else -> null
+}?.takeIf { it.isNotBlank() }
