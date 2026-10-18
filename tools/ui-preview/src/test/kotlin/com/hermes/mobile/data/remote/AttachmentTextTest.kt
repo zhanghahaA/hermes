@@ -104,4 +104,13 @@ class AttachmentTextTest {
         assertEquals("[不是系统提示]", SystemNotes.strip("[不是系统提示]"))
         assertEquals("没闭合 [System: 半截", SystemNotes.strip("没闭合 [System: 半截"))
     }
+
+    @Test
+    fun imageFileLinesAreHidden() {
+        val text = "帮我填表\n\n" + AttachmentText.imageFile("/home/u/hermes-uploads/20261018-image-1.jpg", 1, 2) + "\n" +
+            AttachmentText.imageFile("/home/u/hermes-uploads/20261018-image-2.jpg", 2, 2)
+        val (body, files) = AttachmentText.parse(text)
+        assertEquals("帮我填表", body)
+        assertEquals(emptyList(), files)
+    }
 }

@@ -72,6 +72,13 @@ def chunk(delta, finish=None):
 async def chat(request):
     body = await request.json()
     print("model=%s" % body.get("model"), flush=True)
+    for m in reversed(body.get("messages", [])):
+        if m.get("role") == "user":
+            c = m.get("content")
+            if isinstance(c, list):
+                c = [(p.get("type"), (p.get("text") or str(p.get("image_url", ""))[:60])) for p in c if isinstance(p, dict)]
+            print("LAST_USER=%r" % (c,), flush=True)
+            break
     messages = body.get("messages", [])
     text = last_user_text(messages)
     stream = body.get("stream", False)

@@ -237,6 +237,16 @@ API 管不到的都经 SSH 做，尽量用 `hermes` 自己的命令（`-p <profi
 
 Gateway 状态走 API：`GET /health/detailed` 有 `readiness.checks`（数据库、配置、模型、磁盘……）、`platforms`（各聊天平台的连接状态和错误）、`metrics_today`、`active_agents`。
 
+## 图片的原文件
+
+不同版本的 Hermes 对 API 收到的图片处理不一样：新版存到 `<HERMES_HOME>/cache/documents/native-inputs/<sha256>/`，
+并在消息后面加 `[Image attached at: <路径>]`；有的版本只留 `[screenshot]`，主模型不支持看图时只拿到辅助模型写的文字描述。
+所以只要连接能传文件（SSH，或本机 Termux 的下载目录），App 发图时还会把原文件传一份到 `~/hermes-uploads/`，
+在消息里加一行 `📎 图片文件：<路径>（……的原文件，需要上传、保存或用工具处理图片时用这个路径）`，界面上不显示这一行。
+
+图片编码：长边不超过 2048；只有真有透明像素才用 PNG（Android 几乎把所有 PNG 都标成有透明通道，截图存 PNG 会很大），
+单张超过 3.5 MB 就降质量再缩小。
+
 ## 客户端说明（instructions）
 
 `/v1/runs` 的 `instructions` 字段是只对这一轮生效的补充系统提示（Hermes 里叫 ephemeral system prompt，追加在系统提示后面，不存进聊天记录）。

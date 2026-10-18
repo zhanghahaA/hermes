@@ -30,8 +30,15 @@ internal object AttachmentText {
 
     fun uploaded(name: String, path: String): String = "$Marker$name（已保存到 $path，需要时请用工具读取）"
 
+    /** 图片原文件在 Hermes 那台机器上的位置（给模型用，界面上不显示这一行）。 */
+    const val ImageFileMarker = "📎 图片文件："
+
+    fun imageFile(path: String, index: Int, total: Int): String =
+        "$ImageFileMarker$path（" + (if (total > 1) "第 $index 张图片" else "这张图片") + "的原文件，需要上传、保存或用工具处理图片时用这个路径）"
+
     /** 从一条用户消息里拆出文件：返回去掉文件段之后的正文和文件列表。 */
-    fun parse(text: String): Pair<String, List<FileRef>> {
+    fun parse(raw: String): Pair<String, List<FileRef>> {
+        val text = if (raw.contains(ImageFileMarker)) raw.lines().filterNot { it.startsWith(ImageFileMarker) }.joinToString("\n").trim() else raw
         if (!text.contains(Marker)) return text to emptyList()
         val lines = text.lines()
         val kept = mutableListOf<String>()

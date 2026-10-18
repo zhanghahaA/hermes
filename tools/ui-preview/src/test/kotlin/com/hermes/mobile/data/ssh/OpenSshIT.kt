@@ -231,4 +231,49 @@ class OpenSshIT {
             tunnel.close()
         }
     }
+
+    /** 经 SSH 连接发照片：真实 Hermes 收到图片，同时原文件落在服务器上，消息里有路径。 */
+    @Test
+    fun photoOriginalReachesTheServer() {
+        if (dir == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_SSH_DIR / HERMES_IT_KEY")
+            return
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
+            val profile = ConnectionProfile(
+                id = "os", name = "OpenSSH", type = ConnectionType.Ssh, host = "127.0.0.1", port = 8642,
+                sshUser = user, sshPort = sshPort, sshAuth = SshAuthMethod.Key,
+            )
+            repo.saveConnection(profile, key, File(dir, "user_ed25519").readText())
+            runBlocking { withTimeout(30_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
+            val image = java.awt.image.BufferedImage(320, 200, java.awt.image.BufferedImage.TYPE_INT_RGB).apply {
+                createGraphics().apply { color = java.awt.Color(40, 120, 200); fillRect(0, 0, 320, 200); dispose() }
+            }
+            val photo = File.createTempFile("photo", ".jpg").apply { javax.imageio.ImageIO.write(image, "jpg", this) }
+            val chat = repo.createSession()!!
+            repo.sendMessage(chat, "把这张图存好", listOf(com.hermes.mobile.data.model.Attachment.Image("p", photo.path, 1.6f)))
+            val items = runBlocking {
+                withTimeout(60_000) {
+                    repo.chatItems(chat).first { list ->
+                        list.any { it is ChatItem.Message && it.role == Role.Assistant } &&
+                            list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+                    }
+                }
+            }
+            val reply = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.Assistant }.text
+            println("模型看到的（假模型复述）：${reply.take(400)}")
+            val path = Regex("📎 图片文件：(\\S+?)（").find(reply)?.groupValues?.get(1)
+            assertTrue(path != null, "模型收到了原文件路径")
+            assertTrue(File(path!!).readBytes().contentEquals(photo.readBytes()), "服务器上的原文件和发出的一样：$path")
+            val mine = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+            assertEquals("把这张图存好", mine.text)
+            assertEquals(1, mine.images.size)
+            runBlocking { repo.session(chat).first() }?.id?.let(repo::deleteSession)
+            File(path).delete()
+        } finally {
+            scope.cancel()
+        }
+    }
 }

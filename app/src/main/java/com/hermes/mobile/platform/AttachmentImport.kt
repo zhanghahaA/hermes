@@ -133,17 +133,66 @@ class AttachmentImporter(private val context: Context) {
         return Bitmap.createScaledBitmap(bitmap, (bitmap.width * f).toInt().coerceAtLeast(1), (bitmap.height * f).toInt().coerceAtLeast(1), true)
     }
 
-    /** 压缩后按内容的 SHA-256 存进缓存目录（和 Hermes 服务器上的目录名一致）。 */
-    private fun save(bitmap: Bitmap): Attachment.Image {
-        val png = bitmap.hasAlpha()
-        val bytes = ByteArrayOutputStream().use { out ->
-            bitmap.compress(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 85, out)
-            out.toByteArray()
+    /**
+     * 压缩后按内容的 SHA-256 存进缓存目录（和 Hermes 服务器上的目录名一致）。
+     * 只有真有透明像素才存 PNG（Android 几乎把所有 PNG 都标成“有透明通道”，截图存成 PNG 动辄好几 MB，
+     * 有的看图模型直接报“图片无法识别”）；太大就降质量、再缩小，控制在 [MaxImageBytes] 以内。
+     */
+    private fun save(original: Bitmap): Attachment.Image {
+        var bitmap = original
+        val png = bitmap.hasAlpha() && hasTransparentPixels(bitmap)
+        var bytes = encode(bitmap, png, 85)
+        var quality = 85
+        while (bytes.size > MaxImageBytes) {
+            if (!png && quality > 60) {
+                quality -= 10
+            } else {
+                bitmap = Bitmap.createScaledBitmap(bitmap, (bitmap.width * 0.8f).toInt().coerceAtLeast(1), (bitmap.height * 0.8f).toInt().coerceAtLeast(1), true)
+            }
+            bytes = encode(bitmap, png, quality)
+            if (bitmap.width < 320) break
         }
         val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
         val file = File(mediaDirectory(context), "$sha.${if (png) "png" else "jpg"}")
         if (!file.exists()) file.writeBytes(bytes)
         return Attachment.Image(UUID.randomUUID().toString(), file.path, bitmap.width.toFloat() / bitmap.height)
+    }
+
+    /** JPEG 没有透明：透明的地方垫白色，不然会变黑。 */
+    private fun encode(bitmap: Bitmap, png: Boolean, quality: Int): ByteArray = ByteArrayOutputStream().use { out ->
+        if (png) {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+        } else {
+            val opaque = if (bitmap.hasAlpha()) {
+                Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).also { canvasBitmap ->
+                    android.graphics.Canvas(canvasBitmap).apply {
+                        drawColor(android.graphics.Color.WHITE)
+                        drawBitmap(bitmap, 0f, 0f, null)
+                    }
+                }
+            } else {
+                bitmap
+            }
+            opaque.compress(Bitmap.CompressFormat.JPEG, quality, out)
+        }
+        out.toByteArray()
+    }
+
+    /** 抽样看有没有不透明度不是 100% 的像素（整张扫太慢）。 */
+    private fun hasTransparentPixels(bitmap: Bitmap): Boolean {
+        val step = maxOf(1, maxOf(bitmap.width, bitmap.height) / 200)
+        val row = IntArray(bitmap.width)
+        var y = 0
+        while (y < bitmap.height) {
+            bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+            var x = 0
+            while (x < row.size) {
+                if ((row[x] ushr 24) != 0xFF) return true
+                x += step
+            }
+            y += step
+        }
+        return false
     }
 
     private fun ExifInterface.rotationDegrees(): Int = when (getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
@@ -155,6 +204,8 @@ class AttachmentImporter(private val context: Context) {
 
     companion object {
         const val MaxEdge = 2048
+        /** 单张图片编码后的上限：多数看图模型限制 5 MB（base64 之后还要大三分之一）。 */
+        const val MaxImageBytes = 3_500_000
         const val MaxPdfPages = 8
         const val PdfWidth = 1600
         const val MaxTextBytes = 512L * 1024

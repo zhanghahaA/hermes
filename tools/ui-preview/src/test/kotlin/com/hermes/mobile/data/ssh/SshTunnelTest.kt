@@ -216,6 +216,38 @@ class SshTunnelTest {
         assertTrue(mine.files.single().note!!.startsWith("已上传：/hermes-uploads/"), mine.files.single().note)
     }
 
+    /** 发图片时原文件也传一份到服务器：模型拿到真实路径，可以拿去上传、处理（有的 Hermes 版本只给模型文字描述）。 */
+    @Test
+    fun photosAreAlsoSavedOnTheServer() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
+
+        val bytes = ByteArray(40_000) { (it % 233).toByte() }
+        val photo = java.io.File.createTempFile("photo", ".jpg").apply { writeBytes(bytes) }
+        repo.sendMessage("s1", "用这张图填表", listOf(com.hermes.mobile.data.model.Attachment.Image("p1", photo.path, 1.3f)))
+        val items = runBlocking {
+            withTimeout(15_000) {
+                repo.chatItems("s1").first { list ->
+                    list.any { it is ChatItem.Message && it.role == Role.Assistant && it.text.startsWith("收到 1 张图片") } &&
+                        list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+                }
+            }
+        }
+        val uploaded = java.nio.file.Files.list(ssh.home.resolve("hermes-uploads")).use { it.toList() }.single()
+        assertTrue(uploaded.fileName.toString().endsWith("image.jpg"), uploaded.toString())
+        assertTrue(java.nio.file.Files.readAllBytes(uploaded).contentEquals(bytes), "原文件完整")
+        val input = hermes.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
+        assertTrue(input.contains("📎 图片文件：/hermes-uploads/") && input.contains("image_url"), "模型既能看图，也知道文件在哪：$input")
+        val mine = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+        assertEquals("用这张图填表", mine.text, "气泡里不显示路径那一行")
+        assertEquals(1, mine.images.size)
+        assertTrue(mine.files.isEmpty(), "图片不变成文件卡片")
+    }
+
     @Test
     fun generatedImagesAreDownloadedOverSftp() {
         val hermes = hermes()

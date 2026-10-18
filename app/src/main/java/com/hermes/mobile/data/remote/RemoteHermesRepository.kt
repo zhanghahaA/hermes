@@ -1064,7 +1064,12 @@ class RemoteHermesRepository(
             }
         }
         if (images.size > MaxImagesPerMessage) throw HermesError.BadUrl("一条消息最多 $MaxImagesPerMessage 张图片（PDF 每页算一张）")
-        val text = (listOf(quotedInput(out.quote, out.text)) + blocks).filter { it.isNotBlank() }.joinToString("\n\n")
+        // 发的图片同时存一份原文件到 Hermes 那台机器上：有的 Hermes 版本只把图片转成文字描述、不落盘，
+        // 模型要上传附件、用工具处理图片时得有真文件路径
+        val photos = out.attachments.filterIsInstance<Attachment.Image>()
+        val copies = photos.mapIndexedNotNull { i, image -> imageCopy(image, i + 1, photos.size)?.let { AttachmentText.imageFile(it, i + 1, photos.size) } }
+        val text = (listOf(quotedInput(out.quote, out.text)) + blocks + listOfNotNull(copies.takeIf { it.isNotEmpty() }?.joinToString("\n")))
+            .filter { it.isNotBlank() }.joinToString("\n\n")
         if (images.isEmpty()) return@withContext JsonPrimitive(text)
         buildJsonArray {
             add(buildJsonObject {
@@ -1083,6 +1088,24 @@ class RemoteHermesRepository(
                 })
             })
         }
+    }
+
+    /** 图片原文件放到 Hermes 那台机器上（SSH 上传，或本机 Termux 存到下载目录）；做不到就返回 null，不影响发送。 */
+    private fun imageCopy(image: Attachment.Image, index: Int, total: Int): String? {
+        val file = File(image.path)
+        if (!file.isFile) return null
+        val name = "image" + (if (total > 1) "-$index" else "") + "." + file.extension.ifEmpty { "jpg" }
+        tunnel?.let { t ->
+            return try {
+                t.upload(file.path, name)
+            } catch (e: Exception) {
+                _errors.tryEmit("图片原文件没能传到服务器（图片照常发送）：${e.message}")
+                null
+            }
+        }
+        val profile = _connections.value.firstOrNull { it.id == connectedId }
+        if (profile?.type != ConnectionType.Local) return null
+        return localFileExporter?.invoke(file.path, name, mimeOf(file.name))
     }
 
     /** 普通文件交给 Hermes：SSH 上传到服务器，本机 Termux 存到下载目录。返回 Hermes 那边能读到的路径。 */
