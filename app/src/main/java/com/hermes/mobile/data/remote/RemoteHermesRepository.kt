@@ -16,6 +16,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import java.io.File
+import java.io.IOException
 import java.util.Base64
 import com.hermes.mobile.data.model.AppFeature
 import com.hermes.mobile.data.model.AppSettings
@@ -50,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -179,6 +181,7 @@ class RemoteHermesRepository(
                 resumeStoredRuns(id)
                 scope.launch { loadModels() }
                 scope.launch { loadJobs() }
+                scope.launch { refreshCapabilities() }
             } catch (e: HermesError) {
                 client = null
                 capabilities = null
@@ -922,9 +925,43 @@ class RemoteHermesRepository(
             status = DeliveryStatus.Sending,
             files = attachments.displayFiles(),
         )
-        updateChat(key) { it.copy(local = it.local + LocalEntry(message, it.messageCount), phase = RunPhase.Working, streaming = null) }
+        val running = runs[key]
+        updateChat(key) { it.copy(local = it.local + LocalEntry(message, it.messageCount), phase = if (running != null && it.phase == RunPhase.AwaitingInput) it.phase else RunPhase.Working, streaming = running?.let { _ -> it.streaming }) }
         outbox[localId] = Outgoing(sessionId, text.trim(), attachments, quote)
-        runScope.launch { submit(localId) }
+        runScope.launch { if (running != null) steerOrQueue(key, running, localId) else submit(localId) }
+    }
+
+    /** 插话发出去、还没被这一轮用上的本地消息：run id → 本地消息 id。 */
+    private val steered = ConcurrentHashMap<String, MutableList<String>>()
+
+    /**
+     * Hermes 还在回复时又发了一句：纯文字就“插话”（Hermes 在下一步看到，不打断它），
+     * 带附件或服务器不支持插话就等这一轮结束再作为新消息发。
+     */
+    private suspend fun steerOrQueue(key: String, run: ActiveRun, localId: String) {
+        val out = outbox[localId] ?: return
+        val canSteer = out.attachments.isEmpty() && out.quote == null && capabilities?.endpoints?.contains("run_steer") == true
+        if (canSteer) {
+            try {
+                withRetry { client?.steerRun(run.runId, out.text) ?: throw HermesError.Unreachable("还没连上 Hermes") }
+                outbox.remove(localId)
+                setLocalStatus(key, localId, DeliveryStatus.Sent)
+                steered.getOrPut(run.runId) { java.util.Collections.synchronizedList(mutableListOf()) } += localId
+                return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HermesError.Conflict) {
+                // 这一轮正在收尾，不接受插话了：排到下一轮
+            } catch (e: HermesError.NotSupported) {
+                // 这一轮已经不在了
+            } catch (e: HermesError) {
+                setLocalStatus(key, localId, DeliveryStatus.Failed)
+                _errors.tryEmit("插话没发出去：${e.message}")
+                return
+            }
+        }
+        _activeRuns.first { key !in it }
+        submit(localId)
     }
 
     override fun retryMessage(sessionId: String, itemId: String) {
@@ -945,7 +982,8 @@ class RemoteHermesRepository(
             val c = client ?: throw HermesError.Unreachable("还没连上 Hermes")
             val sessionId = ensureServerSession(uiId)
             val input = buildInput(out)
-            val accepted = withRetry { c.startRun(sessionId, input, idempotencyKey = localId, instructions = ClientInstructions) }
+            val instructions = ClientInstructions + skillCommandNote(out.text).orEmpty()
+            val accepted = withRetry { c.startRun(sessionId, input, idempotencyKey = localId, instructions = instructions) }
             val runId = accepted.run_id ?: throw HermesError.NotHermes()
             outbox.remove(localId)
             setLocalStatus(sessionId, localId, DeliveryStatus.Sent)
@@ -1122,7 +1160,7 @@ class RemoteHermesRepository(
             return false
         }
         when (status.status) {
-            "completed" -> complete(run, status.output.orEmpty())
+            "completed" -> complete(run, status.output.orEmpty(), status.pending_steer?.takeIf { it.isNotBlank() })
             "failed" -> end(run, status.error ?: "Hermes 处理失败")
             "cancelled", "interrupted" -> end(run, error = null)
             "unknown" -> end(run, "Hermes 不确定这一轮有没有完成，请在电脑上确认")
@@ -1147,7 +1185,7 @@ class RemoteHermesRepository(
             is RunEvent.Step -> updateChat(run.sessionId) { if (it.streaming != null) it.copy(streaming = null) else it }
             is RunEvent.Control -> addControl(run, event.request, event.seq)
             is RunEvent.ControlSettled -> settleControl(run, event.promptId, event.choice)
-            is RunEvent.Completed -> complete(run, event.output)
+            is RunEvent.Completed -> complete(run, event.output, event.pendingSteer)
             is RunEvent.Failed -> end(run, event.error)
             is RunEvent.Cancelled -> end(run, error = null)
             is RunEvent.Truncated, is RunEvent.Ignored -> Unit
@@ -1223,7 +1261,7 @@ class RemoteHermesRepository(
         }
     }
 
-    private fun complete(run: ActiveRun, output: String) {
+    private fun complete(run: ActiveRun, output: String, pendingSteer: String? = null) {
         if (runs[run.sessionId] !== run) return
         val raw = output.trim().ifEmpty { chats.value[run.sessionId]?.streaming?.trim().orEmpty() }
         // 回复里的 MEDIA:<路径> 是 Hermes 生成的文件：图片显示出来，其它显示成卡片
@@ -1240,11 +1278,18 @@ class RemoteHermesRepository(
         val preview = text.replace('\n', ' ').take(80).ifEmpty { if (images.isNotEmpty()) "[图片]" else if (files.isNotEmpty()) "[文件]" else "" }
         updateSession(run.sessionId) { it.copy(preview = preview, updatedAt = clock()) }
         if (text.isNotEmpty()) notify(run.sessionId, ChatNotice.Kind.Reply, text)
+        val steeredIds = steered.remove(run.runId).orEmpty().toSet()
+        if (pendingSteer != null) {
+            // 插话还没交给模型这一轮就结束了：去掉那几条，作为新消息重新发
+            updateChat(run.sessionId) { st -> st.copy(local = st.local.filterNot { it.item.id in steeredIds }) }
+            sendMessage(run.sessionId, pendingSteer, emptyList())
+        }
         scope.launch { reconcileAfterRun(run.sessionId, text) }
     }
 
     private fun end(run: ActiveRun, error: String?) {
         if (runs[run.sessionId] !== run) return
+        steered.remove(run.runId)
         finish(run)
         updateChat(run.sessionId) { it.copy(phase = RunPhase.Idle, streaming = null) }
         if (error != null) {
@@ -1425,9 +1470,110 @@ class RemoteHermesRepository(
             _errors.tryEmit("没能切换到 ${choice.name}：${e.message}")
         }
     }
-    override val skills: StateFlow<List<Skill>> = MutableStateFlow(emptyList())
-    override val toolsets: StateFlow<List<Toolset>> = MutableStateFlow(emptyList())
-    override fun toggleToolset(name: String) = notYet<Unit>("工具集")
+    // ---- 技能、工具集 ----
+
+    private val _skills = MutableStateFlow<List<Skill>>(emptyList())
+    override val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
+    private val _skillsError = MutableStateFlow<String?>(null)
+    override val skillsError: StateFlow<String?> = _skillsError.asStateFlow()
+    private val _toolsets = MutableStateFlow<List<Toolset>>(emptyList())
+    override val toolsets: StateFlow<List<Toolset>> = _toolsets.asStateFlow()
+
+    private suspend fun loadSkills() {
+        val c = client ?: return
+        if (capabilities?.endpoints?.contains("skills") != true) return
+        _features.update { it + AppFeature.Skills }
+        try {
+            _skills.value = c.skills().data.map { Skill(it.name, it.description.orEmpty(), it.category.orEmpty()) }
+            _skillsError.value = null
+        } catch (e: HermesError.Server) {
+            // 某些 Hermes 版本这个接口自己会报错（500）。有 SSH 就直接读技能目录
+            val fromDisk = skillsOverSsh()
+            if (fromDisk != null) {
+                _skills.value = fromDisk
+                _skillsError.value = null
+                return
+            }
+            _skillsError.value = "Hermes 读取技能列表时出错（${e.message}）。这是 Hermes 那边的问题，聊天时技能照常可用；升级 Hermes 后再试。"
+        } catch (e: HermesError) {
+            if (_skills.value.isEmpty()) _skillsError.value = "读不到技能列表：${e.message}"
+        }
+    }
+
+    /**
+     * 经 SSH 读 `~/.hermes/skills/<分类>/<名字>/SKILL.md` 开头的 name / description。
+     * 读不了（没有 SSH、目录不在）返回 null。
+     */
+    private suspend fun skillsOverSsh(): List<Skill>? {
+        val t = tunnel ?: return null
+        val profile = profileFlag().removePrefix(" -p ")
+        val home = if (profile.isEmpty()) "\${HERMES_HOME:-\$HOME/.hermes}" else "\$HOME/.hermes/profiles/$profile"
+        val script = "cd \"$home/skills\" 2>/dev/null || exit 3; find . -name SKILL.md -not -path '*/.*/*' | sort | while read -r f; do " +
+            "printf '%s\\t' \"\$f\"; awk '/^---/{n++; next} n==1 && /^(name|description):/{k=\$1; sub(/^[a-z]+:[ ]*/, \"\"); printf \"%s%s\\t\", k, \$0} n>=2{exit}' \"\$f\"; echo; done"
+        val (code, output) = try {
+            withContext(Dispatchers.IO) { t.exec(script) }
+        } catch (e: IOException) {
+            return null
+        }
+        if (code != 0) return null
+        return parseSkillListing(output).takeIf { it.isNotEmpty() }
+    }
+
+    private suspend fun loadToolsets() {
+        val c = client ?: return
+        if (capabilities?.endpoints?.contains("toolsets") != true) return
+        try {
+            _toolsets.value = c.toolsets().data.map {
+                Toolset(it.name, it.label?.takeIf { l -> l.isNotBlank() } ?: it.name, it.description.orEmpty(), it.tools, it.enabled == true, it.configured != false)
+            }
+            _features.update { it + AppFeature.Toolsets }
+        } catch (e: HermesError) {
+            // 读不到就不显示
+        }
+    }
+
+    override suspend fun refreshCapabilities() {
+        coroutineScope {
+            launch { loadSkills() }
+            launch { loadToolsets() }
+        }
+    }
+
+    private val _toolsetsBusy = MutableStateFlow<Set<String>>(emptySet())
+    override val toolsetsBusy: StateFlow<Set<String>> = _toolsetsBusy.asStateFlow()
+
+    override fun canToggleToolsets(): Boolean = tunnel != null
+
+    /** 当前连接的 Profile（hermes 命令要用 -p 指定）。 */
+    private fun profileFlag(): String =
+        connections.value.firstOrNull { it.id == connectedId }?.profile?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { " -p " + it.replace(Regex("[^A-Za-z0-9_.-]"), "") }.orEmpty()
+
+    /** API 不能改工具集，经 SSH 运行 `hermes tools enable|disable … --platform api_server`（改的是 config.yaml，下一条消息起生效）。 */
+    override fun toggleToolset(name: String) {
+        val t = tunnel ?: return notYet("不经 SSH 开关工具集")
+        val toolset = _toolsets.value.firstOrNull { it.name == name } ?: return
+        if (name in _toolsetsBusy.value) return
+        val enable = !toolset.enabled
+        _toolsetsBusy.update { it + name }
+        scope.launch {
+            try {
+                val safe = name.replace(Regex("[^A-Za-z0-9_.:-]"), "")
+                val (code, output) = withContext(Dispatchers.IO) {
+                    t.exec("hermes${profileFlag()} tools ${if (enable) "enable" else "disable"} $safe --platform api_server")
+                }
+                if (code != 0) {
+                    val hint = if (code == 127 || "command not found" in output) "服务器上找不到 hermes 命令" else output.lines().lastOrNull { it.isNotBlank() }?.take(200) ?: "退出码 $code"
+                    _errors.tryEmit("没能${if (enable) "开启" else "关闭"} ${toolset.label}：$hint")
+                }
+                loadToolsets()
+            } catch (e: IOException) {
+                _errors.tryEmit("SSH 执行失败：${e.message}")
+            } finally {
+                _toolsetsBusy.update { it - name }
+            }
+        }
+    }
     // ---- 定时任务 ----
 
     private val _jobs = MutableStateFlow<List<CronJob>>(emptyList())
@@ -1562,6 +1708,18 @@ class RemoteHermesRepository(
         return Unit as T
     }
 
+    /**
+     * `/技能名 …` 开头的消息：Hermes 的 API 不像聊天软件那样展开技能命令，
+     * 所以在这一轮的补充说明里告诉模型去加载这个技能（不进聊天记录）。
+     */
+    private fun skillCommandNote(text: String): String? {
+        val name = SkillCommand.find(text)?.groupValues?.get(1) ?: return null
+        val known = _skills.value.map { it.name }
+        if (known.isNotEmpty() && name !in known) return null
+        return "\n\nThe user's message starts with /$name, a Hermes skill command. Load the \"$name\" skill with skill_view " +
+            "and follow it for this request (if no such skill exists, treat the message as plain text)."
+    }
+
     private fun sha256Hex(text: String): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 
@@ -1571,6 +1729,8 @@ class RemoteHermesRepository(
          * Hermes 对 API 客户端的默认说法是“不支持 Markdown、runs 接口发不了文件、只写纯文本路径”，
          * 这个 App 两样都支持，告诉模型按 App 的方式来。
          */
+        val SkillCommand = Regex("""^/([A-Za-z0-9][\w.:-]*)(\s|$)""")
+
         const val ClientInstructions =
             "Client note: the user is chatting through the Hermes Mobile Android app, which renders Markdown " +
                 "(headings, lists, code blocks, tables) and supports file delivery on this endpoint. To send the user " +

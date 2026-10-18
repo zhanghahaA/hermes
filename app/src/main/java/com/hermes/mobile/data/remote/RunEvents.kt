@@ -77,7 +77,7 @@ sealed interface RunEvent {
     data class ControlSettled(override val seq: Long?, val promptId: String?, val choice: String?) : RunEvent
     /** 工具调用等中间步骤开始/结束：之前流式显示的那段话只是过程，要清掉。 */
     data class Step(override val seq: Long?) : RunEvent
-    data class Completed(override val seq: Long?, val output: String) : RunEvent
+    data class Completed(override val seq: Long?, val output: String, val pendingSteer: String? = null) : RunEvent
     data class Failed(override val seq: Long?, val error: String) : RunEvent
     data class Cancelled(override val seq: Long?) : RunEvent
     /** 断线太久，漏掉的事件服务器已经不保留了。 */
@@ -95,7 +95,7 @@ internal fun parseRunEvent(frame: SseEvent): RunEvent {
         "clarify.request" -> ControlRequest.from(obj, ControlRequest.Kind.Clarify)?.let { RunEvent.Control(seq, it) } ?: RunEvent.Ignored(seq)
         "approval.settled", "approval.responded", "clarify.settled", "clarify.responded" ->
             RunEvent.ControlSettled(seq, obj.string("prompt_id") ?: obj.string("request_id"), obj.string("choice") ?: obj.string("answer"))
-        "run.completed" -> RunEvent.Completed(seq, obj.string("output").orEmpty())
+        "run.completed" -> RunEvent.Completed(seq, obj.string("output").orEmpty(), obj.string("pending_steer")?.takeIf { it.isNotBlank() })
         "run.failed", "error" -> RunEvent.Failed(seq, obj.string("error") ?: obj.string("message") ?: "Hermes 处理失败")
         "run.cancelled", "run.interrupted" -> RunEvent.Cancelled(seq)
         "replay.truncated" -> RunEvent.Truncated(seq)

@@ -170,8 +170,9 @@ class ChatInteractionsTest {
         assertEquals(Role.Assistant, original.role, "只能引用 Hermes 的回复")
         assertEquals(original.text.trim(), quote.text, "引用的是回复正文本身")
         assertTrue(!quote.partial)
-        // 发送后引用清空
-        onNodeWithText("给 Hermes 发消息").assertIsDisplayed()
+        // 发送后引用清空（Hermes 还在回复，输入框提示变成“补充一句”）
+        onNodeWithText("针对这段追问…").assertDoesNotExist()
+        onNodeWithText("补充一句", substring = true).assertIsDisplayed()
     }
 
     @Test

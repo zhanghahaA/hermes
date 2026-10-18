@@ -213,9 +213,24 @@ data class ModelOption(
     val providerSlug: String = provider,
 )
 
-data class Skill(val name: String, val description: String, val category: String)
+data class Skill(val name: String, val description: String, val category: String) {
+    /** 在新对话里指定用这个技能时，预先写进输入框的话。 */
+    fun invocation(): String = "/$name "
+}
 
-data class Toolset(val name: String, val description: String, val toolCount: Int, val enabled: Boolean)
+/**
+ * 一个工具集。[label] 是 Hermes 给的显示名（可能带 emoji），[configured] 为 false 表示缺 Key，开了也用不了。
+ */
+data class Toolset(
+    val name: String,
+    val label: String,
+    val description: String,
+    val tools: List<String>,
+    val enabled: Boolean,
+    val configured: Boolean = true,
+) {
+    val toolCount: Int get() = tools.size
+}
 
 // ---- 定时任务 ----
 

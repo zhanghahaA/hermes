@@ -46,13 +46,13 @@ object SampleData {
     )
 
     val toolsets = listOf(
-        Toolset("terminal", "在服务器上执行命令", 3, true),
-        Toolset("file", "读写文件、搜索代码", 6, true),
-        Toolset("web", "搜索网页、抓取页面", 2, true),
-        Toolset("browser", "无头浏览器自动化", 8, false),
-        Toolset("vision", "理解图片内容", 1, true),
-        Toolset("cronjob", "创建和管理定时任务", 4, true),
-        Toolset("delegate", "派生子代理并行处理", 1, false),
+        Toolset("terminal", "💻 终端和进程", "在服务器上执行命令", listOf("terminal", "process_manage"), true),
+        Toolset("file", "📁 文件", "读写文件、搜索代码", listOf("read_file", "write_file", "patch", "search_files"), true),
+        Toolset("web", "🔍 网页搜索", "搜索网页、抓取页面", listOf("web_search", "web_extract"), true),
+        Toolset("browser", "🌐 浏览器", "无头浏览器自动化", listOf("browser_navigate", "browser_click", "browser_type", "browser_snapshot"), false),
+        Toolset("image_gen", "🎨 画图", "生成图片", listOf("image_generate"), false, configured = false),
+        Toolset("cronjob", "⏰ 定时任务", "创建和管理定时任务", listOf("cronjob"), true),
+        Toolset("delegation", "👥 子代理", "派生子代理并行处理", listOf("delegate_task"), false),
     )
 
     fun jobs() = listOf(

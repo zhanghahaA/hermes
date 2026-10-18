@@ -193,6 +193,33 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
   App 在预览和聊天里都去掉。模型回复 `[SILENT]` 表示没有新内容。
 - `deliver`：`local`/`origin` 只存在 Hermes 里（App 里能看到）；`telegram`、`discord`、`slack` 等需要 Hermes 那边配好对应平台。
 
+## 技能和工具集（阶段 4）
+
+- `GET /v1/skills` → `{"data":[{name, description, category}]}`。**v0.22 canary 里这个接口是坏的**：
+  它调用 `_find_all_skills(include_editorial=True)`，而 `tools/skills_tool.py` 里的函数没有这个参数，所以总是 500 "Failed to enumerate skills"。
+  App 遇到 500 时，如果连接配了 SSH，就直接读 `~/.hermes/skills/<分类>/<名字>/SKILL.md` 开头的 `name` / `description`
+  （Profile 是 `~/.hermes/profiles/<名字>/skills`）；没有 SSH 就显示一句说明。
+- API 不展开 `/技能名` 这种命令（只有聊天软件那条路和桌面版的 WebSocket 会）。App 的做法：消息以 `/技能名` 开头时，
+  在这一轮的 `instructions` 里加一句“用 skill_view 加载这个技能并照着做”，聊天记录里仍是你打的原话。
+- `GET /v1/toolsets` → `{"data":[{name, label, description, enabled, configured, tools:[...]}]}`，只读。
+  开关要改 `config.yaml`：App 经 SSH 执行 `hermes [-p <profile>] tools enable|disable <名字> --platform api_server`。
+  Hermes 每一轮都重新读配置，不用重启，下一条消息起生效。
+
+## 插话（steer）
+
+- `POST /v1/runs/{run_id}/steer` `{"input": "..."}`：Hermes 还在回复（比如在跑工具）时补充一句，不打断它；
+  它在下一次调用模型前看到。这一轮已经不在运行时返回 409 `run_not_accepting_steer`。
+- 插话存进聊天记录是一条单独的用户消息，`display_kind: "steer"`，内容包着
+  `[OUT-OF-BAND USER MESSAGE — …]` … `[/OUT-OF-BAND USER MESSAGE]`，App 显示时去掉。
+- 这一轮在交给模型之前就结束了的话，结束事件和运行状态里带 `pending_steer`，Hermes 不会自动补发，App 把它作为下一条消息发出去。
+- App 里：Hermes 回复时输入框空着，按钮是“停止”；打了字就变成“发送”（插话）。带图片/文件或引用的消息不能插话，等这一轮结束再发。
+
+## Profile
+
+- `/p/<profile>/...` 访问另一个 Profile。每个 Profile 用**它自己的** `API_SERVER_KEY`，不会退回默认 Profile 的 Key。
+- 没有列出 Profile 的接口。名字不对（或没开 `gateway.multiplex_profiles`）时返回 404 `{"error":"Unknown or unconfigured profile"}`，App 会直接说明。
+- 单 Profile 的 gateway 上，`/p/default/` 只在它本来就跑在默认 Profile 时可用。
+
 ## 客户端说明（instructions）
 
 `/v1/runs` 的 `instructions` 字段是只对这一轮生效的补充系统提示（Hermes 里叫 ephemeral system prompt，追加在系统提示后面，不存进聊天记录）。

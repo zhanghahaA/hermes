@@ -200,6 +200,15 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun unknownProfileSaysSo() {
+        val s = server(FakeHermesServer.Version.Modern)
+        val repo = repo()
+        repo.saveConnection(s.profile(profileName = "nope"), s.key)
+        val state = repo.awaitConnected()
+        assertTrue(state is ConnectionState.Failed && "nope" in state.reason && "Profile" in state.reason, state.toString())
+    }
+
+    @Test
     fun renameAndPinSendPatchAndRollBackOnFailure() {
         val s = server(FakeHermesServer.Version.Modern)
         val repo = repo()

@@ -96,8 +96,16 @@ interface HermesRepository {
     fun setSessionModel(sessionId: String, modelId: String)
     fun setDefaultModel(modelId: String)
     val skills: StateFlow<List<Skill>>
+    /** 读技能列表出错时的说明（有的 Hermes 版本这个接口本身有问题）。 */
+    val skillsError: StateFlow<String?>
     val toolsets: StateFlow<List<Toolset>>
     fun toggleToolset(name: String)
+    /** 能不能在手机上开关工具集（要有 SSH）。 */
+    fun canToggleToolsets(): Boolean = false
+    /** 正在开关的工具集。 */
+    val toolsetsBusy: StateFlow<Set<String>>
+    /** 重新读技能和工具集（打开“能力”页时）。 */
+    suspend fun refreshCapabilities() = Unit
 
     // 定时任务
     val jobs: StateFlow<List<CronJob>>

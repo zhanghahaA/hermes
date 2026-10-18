@@ -311,7 +311,13 @@ fun ChatScreen(
                         attachments = attachments,
                         onRemoveAttachment = { image -> attachments = attachments - image },
                         onAttach = { showAttach = true },
-                        mode = if (phase == RunPhase.Working) SendButtonMode.Stop else SendButtonMode.Send,
+                        // Hermes 回复时：输入框空着是“停止”，打了字就是“插话”（它在下一步看到，不打断）
+                        mode = if (phase != RunPhase.Idle && draft.isBlank() && attachments.isEmpty()) SendButtonMode.Stop else SendButtonMode.Send,
+                        placeholder = when {
+                            quote != null -> "针对这段追问…"
+                            phase != RunPhase.Idle -> "补充一句，Hermes 会在下一步看到"
+                            else -> "给 Hermes 发消息"
+                        },
                         onSend = ::send,
                         onStop = { repository.stop(sessionId) },
                         enterToSend = settings.enterToSend,

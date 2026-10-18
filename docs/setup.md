@@ -130,6 +130,14 @@ platform_toolsets:
 在 App 里点“立即运行”后，Hermes 一般一分钟内开始执行，跑完会发通知。要让 Hermes 按时执行，gateway 要一直在运行
 （Termux 上记得 `termux-wake-lock`）。如果“任务”页显示“这台 Hermes 不支持定时任务”，说明它的版本还没有 `/api/jobs` 接口。
 
+## 技能、工具集和插话
+
+- “能力 → 技能”列出 Hermes 装好的技能，点开可以在新对话里用它；任何对话里输入 `/技能名 要做的事` 也一样。
+  有的 Hermes 版本（v0.22 canary）读技能列表的接口本身有问题，这时如果连接配了 SSH，App 会直接读 `~/.hermes/skills` 目录。
+- “能力 → 工具集”显示 Hermes 回复时能用哪些工具。配了 SSH 的连接可以直接开关（App 在服务器上执行 `hermes tools enable/disable`），
+  否则在那台机器上运行 `hermes tools` 修改。SSH 登录后要能找到 `hermes` 命令。
+- Hermes 正在回复时，你可以接着打字发送，这叫“插话”：它不会被打断，会在下一步看到你补充的话。想让它停下，输入框空着时点停止按钮。
+
 ## 后台和通知
 
 等 Hermes 回复时，App 会在通知栏显示“Hermes 正在回复…”，这样切到后台、锁屏也不会断。
@@ -138,5 +146,6 @@ platform_toolsets:
 
 ## 多个 Profile
 
-如果你用 Hermes 的多 Profile，在连接里填 Profile 名字。
-每个 Profile 要在自己的 `~/.hermes/profiles/<名字>/.env` 里设置单独的 `API_SERVER_KEY`。
+如果你用 Hermes 的多 Profile，在连接里填 Profile 名字，并在那台机器的 `config.yaml` 里开启 `gateway.multiplex_profiles`。
+每个 Profile 要在自己的 `~/.hermes/profiles/<名字>/.env` 里设置单独的 `API_SERVER_KEY`，App 里填的也是这个 Profile 的 Key。
+想同时用几个 Profile，就为每个 Profile 建一个连接，在聊天列表顶部切换。

@@ -44,6 +44,7 @@ import com.hermes.mobile.ui.chats.ActionSheetContent
 import com.hermes.mobile.ui.chats.ConnectionSwitcherContent
 import com.hermes.mobile.ui.chats.SheetAction
 import com.hermes.mobile.ui.jobs.JobEditorScreen
+import com.hermes.mobile.ui.capabilities.SkillSheetContent
 import com.hermes.mobile.ui.main.MainScreen
 import com.hermes.mobile.ui.main.MainTab
 import com.hermes.mobile.ui.navigation.topPage
@@ -130,6 +131,10 @@ private val scenes = listOf(
     Scene("14c-job-new") { repo, _ -> JobEditorScreen(repo, null, onClose = {}) },
     Scene("15-capabilities-models") { repo, _ -> mainScreen(repo, MainTab.Capabilities)() },
     Scene("16-capabilities-skills") { repo, _ -> CapabilitiesScreen(repo, initialTab = 1) },
+    Scene("16b-capabilities-toolsets") { repo, _ -> CapabilitiesScreen(repo, initialTab = 2) },
+    Scene("16c-sheet-skill") { repo, _ ->
+        SheetOver({ CapabilitiesScreen(repo, initialTab = 1) }) { SkillSheetContent(SampleData.skills[3], onUse = {}) }
+    },
     Scene("17-settings") { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("18-settings-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },

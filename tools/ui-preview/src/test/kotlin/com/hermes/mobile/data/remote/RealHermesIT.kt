@@ -348,4 +348,46 @@ class RealHermesIT {
             scope.cancel()
         }
     }
+
+    /** 阶段 4：工具集、技能、插话。插话要配合假模型的“慢慢查”（先跑一个 4 秒的命令）。 */
+    @Test
+    fun capabilitiesAndSteerAgainstRealHermes() {
+        if (host == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_HOST / HERMES_IT_KEY")
+            return
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
+            repo.saveConnection(ConnectionProfile("real", "真实 Hermes", ConnectionType.Direct, host, port), key)
+            runBlocking { withTimeout(15_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
+
+            val toolsets = runBlocking { withTimeout(15_000) { repo.toolsets.first { it.isNotEmpty() } } }
+            println("工具集：" + toolsets.joinToString { "${it.label}(${if (it.enabled) "开" else "关"}${if (it.configured) "" else "，缺 Key"}, ${it.toolCount})" })
+            assertTrue(toolsets.any { it.name == "terminal" && it.enabled })
+            // 有的 Hermes 版本技能接口本身是坏的（500），这时应该有一句说明
+            runBlocking { withTimeout(15_000) { while (repo.skills.value.isEmpty() && repo.skillsError.value == null) kotlinx.coroutines.delay(100) } }
+            println("技能：${repo.skills.value.size} 个；出错说明：${repo.skillsError.value}")
+
+            val chat = assertNotNullOr(repo.createSession(), "草稿")
+            repo.sendMessage(chat, "慢慢查一下磁盘", emptyList())
+            runBlocking { withTimeout(20_000) { repo.session(chat).first { it != null && !it.id.startsWith("draft-") && it.running } } }
+            Thread.sleep(1500)
+            repo.sendMessage(chat, "顺便改成英文", emptyList())
+            val replies = runBlocking {
+                withTimeout(60_000) {
+                    repo.chatItems(chat).first { list -> list.any { it is ChatItem.Message && it.role == Role.Assistant && "收到插话" in it.text } }
+                }
+            }
+            runBlocking { withTimeout(30_000) { repo.runPhase(chat).first { it == RunPhase.Idle } } }
+            Thread.sleep(1500)
+            val history = runBlocking { repo.chatItems(chat).first() }.filterIsInstance<ChatItem.Message>()
+            println("插话后的记录：" + history.map { "${it.role}:${it.text}" })
+            assertTrue(replies.isNotEmpty())
+            assertTrue(history.any { it.role == Role.User && it.text == "顺便改成英文" }, "插话以普通消息显示，没有标记")
+            assertTrue(history.none { "OUT-OF-BAND" in it.text })
+        } finally {
+            scope.cancel()
+        }
+    }
 }

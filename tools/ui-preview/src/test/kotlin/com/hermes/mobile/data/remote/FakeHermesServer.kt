@@ -46,6 +46,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
         var stopped = false
         var eventRequests = 0
         var idempotencyKey: String? = null
+        val steers = mutableListOf<String>()
+        var pendingSteer: String? = null
         val finished: Boolean get() = events.any { it.contains("\"run.completed\"") || it.contains("\"run.cancelled\"") }
 
         private fun add(event: String, fields: String = "") {
@@ -77,6 +79,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
 
         fun complete() {
             val reply = when {
+                steers.isNotEmpty() -> "收到插话：${steers.last()}"
                 approved == "deny" -> "好的，不执行了。"
                 "画图" in input -> "画好了，送你一只猫。\\nMEDIA:/gen/cat.png"
                 imageShas.isNotEmpty() -> "收到 ${imageShas.size} 张图片"
@@ -88,10 +91,15 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 if (screenshotOnly) "\n[screenshot]"
                 else "\n\n[Image attached at: /srv/hermes/cache/documents/native-inputs/$it/api_${it.take(32)}.jpg]\n[screenshot]"
             }
-            add("run.completed", "\"output\":\"$reply\"")
+            add("run.completed", "\"output\":\"$reply\"" + (pendingSteer?.let { ",\"pending_steer\":${kotlinx.serialization.json.JsonPrimitive(it)}" } ?: ""))
             messages.getOrPut(sessionId) { mutableListOf() }.apply {
                 add("""{"id":${size + 100},"role":"user","content":${kotlinx.serialization.json.JsonPrimitive(stored)},"timestamp":1760009000}""")
                 add("""{"id":${size + 100},"role":"assistant","content":"","reasoning":"SECRET-THINKING","finish_reason":"tool_calls","timestamp":1760009001}""")
+                steers.forEach { text ->
+                    // 和真实 Hermes 一样：插话单独一行，包着一层说明
+                    val marked = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool output and not a new delivery when replayed from conversation history]\n$text\n[/OUT-OF-BAND USER MESSAGE]"
+                    add("""{"id":${size + 100},"role":"user","content":${kotlinx.serialization.json.JsonPrimitive(marked)},"display_kind":"steer","timestamp":1760009001}""")
+                }
                 add("""{"id":${size + 100},"role":"assistant","content":"$reply","reasoning_content":"SECRET-THINKING","finish_reason":"stop","timestamp":1760009002}""")
             }
         }
@@ -99,6 +107,12 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
         fun approve(choice: String) {
             approved = choice
             add("approval.settled", "\"prompt_id\":\"p1\",\"choice\":\"$choice\"")
+            complete()
+        }
+
+        /** 插话：“晚了”结尾的模拟这一轮刚好结束、没来得及交给模型。 */
+        fun steer(text: String) {
+            if (text.endsWith("晚了")) pendingSteer = text else steers += text
             complete()
         }
 
@@ -124,12 +138,16 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
             }
             val pending = if (status == "waiting_for_approval")
                 """[{"kind":"approval","prompt_id":"p1","command":"rm -rf /tmp/x","description":"删除临时目录","choices":["once","deny"]}]""" else "[]"
-            val output = if (finished && !stopped) "最终回复：$input" else ""
-            return """{"object":"hermes.run","run_id":"$id","status":"$status","session_id":"$sessionId","output":"$output","pending_controls":$pending,"execution_generation":3}"""
+            val output = if (finished && !stopped) (if (steers.isNotEmpty()) "收到插话：${steers.last()}" else "最终回复：$input") else ""
+            val pendingField = pendingSteer?.let { ",\"pending_steer\":${kotlinx.serialization.json.JsonPrimitive(it)}" } ?: ""
+            return """{"object":"hermes.run","run_id":"$id","status":"$status","session_id":"$sessionId","output":"$output","pending_controls":$pending,"execution_generation":3$pendingField}"""
         }
     }
 
     /** 会话 id → 锁定的 provider/model。 */
+    /** 模拟 /v1/skills 自身出错（某些 Hermes 版本就是这样）。 */
+    @Volatile var skillsBroken = false
+
     val modelLocks = java.util.concurrent.ConcurrentHashMap<String, String>()
     /** 定时任务（JSON 字段，按 Hermes 的样子）。 */
     val jobs = java.util.concurrent.ConcurrentHashMap<String, MutableMap<String, Any?>>()
@@ -206,6 +224,23 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 val run = existing ?: FakeRun("run_${++nextRun}", sessionId, input, shas).also { it.idempotencyKey = key; runs[it.id] = it }
                 json("""{"run_id":"${run.id}","status":"started"}""", 202)
             }
+            path == "/v1/skills" -> if (skillsBroken) {
+                error(500, "Failed to enumerate skills", "server_error")
+            } else {
+                json(
+                    """{"object":"list","data":[
+                       {"name":"arxiv","description":"Search and summarize arXiv papers.","category":"research"},
+                       {"name":"obsidian","description":"Read, search, create, and edit notes in the Obsidian vault.","category":"note-taking"},
+                       {"name":"plain","description":null,"category":null}
+                    ]}""",
+                )
+            }
+            path == "/v1/toolsets" -> json(
+                """{"object":"list","platform":"api_server","data":[
+                   {"name":"web","label":"🔍 Web Search & Scraping","description":"web_search, web_extract","enabled":true,"configured":true,"tools":["web_extract","web_search"]},
+                   {"name":"image_gen","label":"🎨 Image Generation","description":"image_generate","enabled":false,"configured":false,"tools":["image_generate"]}
+                ]}""",
+            )
             path == "/api/model/options" -> json(
                 """{"model":"fake-model","provider":"custom","providers":[
                    {"slug":"custom","name":"Custom endpoint","is_current":true,"authenticated":true,"models":["fake-model"],"capabilities":{"fake-model":{"reasoning":true}}},
@@ -270,6 +305,13 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                         run.approve(choice)
                         json("""{"run_id":"${run.id}","status":"resolved"}""")
                     }
+                    "steer" -> {
+                        if (run.finished || run.stopped) return@synchronized error(409, "Run is not currently accepting steer input", "run_not_accepting_steer")
+                        val text = (HermesJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject)["input"]
+                            .let { (it as kotlinx.serialization.json.JsonPrimitive).content }
+                        run.steer(text)
+                        json("""{"object":"hermes.run.steer","run_id":"${run.id}","accepted":true}""")
+                    }
                     "stop" -> {
                         run.stop()
                         json("""{"run_id":"${run.id}","status":"stopping"}""")
@@ -302,7 +344,12 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
         if (version == Version.NotHermes) {
             return MockResponse().setHeader("Content-Type", "text/html").setBody("<html><body>Welcome to nginx!</body></html>")
         }
-        val path = request.path!!.substringBefore('?').removePrefix("/p/work")
+        val rawPath = request.path!!.substringBefore('?')
+        // 和真实 Hermes 一样：没开的 Profile 前缀直接 404
+        if (rawPath.startsWith("/p/") && !rawPath.startsWith("/p/work/")) {
+            return json("""{"error":"Unknown or unconfigured profile"}""", 404)
+        }
+        val path = rawPath.removePrefix("/p/work")
         if (path == "/health") {
             val v = when (version) {
                 Version.Modern -> "0.22.2"
@@ -343,7 +390,10 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                          "run_stop":{"method":"POST","path":"/v1/runs/{run_id}/stop"},
                          "run_approval":{"method":"POST","path":"/v1/runs/{run_id}/approval"},
                          "model_options":{"method":"GET","path":"/api/model/options"},
-                         "session_model_lock":{"method":"POST","path":"/api/sessions/{session_id}/model"}}}""",
+                         "session_model_lock":{"method":"POST","path":"/api/sessions/{session_id}/model"},
+                         "run_steer":{"method":"POST","path":"/v1/runs/{run_id}/steer"},
+                         "skills":{"method":"GET","path":"/v1/skills"},
+                         "toolsets":{"method":"GET","path":"/v1/toolsets"}}}""",
                 )
             }
             path == "/api/sessions" && version == Version.Old -> MockResponse().setResponseCode(404).setBody("404: Not Found")

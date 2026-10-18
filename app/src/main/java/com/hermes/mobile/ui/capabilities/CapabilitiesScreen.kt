@@ -44,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.model.Skill
 import com.hermes.mobile.ui.chat.ModelPickerContent
 import com.hermes.mobile.ui.components.IconBadge
 import com.hermes.mobile.ui.components.EmptyState
@@ -64,7 +65,7 @@ import androidx.compose.ui.graphics.Color
 private val tabs = listOf("模型", "技能", "工具集", "更多")
 
 @Composable
-fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0) {
+fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0, onUseSkill: (Skill) -> Unit = {}) {
     var tab by rememberSaveable { mutableIntStateOf(initialTab) }
     val backdrop = rememberLayerBackdrop()
     val bottomSpace = LocalBottomBarSpace.current
@@ -98,10 +99,10 @@ fun CapabilitiesScreen(repository: HermesRepository, initialTab: Int = 0) {
             }
             when {
                 needed != null && needed !in features -> Box(Modifier.padding(contentPadding)) {
-                    EmptyState(Icons.Rounded.Extension, "还没接入", "连接真实 Hermes 后的${tabs[tab]}列表会在后续阶段完成。")
+                    EmptyState(Icons.Rounded.Extension, "看不到${tabs[tab]}", "还没连上 Hermes，或者这台 Hermes 的版本没有提供${tabs[tab]}接口。")
                 }
                 tab == 0 -> ModelsTab(repository, contentPadding)
-                tab == 1 -> SkillsTab(repository, contentPadding)
+                tab == 1 -> SkillsTab(repository, contentPadding, onUseSkill)
                 tab == 2 -> ToolsetsTab(repository, contentPadding)
                 else -> MoreTab(contentPadding)
             }
@@ -159,44 +160,6 @@ private fun ModelsTab(repository: HermesRepository, contentPadding: PaddingValue
             }
         },
     )
-}
-
-@Composable
-private fun SkillsTab(repository: HermesRepository, contentPadding: PaddingValues) {
-    val skills by repository.skills.collectAsState()
-    LazyColumn(contentPadding = contentPadding) {
-        item {
-            Text(
-                "Hermes 已安装的技能，聊天时它会自动选用。安装和删除需要在电脑上操作。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-        }
-        items(skills, key = { it.name }) { skill ->
-            ListItem(
-                leadingContent = { IconBadge(Icons.Rounded.AutoAwesome) },
-                headlineContent = { Text(skill.name) },
-                supportingContent = { Text(skill.description) },
-                trailingContent = { TagLabel(skill.category) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun ToolsetsTab(repository: HermesRepository, contentPadding: PaddingValues) {
-    val toolsets by repository.toolsets.collectAsState()
-    LazyColumn(contentPadding = contentPadding) {
-        items(toolsets, key = { it.name }) { toolset ->
-            ListItem(
-                leadingContent = { IconBadge(Icons.Rounded.Build) },
-                headlineContent = { Text(toolset.name) },
-                supportingContent = { Text("${toolset.description} · ${toolset.toolCount} 个工具") },
-                trailingContent = { Switch(checked = toolset.enabled, onCheckedChange = { repository.toggleToolset(toolset.name) }) },
-            )
-        }
-    }
 }
 
 /** API Server 管不到、需要通过 SSH 执行 hermes 命令的功能（计划 M5）。 */

@@ -1,5 +1,7 @@
 package com.hermes.mobile.data.remote
 
+import com.hermes.mobile.data.model.Skill
+
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.FileRef
@@ -70,7 +72,7 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long, imageSource: 
     val files: List<FileRef>
     if (role == Role.User) {
         // 用户消息：拆出 Hermes 记下的图片路径和 App 写进去的文件段
-        val (withoutImages, marked) = ImageMarkers.parse(SystemNotes.strip(rawText))
+        val (withoutImages, marked) = ImageMarkers.parse(SystemNotes.strip(SteerMarker.strip(rawText)))
         val (body, attached) = AttachmentText.parse(withoutImages)
         text = body
         files = attached
@@ -242,3 +244,19 @@ internal fun cleanPreview(preview: String?): String {
     val text = SystemNotes.strip(preview.orEmpty()).replace('\n', ' ').trim()
     return if (text.startsWith("[IMPORTANT") || text.startsWith("[System")) "" else text
 }
+
+/**
+ * 解析经 SSH 列出的技能：每行是 `./分类/名字/SKILL.md<TAB>name:值<TAB>description:值<TAB>`。
+ */
+internal fun parseSkillListing(output: String): List<Skill> = output.lines().mapNotNull { line ->
+    val parts = line.split('\t')
+    val path = parts.firstOrNull()?.removePrefix("./")?.takeIf { it.endsWith("SKILL.md") } ?: return@mapNotNull null
+    val dirs = path.removeSuffix("SKILL.md").trimEnd('/').split('/').filter { it.isNotEmpty() }
+    if (dirs.isEmpty()) return@mapNotNull null
+    fun field(key: String) = parts.firstOrNull { it.startsWith("$key:") }?.removePrefix("$key:")?.trim()?.trim('"', '\'')
+    Skill(
+        name = field("name")?.takeIf { it.isNotEmpty() } ?: dirs.last(),
+        description = field("description").orEmpty().takeUnless { it == ">" || it == "|" }.orEmpty(),
+        category = if (dirs.size >= 2) dirs[dirs.size - 2] else "",
+    )
+}.sortedWith(compareBy({ it.category }, { it.name }))

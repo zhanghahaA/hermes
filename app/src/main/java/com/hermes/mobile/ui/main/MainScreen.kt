@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.model.Draft
 import com.hermes.mobile.ui.capabilities.CapabilitiesScreen
 import com.hermes.mobile.ui.chats.ChatsScreen
 import com.hermes.mobile.ui.jobs.JobsScreen
@@ -98,7 +99,15 @@ fun MainScreen(
                             onManageConnections = { tabIndex = MainTab.Settings.ordinal },
                         )
                         MainTab.Jobs -> JobsScreen(repository = repository, onEditJob = onEditJob)
-                        MainTab.Capabilities -> CapabilitiesScreen(repository = repository)
+                        MainTab.Capabilities -> CapabilitiesScreen(
+                            repository = repository,
+                            onUseSkill = { skill ->
+                                repository.createSession()?.let { id ->
+                                    repository.saveDraft(id, Draft(text = skill.invocation()))
+                                    onOpenChat(id)
+                                }
+                            },
+                        )
                         MainTab.Settings -> SettingsScreen(
                             repository = repository,
                             onEditConnection = onEditConnection,

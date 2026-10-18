@@ -117,6 +117,12 @@ class HermesClient(
         execute(request("/v1/runs/${runId.encode()}/clarify").post(body.toString().toRequestBody(JsonMedia)).build()).close()
     }
 
+    /** 在 Hermes 回复的过程中插一句话（它会在下一步看到，不打断当前工作）。 */
+    internal suspend fun steerRun(runId: String, text: String) {
+        val body = kotlinx.serialization.json.buildJsonObject { put("input", kotlinx.serialization.json.JsonPrimitive(text)) }.toString()
+        execute(request("/v1/runs/${runId.encode()}/steer").post(body.toRequestBody(JsonMedia)).build()).close()
+    }
+
     internal suspend fun stopRun(runId: String) {
         execute(request("/v1/runs/${runId.encode()}/stop").post("{}".toRequestBody(JsonMedia)).build()).close()
     }
@@ -158,6 +164,10 @@ class HermesClient(
     }
 
     // ---- 定时任务 ----
+
+    internal suspend fun skills(): SkillListDto = get("/v1/skills", SkillListDto.serializer())
+
+    internal suspend fun toolsets(): ToolsetListDto = get("/v1/toolsets", ToolsetListDto.serializer())
 
     internal suspend fun jobs(): JobListDto = get("/api/jobs?include_disabled=true", JobListDto.serializer())
 
@@ -237,6 +247,7 @@ class HermesClient(
         val (code, message) = response.use { r ->
             val body = runCatching { r.body.string() }.getOrDefault("")
             if ("Headless backend (hermes serve)" in body || "hermes dashboard" in body) throw HermesError.NotHermes(WrongBackendHint)
+            if (r.code == 404 && "Unknown or unconfigured profile" in body) throw HermesError.BadUrl(unknownProfileHint())
             val error = runCatching { HermesJson.decodeFromString(ErrorBodyDto.serializer(), body).error }.getOrNull()
             // 定时任务接口的错误是 {"error": "一句话"}
             val plain = if (error == null) runCatching {
@@ -252,6 +263,10 @@ class HermesClient(
             else -> HermesError.Server(response.code, code, message, response.header("Retry-After")?.trim()?.toLongOrNull())
         }
     }
+
+    private fun unknownProfileHint() =
+        "这台 Hermes 没有提供名为「${profile?.trim()}」的 Profile。确认名字拼写（hermes profile list 能看到），" +
+            "并在它的 config.yaml 里开启 gateway.multiplex_profiles；只用默认 Profile 的话把这一栏留空"
 
     private fun String.encode(): String = java.net.URLEncoder.encode(this, "UTF-8").replace("+", "%20")
 

@@ -137,4 +137,41 @@ class OpenSshIT {
             scope.cancel()
         }
     }
+
+    /**
+     * 有 SSH 时：技能接口坏了就直接读技能目录；工具集可以开关（`hermes tools enable|disable`）。
+     * 需要 sshd 那边能找到 hermes 命令和 HERMES_HOME（测试用 sshd_config 里 SetEnv）。
+     */
+    @Test
+    fun sshManagesSkillsAndToolsets() {
+        if (dir == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_SSH_DIR / HERMES_IT_KEY")
+            return
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
+            val profile = ConnectionProfile(
+                id = "os", name = "OpenSSH", type = ConnectionType.Ssh, host = "127.0.0.1", port = 8642,
+                sshUser = user, sshPort = sshPort, sshAuth = SshAuthMethod.Key,
+            )
+            repo.saveConnection(profile, key, File(dir, "user_ed25519").readText())
+            runBlocking { withTimeout(30_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
+            assertTrue(repo.canToggleToolsets())
+
+            val skills = runBlocking { withTimeout(30_000) { repo.skills.first { it.isNotEmpty() } } }
+            println("经 SSH 读到 ${skills.size} 个技能，例如：" + skills.take(3).joinToString { "${it.category}/${it.name}: ${it.description}" })
+            assertTrue(skills.all { it.name.isNotBlank() })
+
+            val before = runBlocking { withTimeout(15_000) { repo.toolsets.first { list -> list.any { it.name == "tts" } } } }.first { it.name == "tts" }
+            repo.toggleToolset("tts")
+            val after = runBlocking { withTimeout(60_000) { repo.toolsets.first { list -> list.first { it.name == "tts" }.enabled != before.enabled } } }
+            println("tts：${before.enabled} → ${after.first { it.name == "tts" }.enabled}")
+            runBlocking { withTimeout(10_000) { repo.toolsetsBusy.first { it.isEmpty() } } }
+            repo.toggleToolset("tts")
+            runBlocking { withTimeout(60_000) { repo.toolsets.first { list -> list.first { it.name == "tts" }.enabled == before.enabled } } }
+        } finally {
+            scope.cancel()
+        }
+    }
 }

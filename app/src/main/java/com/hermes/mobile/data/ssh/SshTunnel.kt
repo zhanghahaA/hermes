@@ -120,6 +120,27 @@ class SshTunnel(
     }
 
     /**
+     * 在服务器上执行一条命令（用登录 shell，这样 `hermes` 在 PATH 里），返回退出码和输出（stdout + stderr）。
+     * 用来做 API 管不到的事，比如开关工具集。
+     */
+    fun exec(command: String, timeoutSeconds: Long = 60): Pair<Int, String> {
+        fun once(): Pair<Int, String> = session().startSession().use { s ->
+            val cmd = s.exec("bash -lc " + shellQuote(command) + " 2>&1")
+            val out = cmd.inputStream.readBytes().toString(Charsets.UTF_8)
+            cmd.join(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+            (cmd.exitStatus ?: -1) to out
+        }
+        return try {
+            once()
+        } catch (e: IOException) {
+            reset()
+            once()
+        }
+    }
+
+    private fun shellQuote(text: String) = "'" + text.replace("'", "'\\''") + "'"
+
+    /**
      * 试着开一条到 Hermes 端口的转发通道，返回失败原因（给人看的话），成功返回 null。
      * 用来区分“服务器禁止端口转发”和“那个端口上没有服务”。
      */

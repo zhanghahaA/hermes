@@ -185,6 +185,18 @@ internal const val RemoteMediaPrefix = "hermes-media:"
  * `[System: This conversation is now being answered on a different interface: …]`。
  * 这些不是用户说的话，显示前去掉（按方括号配对，提示里可以有嵌套的方括号和换行）。
  */
+/**
+ * 插话（steer）存进记录时被 Hermes 包上一层说明：
+ * `[OUT-OF-BAND USER MESSAGE — …]` 正文 `[/OUT-OF-BAND USER MESSAGE]`。显示时只留正文。
+ */
+internal object SteerMarker {
+    private val open = Regex("""\[OUT-OF-BAND USER MESSAGE[^\]]*\]\s*""")
+    private val close = Regex("""\s*\[/OUT-OF-BAND USER MESSAGE\]""")
+
+    fun strip(text: String): String =
+        if ("OUT-OF-BAND USER MESSAGE" !in text) text else text.replace(open, "").replace(close, "").trim()
+}
+
 internal object SystemNotes {
     // [IMPORTANT: You are running as a scheduled cron job …] 是定时任务给模型的说明
     private val start = Regex("""\[(System( note)?|IMPORTANT):""")

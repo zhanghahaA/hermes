@@ -81,7 +81,18 @@ async def chat(request):
     tool_call = None
     pieces = []
     delay = 0.02
-    if "运行命令" in text and not tool_done:
+    if "OUT-OF-BAND USER MESSAGE" in text:
+        # 插话（steer）：Hermes 把它作为单独一条用户消息交给模型
+        inner = [l for l in text.splitlines() if l.strip() and "OUT-OF-BAND USER MESSAGE" not in l]
+        pieces = ["收到插话：", " ".join(inner)]
+    elif "慢慢查" in text and not tool_done:
+        # 慢工具：给插话留出时间
+        tool_call = {
+            "id": "call_" + uuid.uuid4().hex[:8],
+            "type": "function",
+            "function": {"name": "terminal", "arguments": json.dumps({"command": "sleep 4; echo checked"})},
+        }
+    elif "运行命令" in text and not tool_done:
         tool_call = {
             "id": "call_" + uuid.uuid4().hex[:8],
             "type": "function",

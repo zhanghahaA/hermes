@@ -106,6 +106,8 @@ internal data class RunStatusDto(
     val approval: JsonObject? = null,
     /** 新版：回复审批/追问时要带上的执行代号（pending_controls 里没有时用这个）。 */
     val execution_generation: JsonElement? = null,
+    /** 插话还没来得及交给模型这一轮就结束了：需要作为下一条消息重新发。 */
+    val pending_steer: String? = null,
 )
 
 // ---- 阶段 4：模型 ----
@@ -128,6 +130,31 @@ internal data class ProviderDto(
     val models: List<String> = emptyList(),
     /** 模型 id → {"reasoning": true, "fast": false, ...} */
     val capabilities: JsonObject? = null,
+)
+
+// ---- 阶段 4：技能、工具集 ----
+
+/** GET /v1/skills：已安装的技能。 */
+@Serializable
+internal data class SkillListDto(val data: List<SkillDto> = emptyList())
+
+@Serializable
+internal data class SkillDto(val name: String, val description: String? = null, val category: String? = null)
+
+/** GET /v1/toolsets：API Server 这个平台能用的工具集。 */
+@Serializable
+internal data class ToolsetListDto(val data: List<ToolsetDto> = emptyList())
+
+@Serializable
+internal data class ToolsetDto(
+    val name: String,
+    /** 带 emoji 的显示名，如 "🔍 Web Search & Scraping"。 */
+    val label: String? = null,
+    val description: String? = null,
+    val enabled: Boolean? = null,
+    /** 需要的 Key 都配好了。 */
+    val configured: Boolean? = null,
+    val tools: List<String> = emptyList(),
 )
 
 // ---- 阶段 4：定时任务 ----

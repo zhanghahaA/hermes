@@ -299,6 +299,10 @@ class FakeHermesRepository(
     private val _skills = MutableStateFlow(SampleData.skills)
     override val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
 
+    override val skillsError: StateFlow<String?> = MutableStateFlow(null)
+    override val toolsetsBusy: StateFlow<Set<String>> = MutableStateFlow(emptySet())
+    override fun canToggleToolsets() = true
+
     private val _toolsets = MutableStateFlow(SampleData.toolsets)
     override val toolsets: StateFlow<List<Toolset>> = _toolsets.asStateFlow()
 
