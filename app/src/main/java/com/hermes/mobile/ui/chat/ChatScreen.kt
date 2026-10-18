@@ -409,7 +409,15 @@ fun ChatScreen(
     }
 
     viewing?.let { image ->
-        ImageViewer(image, onDismiss = { viewing = null })
+        ImageViewer(
+            image,
+            onDismiss = { viewing = null },
+            onSave = { source -> showMessage(fileActions.saveImage(source, imageFileName(image)) ?: "保存失败") },
+            onShare = { source ->
+                if (source.startsWith("data:")) showMessage("这张图暂时不能分享，先保存到相册再分享")
+                else fileActions.share(source, imageFileName(image))
+            },
+        )
     }
 
     if (showRename) {

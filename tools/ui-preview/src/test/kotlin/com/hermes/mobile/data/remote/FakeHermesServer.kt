@@ -25,10 +25,13 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
     }
 
     val server = MockWebServer()
-    val requests: MutableList<RecordedRequest> = java.util.Collections.synchronizedList(mutableListOf())
+    // 测试线程遍历时服务器线程还在写：用写时复制的列表，遍历不会出错
+    val requests: MutableList<RecordedRequest> = java.util.concurrent.CopyOnWriteArrayList()
     var failPatch = false
     /** 模拟有的 Hermes 模式：聊天记录里图片只记一个 [screenshot]，不记路径。 */
     var screenshotOnly = false
+    /** 模拟 Hermes 在用户消息后追加系统提示（换了客户端时）。 */
+    var appendSystemNote = false
     /** 前几次提交对话返回 503（带 Retry-After: 0），用来验证重试。 */
     var failRunsTimes = 0
 
@@ -80,7 +83,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 else -> "最终回复：$input"
             }
             // 和真实 Hermes 一样：图片存到服务器，聊天记录里只记路径
-            val stored = input + imageShas.joinToString("") {
+            val note = if (appendSystemNote) "\n\n[System: This conversation is now being answered on a different interface: api_server — any earlier interface guidance [e.g. markdown] is superseded.]" else ""
+            val stored = input + note + imageShas.joinToString("") {
                 if (screenshotOnly) "\n[screenshot]"
                 else "\n\n[Image attached at: /srv/hermes/cache/documents/native-inputs/$it/api_${it.take(32)}.jpg]\n[screenshot]"
             }

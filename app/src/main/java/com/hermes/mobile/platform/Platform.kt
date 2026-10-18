@@ -179,6 +179,8 @@ class FileActions(
     val open: (path: String, name: String) -> Unit,
     val share: (path: String, name: String) -> Unit,
     val save: (path: String, name: String) -> String?,
+    /** 图片存进相册（Pictures/Hermes）。[source] 是本机文件路径或 data: URL。返回给用户的提示，失败为 null。 */
+    val saveImage: (source: String, name: String) -> String?,
 )
 
 @Composable
@@ -217,6 +219,7 @@ fun rememberFileActions(onError: (String) -> Unit): FileActions {
                 }.onFailure { currentError.value("分享失败：${it.message}") }
             },
             save = { path, name -> AttachmentImporter.exportForTermux(context, path, name, mimeOf(name))?.let { "已保存到 下载/Hermes/${it.substringAfterLast('/')}" } },
+            saveImage = { source, name -> saveImageToGallery(context, source, name) },
         )
     }
 }
@@ -225,3 +228,28 @@ private fun mimeOf(name: String): String =
     android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(name.substringAfterLast('.', "").lowercase())
         ?: if (name.substringAfterLast('.', "").lowercase() in setOf("md", "log", "kt", "py", "sh", "yaml", "yml", "toml", "ini", "conf")) "text/plain"
         else "application/octet-stream"
+
+/** 字节 → 相册（Pictures/Hermes），在相册 App 里能直接看到。 */
+private fun saveImageToGallery(context: android.content.Context, source: String, name: String): String? = runCatching {
+    val bytes = if (source.startsWith("data:")) java.util.Base64.getDecoder().decode(source.substringAfter(','))
+    else java.io.File(source).readBytes()
+    val mime = mimeOf(name).takeIf { it.startsWith("image/") } ?: sniffImageMime(bytes)
+    val values = android.content.ContentValues().apply {
+        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+        put(android.provider.MediaStore.Images.Media.MIME_TYPE, mime)
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/Hermes")
+        }
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return@runCatching null
+    resolver.openOutputStream(uri)?.use { it.write(bytes) }
+    "已保存到相册（Pictures/Hermes）"
+}.getOrNull()
+
+private fun sniffImageMime(bytes: ByteArray): String = when {
+    bytes.size > 3 && bytes[0] == 0x89.toByte() && bytes[1] == 'P'.code.toByte() -> "image/png"
+    bytes.size > 3 && bytes[0] == 'G'.code.toByte() && bytes[1] == 'I'.code.toByte() -> "image/gif"
+    bytes.size > 11 && bytes[8] == 'W'.code.toByte() && bytes[9] == 'E'.code.toByte() -> "image/webp"
+    else -> "image/jpeg"
+}

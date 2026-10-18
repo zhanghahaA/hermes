@@ -179,3 +179,45 @@ internal object PlainPaths {
 
 /** 服务器上的文件：界面通过仓库下载（SSH）后再显示。 */
 internal const val RemoteMediaPrefix = "hermes-media:"
+
+/**
+ * Hermes 有时会在用户消息后面追加给模型看的系统提示，例如换了客户端时的
+ * `[System: This conversation is now being answered on a different interface: …]`。
+ * 这些不是用户说的话，显示前去掉（按方括号配对，提示里可以有嵌套的方括号和换行）。
+ */
+internal object SystemNotes {
+    private val start = Regex("""\[System( note)?:""")
+
+    fun strip(text: String): String {
+        if (!text.contains("[System")) return text
+        val out = StringBuilder()
+        var i = 0
+        while (i < text.length) {
+            val m = start.find(text, i)
+            if (m == null) {
+                out.append(text, i, text.length)
+                break
+            }
+            out.append(text, i, m.range.first)
+            var depth = 0
+            var j = m.range.first
+            while (j < text.length) {
+                when (text[j]) {
+                    '[' -> depth++
+                    ']' -> {
+                        depth--
+                        if (depth == 0) break
+                    }
+                }
+                j++
+            }
+            // 没有配对的右括号：保留原文，避免误删
+            if (j >= text.length) {
+                out.append(text, m.range.first, text.length)
+                break
+            }
+            i = j + 1
+        }
+        return out.toString().replace(Regex("\n{3,}"), "\n\n").trim()
+    }
+}

@@ -65,7 +65,7 @@ internal fun MessageDto.toChatItem(index: Int, fallbackTime: Long, imageSource: 
     val files: List<FileRef>
     if (role == Role.User) {
         // 用户消息：拆出 Hermes 记下的图片路径和 App 写进去的文件段
-        val (withoutImages, marked) = ImageMarkers.parse(rawText)
+        val (withoutImages, marked) = ImageMarkers.parse(SystemNotes.strip(rawText))
         val (body, attached) = AttachmentText.parse(withoutImages)
         text = body
         files = attached

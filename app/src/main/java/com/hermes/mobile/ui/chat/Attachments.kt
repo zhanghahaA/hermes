@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -231,13 +232,17 @@ private fun PendingFile(name: String, size: Long, height: Dp = 64.dp) {
     }
 }
 
-/** 全屏看图：双指缩放、拖动，双击放大/还原，单击关闭。 */
+/**
+ * 全屏看图：双指缩放、拖动，双击放大/还原，单击关闭；底部可以保存到相册、分享。
+ * [onSave] / [onShare] 收到的是本机文件路径或 data: URL。
+ */
 @Composable
-fun ImageViewer(image: ImageRef, onDismiss: () -> Unit) {
+fun ImageViewer(image: ImageRef, onDismiss: () -> Unit, onSave: (String) -> Unit = {}, onShare: (String) -> Unit = {}) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         var scale by remember { mutableFloatStateOf(1f) }
         var offset by remember { mutableStateOf(Offset.Zero) }
-        val bitmap = rememberImageBitmap(rememberLocalSource(image.source), 4096)
+        val local = rememberLocalSource(image.source)
+        val bitmap = rememberImageBitmap(local, 4096)
         Box(
             Modifier
                 .fillMaxSize()
@@ -292,6 +297,20 @@ fun ImageViewer(image: ImageRef, onDismiss: () -> Unit) {
             IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp)) {
                 Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
             }
+            if (bitmap != null && local != null) {
+                Row(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.6f))))
+                        .navigationBarsPadding()
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    ViewerAction(Icons.Rounded.Download, "保存") { onSave(local) }
+                    ViewerAction(Icons.Rounded.Share, "分享") { onShare(local) }
+                }
+            }
         }
     }
 }
@@ -340,4 +359,33 @@ private fun FileAction(title: String, subtitle: String, icon: ImageVector, enabl
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
+}
+
+@Composable
+private fun ViewerAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(icon, contentDescription = label, tint = Color.White)
+        Text(label, color = Color.White, style = MaterialTheme.typography.labelMedium)
+    }
+}
+
+/** 保存/分享图片时用的文件名。 */
+fun imageFileName(image: ImageRef): String {
+    val source = image.source.orEmpty().removePrefix(RemoteMediaPrefix)
+    val ext = when {
+        source.startsWith("data:image/png") -> "png"
+        source.startsWith("data:image/webp") -> "webp"
+        source.startsWith("data:image/gif") -> "gif"
+        source.startsWith("data:") -> "jpg"
+        else -> source.substringAfterLast('.', "jpg").lowercase().take(5)
+    }
+    val base = source.takeUnless { it.startsWith("data:") }?.substringAfterLast('/')?.substringBeforeLast('.')
+        ?.takeIf { it.isNotBlank() && it.length < 40 } ?: "hermes-${System.currentTimeMillis()}"
+    return "$base.$ext"
 }

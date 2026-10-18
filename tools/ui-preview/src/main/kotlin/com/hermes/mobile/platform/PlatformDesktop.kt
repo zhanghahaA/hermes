@@ -47,8 +47,9 @@ class FileActions(
     val open: (path: String, name: String) -> Unit,
     val share: (path: String, name: String) -> Unit,
     val save: (path: String, name: String) -> String?,
+    val saveImage: (source: String, name: String) -> String?,
 )
 
 @Suppress("UNUSED_PARAMETER")
 @Composable
-fun rememberFileActions(onError: (String) -> Unit): FileActions = FileActions({ _, _ -> }, { _, _ -> }, { _, _ -> null })
+fun rememberFileActions(onError: (String) -> Unit): FileActions = FileActions({ _, _ -> }, { _, _ -> }, { _, _ -> null }, { _, _ -> null })

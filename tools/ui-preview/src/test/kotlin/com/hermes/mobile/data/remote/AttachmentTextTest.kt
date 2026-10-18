@@ -95,4 +95,13 @@ class AttachmentTextTest {
         val (_, files) = AttachmentText.parse("看\n\n" + AttachmentText.textFile("a.csv", "x,y\n1,2"))
         assertEquals("x,y\n1,2", files.single().inlineText)
     }
+
+    @Test
+    fun systemNotesAreStripped() {
+        val stored = "我连接不上啊\n[System: This conversation is now being answered on a different interface: api_server — any earlier " +
+            "interface guidance in this conversation is superseded — follow the [current] interface-specific capability.]"
+        assertEquals("我连接不上啊", SystemNotes.strip(stored))
+        assertEquals("[不是系统提示]", SystemNotes.strip("[不是系统提示]"))
+        assertEquals("没闭合 [System: 半截", SystemNotes.strip("没闭合 [System: 半截"))
+    }
 }

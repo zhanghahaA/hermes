@@ -819,21 +819,45 @@ class RemoteHermesRepository(
         }
     }
 
-    /** 服务器记录里看不到原图的用户消息：按文字和顺序对上自己发过的那条，换回本机的图。 */
+    /**
+     * 服务器记录里看不到原图的用户消息，把本机的图换回来：
+     * 1. 按文字和顺序对上记住的那条（发送时记下的）；
+     * 2. 对不上的（例如记录功能出现之前发的），用缓存目录里时间最接近、发送前不久保存的图片。
+     */
     private fun List<ChatItem.Message>.withSentImages(sessionId: String): List<ChatItem.Message> {
-        val remembered = synchronized(sentImages) { sentImages[sessionId]?.toList() } ?: return this
+        val (remembered, claimed) = synchronized(sentImages) {
+            sentImages[sessionId]?.toList().orEmpty() to sentImages.values.flatten().flatMap { it.paths }.toMutableSet()
+        }
         val used = BooleanArray(remembered.size)
+        fun norm(text: String) = text.replace(Regex("\\s+"), " ").trim()
+        // 历史里已经能显示的本机图片也算“用过”，时间匹配不能再分给别人
+        forEach { m -> m.images.mapNotNullTo(claimed) { img -> img.source?.takeIf { File(it).isFile } } }
+        val orphans by lazy {
+            mediaDir?.listFiles { f -> f.isFile && f.extension in ImageExtensions }
+                ?.filter { it.path !in claimed }?.sortedBy { it.lastModified() }?.toMutableList() ?: mutableListOf()
+        }
         return map { m ->
-            if (m.role != Role.User) return@map m
-            val local = m.images.all { it.source != null && File(it.source).isFile }
-            if (m.images.isNotEmpty() && local) return@map m
-            val i = remembered.indices.firstOrNull { !used[it] && remembered[it].text == m.text.trim() } ?: return@map m
-            used[i] = true
-            val paths = remembered[i].paths.filter { File(it).isFile }
-            if (paths.isEmpty()) return@map m
-            m.copy(images = paths.mapIndexed { k, p -> ImageRef("${m.id}-s$k", (k * 53f) % 360f, 1.3f, p) })
+            if (m.role != Role.User || m.images.isEmpty() && m.text.isBlank()) return@map m
+            val needsFix = m.images.isEmpty() || m.images.any { it.source == null || !(File(it.source).isFile || it.source.startsWith("data:")) }
+            if (!needsFix) return@map m
+            val i = remembered.indices.firstOrNull { !used[it] && norm(remembered[it].text) == norm(m.text) }
+            if (i != null) {
+                used[i] = true
+                val paths = remembered[i].paths.filter { File(it).isFile }
+                if (paths.isNotEmpty()) return@map m.withImages(paths)
+            }
+            // 只有服务器明确记了有图（占位块）时才按时间找，免得给纯文字消息配图
+            val missing = m.images.count { it.source == null || !File(it.source).isFile }
+            if (missing == 0 || m.images.any { it.source?.startsWith(RemoteMediaPrefix) == true }) return@map m
+            val picked = orphans.filter { it.lastModified() in (m.time - 30 * 60_000)..(m.time + 60_000) }.takeLast(missing)
+            if (picked.size != missing) return@map m
+            orphans.removeAll(picked)
+            m.withImages(picked.map { it.path })
         }
     }
+
+    private fun ChatItem.Message.withImages(paths: List<String>) =
+        copy(images = paths.mapIndexed { k, p -> ImageRef("$id-s$k", (k * 53f) % 360f, 1.3f, p) })
 
     // ---- 草稿 ----
 

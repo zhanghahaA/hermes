@@ -367,4 +367,37 @@ class ChatFlowTest {
         assertTrue(path.endsWith(".md"))
         assertNull(runBlocking { repo.fileForOpening(com.hermes.mobile.data.model.FileRef("x.md", remotePath = "/srv/x.md")) }, "直连没有 SSH 拿不到服务器上的文件")
     }
+
+    @Test
+    fun imagesSurviveSystemNotesAppendedByHermes() {
+        val s = server()
+        s.screenshotOnly = true
+        s.appendSystemNote = true
+        val repo = connected(s)
+        val img = cachedImage(0x123456)
+        repo.sendMessage("s1", "我连接不上啊", listOf(img))
+        val final = repo.chatItems("s1").await("对齐") { list ->
+            list.texts().any { it.second == "收到 1 张图片" } &&
+                list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+        }
+        val mine = final.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+        assertEquals("我连接不上啊", mine.text, "系统提示不显示")
+        assertEquals(listOf(img.path), mine.images.map { it.source })
+    }
+
+    @Test
+    fun imagesFromBeforeTheMemoryAreFoundByTime() {
+        val s = server()
+        val sentAt = 1_792_300_000L // 秒
+        // 旧版本发的：服务器只记了 [screenshot]，本机没有“哪条消息配哪张图”的记录，但缓存里有这张图
+        s.messages["s1"] = mutableListOf("""{"id":900,"role":"user","content":"旧消息里的图\n[screenshot]","timestamp":$sentAt}""")
+        val old = cachedImage(0x654321)
+        java.io.File(old.path).setLastModified(sentAt * 1000 - 2 * 60_000)
+        val far = cachedImage(0x111111)
+        java.io.File(far.path).setLastModified(sentAt * 1000 - 5 * 3600_000) // 太早，不该配上
+        val repo = connected(s)
+        val items = repo.chatItems("s1").await("记录") { list -> list.any { it is ChatItem.Message && it.text == "旧消息里的图" } }
+        val mine = items.filterIsInstance<ChatItem.Message>().first { it.text == "旧消息里的图" }
+        assertEquals(listOf(old.path), mine.images.map { it.source })
+    }
 }
