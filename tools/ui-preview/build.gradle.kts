@@ -31,6 +31,7 @@ sourceSets {
                 "com/hermes/mobile/platform/AttachmentImport.kt",
                 "com/hermes/mobile/platform/Platform.kt",
                 "com/hermes/mobile/platform/AndroidStorage.kt",
+                "com/hermes/mobile/platform/ScreenWebView.kt",
             )
         }
     }
@@ -47,6 +48,10 @@ dependencies {
     implementation("com.hierynomus:sshj:0.41.2")
     implementation("org.bouncycastle:bcprov-jdk18on:1.84")
     implementation("org.bouncycastle:bcpkix-jdk18on:1.84")
+    implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.24.0")
+    implementation("org.commonmark:commonmark-ext-task-list-items:0.24.0")
 
     testImplementation(kotlin("test"))
     testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")

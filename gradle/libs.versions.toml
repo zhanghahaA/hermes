@@ -11,6 +11,7 @@ backdrop = "2.0.1"
 okhttp = "5.3.2"
 sshj = "0.41.2"
 bouncycastle = "1.84"
+commonmark = "0.24.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -31,6 +32,10 @@ okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 sshj = { module = "com.hierynomus:sshj", version.ref = "sshj" }
 bouncycastle-prov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 bouncycastle-pkix = { module = "org.bouncycastle:bcpkix-jdk18on", version.ref = "bouncycastle" }
+commonmark = { module = "org.commonmark:commonmark", version.ref = "commonmark" }
+commonmark-tables = { module = "org.commonmark:commonmark-ext-gfm-tables", version.ref = "commonmark" }
+commonmark-strikethrough = { module = "org.commonmark:commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
+commonmark-tasklist = { module = "org.commonmark:commonmark-ext-task-list-items", version.ref = "commonmark" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 
 [plugins]

@@ -140,6 +140,18 @@ class ChatInteractionsTest {
     }
 
     @Test
+    fun botScreenTakeOverAndHandBack() = withRepo { repo ->
+        show { com.hermes.mobile.ui.admin.BotScreenScreen(repo, onBack = {}) }
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("bot 在控制，你在看").fetchSemanticsNodes().isNotEmpty() }
+        assertTrue(onAllNodesWithText("Ctrl").fetchSemanticsNodes().isEmpty(), "只看时没有按键栏")
+        onNodeWithText("接管").performClick()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("你在控制（bot 暂停操作屏幕）").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("Ctrl").assertIsDisplayed()
+        onNodeWithText("交还").performClick()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("bot 在控制，你在看").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    @Test
     fun chatListOpenRowClosesOnTap() = withRepo { repo ->
         var opened: String? = null
         show { ChatsScreen(repo, onOpenChat = { opened = it }, onManageConnections = {}) }

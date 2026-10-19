@@ -140,6 +140,35 @@ class SshTunnel(
         }
     }
 
+    override fun openStream(command: String): RemoteStream {
+        fun once(): RemoteStream {
+            val s = session().startSession()
+            val cmd = try {
+                s.exec("bash -lc " + shellQuote(command))
+            } catch (e: IOException) {
+                s.close()
+                throw e
+            }
+            return object : RemoteStream {
+                override val output = cmd.inputStream
+                override val input = cmd.outputStream
+                override fun errorText(): String = runCatching { cmd.errorStream.readBytes().toString(Charsets.UTF_8) }.getOrDefault("")
+                override val exitCode: Int? get() = cmd.exitStatus
+                override fun close() {
+                    runCatching { cmd.close() }
+                    runCatching { s.close() }
+                }
+            }
+        }
+        return try {
+            once()
+        } catch (e: IOException) {
+            if (connectionAlive()) throw e
+            reset()
+            once()
+        }
+    }
+
     private fun connectionAlive(): Boolean = synchronized(this) { client?.let { it.isConnected && it.isAuthenticated } == true }
 
     override fun readFile(path: String): ByteArray? {

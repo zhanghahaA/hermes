@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DesktopWindows
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.AccountTree
@@ -109,6 +110,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** 聊天列表里的一行：日期分隔、一条消息/卡片、正在输入、正在逐字生成。 */
 private sealed interface ChatRow {
@@ -146,6 +149,8 @@ fun ChatScreen(
     sessionId: String,
     onBack: () -> Unit,
     onOpenChat: (String) -> Unit,
+    /** 打开 Bot 屏幕（只有配了 SSH 的连接才给）。 */
+    onOpenScreen: (() -> Unit)? = null,
 ) {
     val session by remember(sessionId) { repository.session(sessionId) }.collectAsState(initial = null)
     val items by remember(sessionId) { repository.chatItems(sessionId) }.collectAsState(initial = emptyList())
@@ -165,6 +170,8 @@ fun ChatScreen(
     var viewing by remember { mutableStateOf<ImageRef?>(null) }
     var fileTarget by remember { mutableStateOf<FileRef?>(null) }
     var fileBusy by remember { mutableStateOf(false) }
+    // 正在预览的文本文件：文件名、本机路径、内容
+    var previewing by remember { mutableStateOf<Triple<String, String, String>?>(null) }
     var showModels by remember { mutableStateOf(false) }
     var showAttach by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
@@ -289,6 +296,7 @@ fun ChatScreen(
                     onRename = { showRename = true },
                     onFork = { repository.forkSession(sessionId, null)?.let(onOpenChat) },
                     onSearch = { searching = true },
+                    onOpenScreen = onOpenScreen,
                     onDelete = {
                         repository.deleteSession(sessionId)
                         onBack()
@@ -456,7 +464,33 @@ fun ChatScreen(
             onShare = { withLocal { fileActions.share(it, file.name) } },
             onSave = { withLocal { path -> showMessage(fileActions.save(path, file.name) ?: "保存失败") } },
             onDismiss = { if (!fileBusy) fileTarget = null },
+            onPreview = {
+                withLocal { path ->
+                    scope.launch {
+                        val text = withContext(Dispatchers.IO) {
+                            runCatching {
+                                java.io.File(path).inputStream().use { input ->
+                                    // readNBytes 要 Android 13，自己读
+                                    val buf = ByteArray(MaxPreviewBytes)
+                                    var n = 0
+                                    while (n < buf.size) {
+                                        val r = input.read(buf, n, buf.size - n)
+                                        if (r < 0) break
+                                        n += r
+                                    }
+                                    String(buf, 0, n, Charsets.UTF_8)
+                                }
+                            }.getOrNull()
+                        }
+                        if (text == null) showMessage("读不了这个文件") else previewing = Triple(file.name, path, text)
+                    }
+                }
+            },
         )
+    }
+
+    previewing?.let { (name, path, text) ->
+        TextFilePreview(name, text, onDismiss = { previewing = null }, onShare = { fileActions.share(path, name) })
     }
 
     viewing?.let { image ->
@@ -592,6 +626,7 @@ private fun ChatTopBar(
     onFork: () -> Unit,
     onSearch: () -> Unit,
     onDelete: () -> Unit,
+    onOpenScreen: (() -> Unit)? = null,
 ) {
     var menu by remember { mutableStateOf(false) }
     Column {
@@ -651,6 +686,13 @@ private fun ChatTopBar(
                             leadingIcon = { Icon(Icons.Rounded.AccountTree, null) },
                             onClick = { menu = false; onFork() },
                         )
+                        if (onOpenScreen != null) {
+                            DropdownMenuItem(
+                                text = { Text("Bot 屏幕") },
+                                leadingIcon = { Icon(Icons.Rounded.DesktopWindows, null) },
+                                onClick = { menu = false; onOpenScreen() },
+                            )
+                        }
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text("删除会话", color = MaterialTheme.colorScheme.error) },
@@ -711,3 +753,6 @@ private fun SearchTopBar(
 private fun Subtitle(text: String, color: androidx.compose.ui.graphics.Color) {
     Text(text, style = MaterialTheme.typography.labelMedium, color = color, maxLines = 1)
 }
+
+/** 预览最多读这么多（再大的文本文件在手机上也看不过来）。 */
+private const val MaxPreviewBytes = 2 * 1024 * 1024

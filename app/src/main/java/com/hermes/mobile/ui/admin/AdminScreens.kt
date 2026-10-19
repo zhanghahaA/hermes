@@ -81,7 +81,7 @@ import com.hermes.mobile.ui.theme.LocalHermesColors
 import kotlinx.coroutines.launch
 
 /** “能力 → 更多”里的几个管理页面。 */
-enum class AdminPage { Memory, Mcp, Gateway, Config }
+enum class AdminPage { Memory, Mcp, Gateway, Config, Screen }
 
 /** 按页面打开。 */
 @Composable
@@ -90,12 +90,13 @@ fun AdminScreen(repository: HermesRepository, page: AdminPage, onBack: () -> Uni
     AdminPage.Mcp -> McpScreen(repository, onBack)
     AdminPage.Gateway -> GatewayScreen(repository, onBack)
     AdminPage.Config -> ConfigEditorScreen(repository, onBack)
+    AdminPage.Screen -> BotScreenScreen(repository, onBack)
 }
 
 /** 管理页面共用的外框：返回按钮 + 标题 + 右上角操作。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AdminPage(
+internal fun AdminPage(
     title: String,
     onBack: () -> Unit,
     actions: @Composable () -> Unit = {},
@@ -119,7 +120,7 @@ internal sealed interface Load<out T> {
     data class Failed(val message: String) : Load<Nothing>
 }
 
-private suspend fun <T> attempt(block: suspend () -> T): Load<T> = try {
+internal suspend fun <T> attempt(block: suspend () -> T): Load<T> = try {
     Load.Ready(block())
 } catch (e: AdminException) {
     Load.Failed(e.message ?: "出错了")
@@ -127,7 +128,7 @@ private suspend fun <T> attempt(block: suspend () -> T): Load<T> = try {
 
 /** 没配 SSH 时的说明。 */
 @Composable
-private fun NeedsSsh(padding: PaddingValues) {
+internal fun NeedsSsh(padding: PaddingValues) {
     Box(Modifier.padding(padding)) {
         EmptyState(
             Icons.Rounded.Terminal,
@@ -139,7 +140,7 @@ private fun NeedsSsh(padding: PaddingValues) {
 }
 
 @Composable
-private fun <T> LoadBody(state: Load<T>, padding: PaddingValues, onRetry: () -> Unit, content: @Composable (T) -> Unit) {
+internal fun <T> LoadBody(state: Load<T>, padding: PaddingValues, onRetry: () -> Unit, content: @Composable (T) -> Unit) {
     when (state) {
         Load.Loading -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
         is Load.Failed -> Box(Modifier.padding(padding)) {

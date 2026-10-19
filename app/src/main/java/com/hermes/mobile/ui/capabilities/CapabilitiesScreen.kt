@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.DesktopWindows
 import androidx.compose.material.icons.rounded.Hub
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.Psychology
@@ -186,6 +187,7 @@ private fun MoreTab(contentPadding: PaddingValues, hasSsh: Boolean, onOpenAdmin:
         MoreItem(Icons.Rounded.Memory, "记忆", "看看 Hermes 记住了你什么，改错的、删多余的", needsSsh = !hasSsh) { onOpenAdmin(AdminPage.Memory) }
         MoreItem(Icons.Rounded.Hub, "MCP 服务器", "添加、测试、启用或停用 MCP 服务器", needsSsh = !hasSsh) { onOpenAdmin(AdminPage.Mcp) }
         MoreItem(Icons.Rounded.Dns, "Gateway", "运行状态、接入的平台、今天的用量和日志", needsSsh = false) { onOpenAdmin(AdminPage.Gateway) }
+        MoreItem(Icons.Rounded.DesktopWindows, "Bot 屏幕", "看 bot 在服务器桌面上做什么；要登录、填验证码时接管", needsSsh = !hasSsh) { onOpenAdmin(AdminPage.Screen) }
         MoreItem(Icons.Rounded.Terminal, "配置文件", "直接编辑 config.yaml（保存前自动检查格式）", needsSsh = !hasSsh) { onOpenAdmin(AdminPage.Config) }
     }
 }

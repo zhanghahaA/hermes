@@ -16,8 +16,9 @@
 | 页面 | 文件 | 说明 |
 |---|---|---|
 | 聊天列表 | `ui/chats/ChatsScreen.kt` | 大标题顶栏、连接状态胶囊、搜索、筛选、分组和项目、左滑置顶 / 归档 / 删除（可撤销）、长按菜单、下拉刷新 |
-| 聊天 | `ui/chat/ChatScreen.kt` | 消息气泡（连续消息自动分组）、Markdown 和代码块、“正在输入”、审批/追问卡片、发图片、发送/停止按钮、回到最新 |
+| 聊天 | `ui/chat/ChatScreen.kt` | 消息气泡（连续消息自动分组）、Markdown（CommonMark + 表格、删除线、任务列表，中文标点旁的加粗也能识别）和代码块、“正在输入”、审批/追问卡片、发图片、发送/停止按钮、回到最新 |
 | 模型切换 | `ui/chat/ModelPickerSheet.kt` | 按 Provider 分组的底部面板 |
+| Bot 屏幕 | `ui/admin/BotScreen.kt`、`platform/ScreenWebView.kt` | 经 SSH 看 bot 的桌面、接管 / 交还，打包进 App 的 noVNC（`tools/novnc/build.sh` 生成） |
 | 定时任务 | `ui/jobs/` | 任务卡片（开关、立即运行、上次结果）、新建/编辑（频率、星期、时间、cron、结果发送到） |
 | 能力 | `ui/capabilities/` | 默认模型、技能、工具集，以及需要 SSH 的“更多”功能入口 |
 | 设置 | `ui/settings/SettingsScreen.kt` | 连接管理、主题/动态取色、聊天行为、通知、诊断 |
@@ -100,3 +101,8 @@ App 连接时先探测服务器能力（`/v1/capabilities`，旧版本逐个探�
 再加 `HERMES_IT_REAL_MODEL=1` 会跑一个接真实模型的测试，检查服务器上存着的思考内容一个字都不出现在 App 里。
 SSH 隧道的单元测试在测试里起一个真的 SSH 服务器（Apache MINA SSHD）；设置 `HERMES_IT_SSH_DIR` / `HERMES_IT_SSH_PORT` / `HERMES_IT_SSH_USER`
 后还会对真正的 OpenSSH 跑互通测试（ssh-keygen 生成的 Ed25519/RSA/ECDSA 密钥、App 生成的密钥、主机指纹和 `ssh-keygen -lf` 一致）。
+
+## 第三方组件
+
+- [noVNC](https://github.com/novnc/noVNC) 1.7.0（MPL-2.0）和其中的 pako（MIT）：Bot 屏幕的查看器，许可证随 App 放在 `assets/screen/` 里。
+- [commonmark-java](https://github.com/commonmark/commonmark-java)（BSD-2-Clause）：Markdown 解析。

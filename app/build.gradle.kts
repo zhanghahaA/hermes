@@ -12,8 +12,8 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 19
-        versionName = "0.9.4"
+        versionCode = 20
+        versionName = "0.10.0"
     }
 
     buildTypes {
@@ -67,6 +67,10 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.tables)
+    implementation(libs.commonmark.strikethrough)
+    implementation(libs.commonmark.tasklist)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
 }

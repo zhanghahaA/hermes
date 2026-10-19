@@ -1,6 +1,9 @@
 package com.hermes.mobile.ui.chat
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -28,6 +31,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Image
@@ -318,7 +322,15 @@ fun ImageViewer(image: ImageRef, onDismiss: () -> Unit, onSave: (String) -> Unit
 /** 点文件卡片后的操作面板。 */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun FileActionSheet(file: FileRef, busy: Boolean, onOpen: () -> Unit, onShare: () -> Unit, onSave: () -> Unit, onDismiss: () -> Unit) {
+fun FileActionSheet(
+    file: FileRef,
+    busy: Boolean,
+    onOpen: () -> Unit,
+    onShare: () -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+    onPreview: (() -> Unit)? = null,
+) {
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = 24.dp)) {
             Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -335,6 +347,9 @@ fun FileActionSheet(file: FileRef, busy: Boolean, onOpen: () -> Unit, onShare: (
                     }
                 }
                 if (busy) androidx.compose.material3.CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+            }
+            if (onPreview != null && isPreviewable(file.name)) {
+                FileAction("预览", if (isMarkdown(file.name)) "按排版显示（标题、加粗、表格……）" else "在 App 里直接看内容", Icons.Rounded.Visibility, !busy, onPreview)
             }
             FileAction("打开", "用手机上的其它应用打开", Icons.AutoMirrored.Rounded.OpenInNew, !busy, onOpen)
             FileAction("分享", "发到微信、邮件、网盘……", Icons.Rounded.Share, !busy, onShare)
@@ -388,4 +403,50 @@ fun imageFileName(image: ImageRef): String {
     val base = source.takeUnless { it.startsWith("data:") }?.substringAfterLast('/')?.substringBeforeLast('.')
         ?.takeIf { it.isNotBlank() && it.length < 40 } ?: "hermes-${System.currentTimeMillis()}"
     return "$base.$ext"
+}
+
+private val PreviewExtensions = setOf(
+    "md", "markdown", "txt", "log", "json", "yaml", "yml", "toml", "ini", "conf", "cfg", "csv", "tsv", "xml", "html", "css",
+    "py", "kt", "kts", "java", "js", "ts", "tsx", "sh", "bash", "go", "rs", "c", "h", "cpp", "sql", "env",
+)
+
+fun isMarkdown(name: String) = name.substringAfterLast('.', "").lowercase() in setOf("md", "markdown")
+
+fun isPreviewable(name: String) = name.substringAfterLast('.', "").lowercase() in PreviewExtensions
+
+/** 全屏看文本文件：Markdown 按排版显示，其它按等宽原样显示。 */
+@Composable
+fun TextFilePreview(name: String, text: String, onDismiss: () -> Unit, onShare: () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.statusBarsPadding().navigationBarsPadding()) {
+                Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) { Icon(Icons.Rounded.Close, contentDescription = "关闭") }
+                    Text(name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onShare) { Icon(Icons.Rounded.Share, contentDescription = "分享") }
+                }
+                androidx.compose.foundation.text.selection.SelectionContainer(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 12.dp),
+                ) {
+                    if (isMarkdown(name)) {
+                        com.hermes.mobile.ui.components.MarkdownText(text)
+                    } else {
+                        Text(
+                            text,
+                            style = com.hermes.mobile.ui.theme.CodeTextStyle,
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            softWrap = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }

@@ -22,6 +22,7 @@ import kotlinx.coroutines.withTimeout
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -356,6 +357,67 @@ class OpenSshIT {
             }
             folder.deleteRecursively()
             scope.cancel()
+        }
+    }
+
+    /** Bot 屏幕：状态、经 SSH 接到 RFB socket（读到 VNC 握手）、接管和交还（Hermes 自己的 lease）。 */
+    @Test
+    fun botScreenOverRealSsh() {
+        if (dir == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_SSH_DIR / HERMES_IT_KEY")
+            return
+        }
+        val tunnel = com.hermes.mobile.data.ssh.SshTunnel(
+            "127.0.0.1", sshPort, user, com.hermes.mobile.data.ssh.SshAuth.Key(File(dir, "user_ed25519").readText()), 8642, null, {},
+        )
+        try {
+            tunnel.connect()
+            val admin = com.hermes.mobile.data.remote.HermesAdmin(tunnel, null)
+            runBlocking {
+                var status = admin.screenStatus()
+                println("屏幕：$status")
+                if (!status.installed) {
+                    println("跳过：主机上没装 Bot 屏幕需要的软件")
+                    return@runBlocking
+                }
+                if (!status.running) status = admin.startScreen()
+                assertTrue(status.running)
+
+                // 画面流：先读到 VNC 的版本握手
+                val stream = admin.openScreen()
+                try {
+                    val hello = ByteArray(12)
+                    var n = 0
+                    while (n < 12) {
+                        val r = stream.output.read(hello, n, 12 - n)
+                        if (r < 0) break
+                        n += r
+                    }
+                    val got = String(hello, 0, n)
+                    // errorText() 要等通道关掉才返回，只在失败时读
+                    if (got != "RFB 003.008\n") {
+                        stream.input.close()
+                        kotlin.test.fail("没读到 VNC 握手：「$got」，错误输出：" + stream.errorText())
+                    }
+                } finally {
+                    stream.close()
+                }
+
+                // 接管：Hermes 记下是我；交还后回到 bot
+                val me = "hermes-mobile-it-" + System.nanoTime()
+                val taken = admin.takeScreen(me, "IT 测试")
+                assertTrue(taken.heldBy(me), taken.toString())
+                assertTrue(admin.screenStatus().lease.heldBy(me))
+                val other = admin.handBackScreen("someone-else")
+                assertTrue(other.heldBy(me), "别人不能替我交还")
+                val back = admin.handBackScreen(me)
+                assertFalse(back.humanHolds, back.toString())
+                // 强制交还
+                admin.takeScreen(me)
+                assertFalse(admin.handBackScreen(null).humanHolds)
+            }
+        } finally {
+            tunnel.close()
         }
     }
 }

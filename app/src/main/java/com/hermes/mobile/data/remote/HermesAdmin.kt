@@ -1,6 +1,8 @@
 package com.hermes.mobile.data.remote
 
+import com.hermes.mobile.data.model.BotScreenStatus
 import com.hermes.mobile.data.model.McpServer
+import com.hermes.mobile.data.model.ScreenLease
 import com.hermes.mobile.data.model.MemoryBook
 import com.hermes.mobile.data.model.MemoryTarget
 import com.hermes.mobile.data.model.SessionGrouping
@@ -42,6 +44,15 @@ interface AdminApi {
     suspend fun listFolders(path: String?): Pair<String, List<String>> = throw AdminException("不支持")
     /** 把会话的工作目录改成 [folder]（桌面版拖到项目里就是这样）；null 表示移出项目。 */
     suspend fun moveSession(sessionId: String, folder: String?): Unit = throw AdminException("不支持")
+    /** Bot 屏幕的状态（`hermes computer-use screen status --json`）。 */
+    suspend fun screenStatus(): BotScreenStatus = throw AdminException("不支持")
+    suspend fun startScreen(): BotScreenStatus = throw AdminException("不支持")
+    /** 接管屏幕：bot 的 computer_use 和浏览器工具会被拒绝，直到交还。 */
+    suspend fun takeScreen(viewerId: String, reason: String = ""): ScreenLease = throw AdminException("不支持")
+    /** 交还给 bot。[viewerId] 为 null 是强制交还（不管谁接管的）。 */
+    suspend fun handBackScreen(viewerId: String?): ScreenLease = throw AdminException("不支持")
+    /** 打开屏幕的 RFB（VNC）字节流。 */
+    suspend fun openScreen(): com.hermes.mobile.data.ssh.RemoteStream = throw AdminException("不支持")
 }
 
 /**
@@ -238,6 +249,63 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
         return SessionGrouping(groups.distinct(), of, projectInfos, folders, archived)
     }
 
+    // ---- Bot 屏幕 ----
+
+    override suspend fun screenStatus(): BotScreenStatus {
+        // 屏幕没开时命令的退出码是 1，但照样输出 JSON
+        val out = run("$hermes computer-use screen status --json", tolerate = { "{" in it })
+        if ("invalid choice" in out || "{" !in out) throw AdminException("这台 Hermes 的版本还没有 Bot 屏幕（需要较新的版本）")
+        val json = runCatching { HermesJson.parseToJsonElement(out.substring(out.indexOf('{'))) as JsonObject }.getOrNull()
+            ?: throw AdminException("读不懂 Bot 屏幕的状态：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+        fun str(key: String) = (json[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        fun bool(key: String) = (json[key] as? JsonPrimitive)?.booleanOrNull == true
+        return BotScreenStatus(
+            supported = bool("supported"),
+            installed = bool("installed"),
+            running = bool("running"),
+            geometry = str("geometry"),
+            installCommand = str("install_command"),
+            blocker = str("blocker"),
+            lease = parseLease(json["lease"] as? JsonObject),
+        )
+    }
+
+    override suspend fun startScreen(): BotScreenStatus {
+        val out = run("$hermes computer-use screen start", timeoutSeconds = 120, tolerate = { true })
+        val status = screenStatus()
+        if (!status.running) throw AdminException(out.lines().lastOrNull { it.isNotBlank() }?.removePrefix("Bot Desktop:")?.trim()?.take(300) ?: "没能启动屏幕")
+        return status
+    }
+
+    override suspend fun takeScreen(viewerId: String, reason: String): ScreenLease = lease("take", viewerId, reason)
+
+    override suspend fun handBackScreen(viewerId: String?): ScreenLease = lease("give", viewerId.orEmpty(), "")
+
+    private suspend fun lease(op: String, viewerId: String, reason: String): ScreenLease {
+        val dir = home()
+        val script = FindHermesPython + "\nHERMES_HOME=${q(dir)} \$PY - ${q(op)} ${q(viewerId)} ${q(reason)} <<'HERMES_MOBILE_PY'\n$LeaseScript\nHERMES_MOBILE_PY"
+        val out = run(script)
+        val line = out.lines().lastOrNull { it.startsWith("LEASE") } ?: throw AdminException("接管失败：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+        return parseLease(HermesJson.parseToJsonElement(line.removePrefix("LEASE")) as? JsonObject)
+    }
+
+    private fun parseLease(json: JsonObject?): ScreenLease = ScreenLease(
+        humanHolds = (json?.get("holder") as? JsonPrimitive)?.contentOrNull == "human",
+        viewerHash = (json?.get("viewer_hash") as? JsonPrimitive)?.contentOrNull,
+        reason = (json?.get("reason") as? JsonPrimitive)?.contentOrNull.orEmpty(),
+    )
+
+    override suspend fun openScreen(): com.hermes.mobile.data.ssh.RemoteStream = withContext(Dispatchers.IO) {
+        val dir = home()
+        // 桥接脚本从 -c 传进去：stdin 要留给画面数据
+        val command = FindHermesPython + "\nHERMES_HOME=${q(dir)} exec \$PY -c ${q(BridgeScript)}"
+        try {
+            shell.openStream(command)
+        } catch (e: java.io.IOException) {
+            throw AdminException("SSH 打不开通道：${e.message}")
+        }
+    }
+
     private fun checkFolder(folder: String) = "[ -d ${q(folder)} ] || { echo $NoSuchFolder >&2; exit 2; }; "
 
     private inline fun <T> noSuchFolder(folder: String?, block: () -> T): T = try {
@@ -385,6 +453,61 @@ db.execute("update sessions set cwd = ?, git_branch = ?, git_repo_root = ?, git_
            (cwd or None, branch or None, root or None, sid))
 db.commit()
 print("OK")
+""".trimIndent()
+
+        /** 接管 / 交还：调 Hermes 自己的 lease 模块（和桌面版一样），输出公开的 lease。 */
+        val LeaseScript = """
+import json, sys
+from tools.bot_desktop import lease
+op, viewer, reason = sys.argv[1], sys.argv[2], sys.argv[3]
+if op == "take":
+    result = lease.acquire(viewer, reason=reason)
+else:
+    result = lease.release(viewer or None)
+print("LEASE" + json.dumps(lease.public_view(result)))
+""".trimIndent()
+
+        /**
+         * 把 SSH 通道接到屏幕的 RFB socket 上（屏幕在沙盒里时用 Hermes 提供的流）。
+         * stdout 只能有画面数据，出错信息走 stderr；屏幕没开时退出码 3。
+         */
+        val BridgeScript = """
+import os, select, sys
+from tools.bot_desktop import runtime
+path = runtime.rfb_socket_path()
+proc = None
+if path is not None:
+    import socket
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(str(path))
+    rd = wr = sock.fileno()
+else:
+    try:
+        proc = runtime.open_rfb_stream()
+    except Exception as exc:
+        sys.stderr.write("SCREEN_DOWN %s\n" % exc)
+        sys.exit(3)
+    rd, wr = proc.stdout.fileno(), proc.stdin.fileno()
+inp, out = sys.stdin.fileno(), sys.stdout.fileno()
+def write_all(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+try:
+    while True:
+        ready = select.select([inp, rd], [], [])[0]
+        if inp in ready:
+            data = os.read(inp, 65536)
+            if not data:
+                break
+            write_all(wr, data)
+        if rd in ready:
+            data = os.read(rd, 262144)
+            if not data:
+                break
+            write_all(out, data)
+finally:
+    if proc is not None:
+        proc.kill()
 """.trimIndent()
 
         private const val NoSuchFolder = "HERMES_MOBILE_NO_SUCH_FOLDER"

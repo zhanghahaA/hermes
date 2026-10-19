@@ -277,3 +277,18 @@ Hermes 的 API 运行目前不读会话的 `cwd`（issue #29531），说明里�
 Hermes 对 API 客户端的默认提示是“渲染层未知，别用 Markdown；runs 接口不处理 MEDIA:，只写纯文本路径”。App 每轮都附带一段说明，
 告诉模型这个客户端能渲染 Markdown、能收任意文件（用 `MEDIA:/绝对路径`）。实测（gemini-2.5-flash）：不带说明时模型只说“已生成文件”，
 带上后回复 `MEDIA:/root/sugar.md`。
+
+## Bot 屏幕
+
+Hermes 在 Linux 主机上给每个 Profile 开一个 TigerVNC（Xvnc）+ Xfce 的桌面，只通过 `<HERMES_HOME>/bot-desktop/rfb.sock`（0600 的 Unix socket，不要密码）
+输出 RFB。电脑版经 dashboard 的 `/api/ws`（`display.observe` 换一次性票据）→ `/api/display/ws` 转成 WebSocket 给 noVNC。
+那是 dashboard 的内部接口，鉴权复杂且要 dashboard 在跑，所以 App 走 SSH：
+
+- 状态和启动：`hermes computer-use screen status --json` / `hermes computer-use screen start`。
+- 画面：SSH 命令通道里跑一个小 Python 桥（用 Hermes 自己的 Python），`runtime.rfb_socket_path()` 接到 socket；屏幕在沙盒里时用 `runtime.open_rfb_stream()`。
+  stdin/stdout 就是 RFB 字节。
+- 接管 / 交还：调 Hermes 的 `tools.bot_desktop.lease.acquire(viewer_id)` / `release(viewer_id)`（强制交还是 `release(None)`），和电脑版写的是同一个 `lease.json`。
+  Hermes 只公开 `viewer_id` 的 sha256 前 12 位，App 用它认出是不是自己接管的；每 4 秒查一次，别处接管了就回到只看。
+  直接接 socket 绕过了 dashboard 那层按 lease 过滤输入的网关，所以 App 自己保证没接管时不发输入（noVNC `viewOnly`）；Hermes 文档也说明了 lease 是工具层的约束，同一系统用户本来就能直接连 socket。
+- 查看器：noVNC 1.7.0（电脑版也是这个版本），用 `tools/novnc/build.sh` 打包成一个 ES 模块内联进 `assets/screen/screen.html`（有顶层 await，WebView 的 file:// 加载不了外部模块）。
+  noVNC 支持把“像 WebSocket 的对象”当通道，页面里的 `NativeChannel` 把字节 base64 后交给 `HermesScreen.send`，App 收到的字节用 `hm.recv` 送回页面。页面不联网（`blockNetworkLoads`）。

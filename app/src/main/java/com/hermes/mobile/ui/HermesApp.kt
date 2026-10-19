@@ -107,6 +107,7 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 sessionId = route.sessionId,
                 onBack = navigator::pop,
                 onOpenChat = { id -> navigator.push(ChatRoute(id), clearAboveRoot = true) },
+                onOpenScreen = { navigator.push(AdminRoute(AdminPage.Screen)) }.takeIf { repository.admin() != null },
             )
             is ConnectionEditRoute -> ConnectionEditorScreen(
                 repository = repository,

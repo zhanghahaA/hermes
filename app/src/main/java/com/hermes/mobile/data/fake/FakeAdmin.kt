@@ -85,6 +85,42 @@ class FakeAdmin(private val onProjectCreated: (String, String) -> Unit = { _, _ 
 
     override suspend fun createProject(name: String, folder: String) = onProjectCreated(name, folder)
 
+    // ---- Bot 屏幕（演示：一直开着，接管谁就记谁） ----
+
+    private var screenHolder: String? = null
+
+    private fun lease() = com.hermes.mobile.data.model.ScreenLease(
+        humanHolds = screenHolder != null,
+        viewerHash = screenHolder?.let(com.hermes.mobile.data.model.ScreenLease::hashViewer),
+        reason = "",
+    )
+
+    override suspend fun screenStatus() = com.hermes.mobile.data.model.BotScreenStatus(
+        supported = true, installed = true, running = true, geometry = "1440x900", installCommand = null, blocker = null, lease = lease(),
+    )
+
+    override suspend fun takeScreen(viewerId: String, reason: String): com.hermes.mobile.data.model.ScreenLease {
+        screenHolder = viewerId
+        return lease()
+    }
+
+    override suspend fun handBackScreen(viewerId: String?): com.hermes.mobile.data.model.ScreenLease {
+        if (viewerId == null || viewerId == screenHolder) screenHolder = null
+        return lease()
+    }
+
+    /** 演示用的“画面流”：什么都不发，也不会断。 */
+    override suspend fun openScreen(): com.hermes.mobile.data.ssh.RemoteStream = object : com.hermes.mobile.data.ssh.RemoteStream {
+        private val pipe = java.io.PipedOutputStream()
+        override val output: java.io.InputStream = java.io.PipedInputStream(pipe)
+        override val input: java.io.OutputStream = object : java.io.OutputStream() {
+            override fun write(b: Int) = Unit
+        }
+        override fun errorText() = ""
+        override val exitCode: Int? = null
+        override fun close() = pipe.close()
+    }
+
     companion object {
         val status = GatewayStatus(
             ok = true,

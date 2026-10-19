@@ -155,6 +155,28 @@ private val scenes = listOf(
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
     Scene("29-glass-test") { _, _ -> GlassTest() },
     Scene("30-chats-swipe") { repo, _ -> SwipeStill(repo) },
+    Scene("35-bot-screen", waitMs = 300) { repo, _ -> com.hermes.mobile.ui.admin.BotScreenScreen(repo, onBack = {}) },
+    Scene("36-bot-screen-control") { _, _ ->
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                com.hermes.mobile.platform.ScreenWebView(remember { com.hermes.mobile.data.screen.ScreenPageHost() }, Modifier.fillMaxSize())
+            }
+            com.hermes.mobile.ui.admin.ControlBar(
+                lease = com.hermes.mobile.data.model.ScreenLease(true, "x", "请帮我登录 GitHub（需要验证码）"), held = true, busy = false,
+                ctrl = true, alt = false, onTake = {}, onHandBack = {}, onForceHandBack = {}, onCtrl = {}, onAlt = {}, onKey = {}, onType = {},
+            )
+        }
+    },
+    Scene("33-markdown") { _, _ ->
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(12.dp)) {
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                com.hermes.mobile.ui.components.MarkdownText(MarkdownSample, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+            }
+        }
+    },
+    Scene("34-md-file-preview") { _, _ ->
+        com.hermes.mobile.ui.chat.TextFilePreview("周报.md", MarkdownSample, onDismiss = {}, onShare = {})
+    },
     Scene("31-sheet-move-project") { repo, _ ->
         SheetOver({ mainScreen(repo, MainTab.Chats)() }) {
             com.hermes.mobile.ui.chats.ProjectPickerContent(
@@ -342,3 +364,28 @@ private fun GlassTest() {
         }
     }
 }
+
+private val MarkdownSample = """
+## 家里网络排查结果
+
+**结论：**是路由器的 DNS 出了问题，已经改好。前面**“断网”**其实是解析失败。
+
+1. **第一步（已完成）**：把 DNS 改回 `223.5.5.5`
+   - 主路由 ✅
+   - 子路由 *也改了*
+2. 重启了 ~~光猫~~ 路由器
+
+| 设备 | 状态 | 延迟 |
+|---|---|---|
+| **NAS** | 在线 | 3 ms |
+| 电视盒子 | 离线 | — |
+
+- [x] 备份配置
+- [ ] 换掉旧网线
+
+> 下次再断，先看 https://192.168.1.1 的日志。
+
+```bash
+nslookup baidu.com 223.5.5.5
+```
+""".trimIndent()

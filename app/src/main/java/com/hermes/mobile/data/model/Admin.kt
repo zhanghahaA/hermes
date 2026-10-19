@@ -76,3 +76,28 @@ data class ProjectInfo(val id: String, val name: String, val path: String?)
 /** 归档的会话（只知道 id、标题和最后活动时间）。 */
 @kotlinx.serialization.Serializable
 data class ArchivedRef(val id: String, val title: String, val updatedAt: Long)
+
+/** Bot 屏幕（Hermes 在服务器上给 bot 开的桌面，`computer_use` 和浏览器在上面操作）的状态。 */
+data class BotScreenStatus(
+    /** 主机能不能跑（只有 Linux 主机有）。 */
+    val supported: Boolean,
+    val installed: Boolean,
+    val running: Boolean,
+    val geometry: String?,
+    /** 缺软件时要在主机上运行的安装命令。 */
+    val installCommand: String?,
+    /** 现在不能启动的原因（比如内存不够）。 */
+    val blocker: String?,
+    val lease: ScreenLease,
+)
+
+/** 谁在控制屏幕：默认是 bot；有人接管时 [humanHolds]，[viewerHash] 是接管者 id 的哈希。 */
+data class ScreenLease(val humanHolds: Boolean, val viewerHash: String?, val reason: String) {
+    /** 是不是 [viewerId] 接管的（Hermes 只公开 id 的 sha256 前 12 位）。 */
+    fun heldBy(viewerId: String): Boolean = humanHolds && viewerHash != null && viewerHash == hashViewer(viewerId)
+
+    companion object {
+        fun hashViewer(viewerId: String): String =
+            java.security.MessageDigest.getInstance("SHA-256").digest(viewerId.toByteArray()).joinToString("") { "%02x".format(it) }.take(12)
+    }
+}

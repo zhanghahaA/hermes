@@ -1,0 +1,134 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Bot 屏幕</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1b1b1f; touch-action: none; }
+  #screen { position: fixed; inset: 0; }
+</style>
+</head>
+<body>
+<div id="screen"></div>
+<!--
+  Bot 屏幕查看器：noVNC 1.7.0（MPL-2.0，见 LICENSE-noVNC.txt；内含 pako，MIT，见 LICENSE-pako.txt）。
+  画面数据不走网络：App 经 SSH 接到 Hermes 的 RFB socket，再通过 window.HermesScreen 和这里互传（base64）。
+-->
+<script type="module">
+/*NOVNC_BUNDLE*/
+
+const native = window.HermesScreen;
+
+function toBase64(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+
+function fromBase64(b64) {
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out.buffer;
+}
+
+/** noVNC 接受任何“像 WebSocket 的”对象；这个对象把字节交给 App，App 再经 SSH 发给 Hermes。 */
+class NativeChannel {
+  constructor() {
+    this.binaryType = "arraybuffer";
+    this.protocol = "";
+    this.readyState = "open";   // App 只在 SSH 通道开好之后才建 RFB
+    this.onopen = null;
+    this.onmessage = null;
+    this.onclose = null;
+    this.onerror = null;
+  }
+  send(data) {
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    native.send(toBase64(bytes));
+  }
+  close() {
+    if (this.readyState === "closed") return;
+    this.readyState = "closed";
+    native.close();
+  }
+}
+
+const XK = { Return: 0xff0d, BackSpace: 0xff08, Tab: 0xff09, Escape: 0xff1b, Delete: 0xffff,
+  Left: 0xff51, Up: 0xff52, Right: 0xff53, Down: 0xff54, Home: 0xff50, End: 0xff57, PageUp: 0xff55, PageDown: 0xff56,
+  Control_L: 0xffe3, Alt_L: 0xffe9, Shift_L: 0xffe1, Super_L: 0xffeb };
+const MOD_KEYS = { ctrl: [XK.Control_L, "ControlLeft"], alt: [XK.Alt_L, "AltLeft"], shift: [XK.Shift_L, "ShiftLeft"], super: [XK.Super_L, "MetaLeft"] };
+
+/** 字符 → X keysym：Latin-1 直接用码位，其它用 Unicode keysym（0x01000000 + 码位）。 */
+function keysymOf(ch) {
+  const cp = ch.codePointAt(0);
+  if (ch === "\n") return XK.Return;
+  if (ch === "\t") return XK.Tab;
+  if ((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff)) return cp;
+  return 0x01000000 + cp;
+}
+
+let rfb = null;
+let channel = null;
+const mods = new Set();
+
+function report(type, data) { native.event(type, data === undefined ? "" : String(data)); }
+
+window.hm = {
+  start(opts) {
+    channel = new NativeChannel();
+    rfb = new RFB(document.getElementById("screen"), channel, { shared: true });
+    rfb.resizeSession = false;
+    rfb.focusOnClick = false;
+    rfb.background = "#1b1b1f";
+    rfb.qualityLevel = 6;
+    rfb.compressionLevel = 2;
+    rfb.showDotCursor = true;
+    hm.setFit(opts.fit !== false);
+    rfb.viewOnly = !!opts.viewOnly;
+    rfb.addEventListener("connect", () => report("connect"));
+    rfb.addEventListener("disconnect", (e) => report("disconnect", e.detail && e.detail.clean ? "clean" : "lost"));
+    rfb.addEventListener("securityfailure", (e) => report("error", e.detail && e.detail.reason));
+    rfb.addEventListener("desktopname", (e) => report("name", e.detail && e.detail.name));
+  },
+  /** App 收到的画面数据。 */
+  recv(b64) { if (channel && channel.onmessage) channel.onmessage({ data: fromBase64(b64) }); },
+  /** SSH 通道断了。 */
+  closed(reason) {
+    if (!channel || channel.readyState === "closed") return;
+    channel.readyState = "closed";
+    if (channel.onclose) channel.onclose({ code: 1006, reason: reason || "", wasClean: false });
+  },
+  setViewOnly(v) { if (rfb) rfb.viewOnly = !!v; },
+  /** fit=true 整个桌面缩到屏幕里；false 原始大小，手指拖动画面。 */
+  setFit(fit) {
+    if (!rfb) return;
+    rfb.scaleViewport = !!fit;
+    rfb.clipViewport = !fit;
+    rfb.dragViewport = !fit;
+  },
+  setMod(name, on) { if (on) mods.add(name); else mods.delete(name); },
+  /** 按一个键（带上粘住的修饰键），按完松开修饰键。 */
+  key(keysym, code) {
+    if (!rfb || rfb.viewOnly) return;
+    const held = [...mods];
+    held.forEach((m) => rfb.sendKey(MOD_KEYS[m][0], MOD_KEYS[m][1], true));
+    rfb.sendKey(keysym, code || null);
+    held.reverse().forEach((m) => rfb.sendKey(MOD_KEYS[m][0], MOD_KEYS[m][1], false));
+    if (held.length) { mods.clear(); report("mods-cleared"); }
+  },
+  /** 逐字打出一段文字（中文也行：用 Unicode keysym）。 */
+  type(text) {
+    if (!rfb || rfb.viewOnly) return;
+    for (const ch of text) hm.key(keysymOf(ch));
+  },
+  /** 放进远端剪贴板（再在那边 Ctrl+V）。 */
+  paste(text) { if (rfb && !rfb.viewOnly) rfb.clipboardPasteFrom(text); },
+  stop() { if (rfb) { try { rfb.disconnect(); } catch (e) {} rfb = null; } },
+};
+
+report("ready");
+</script>
+</body>
+</html>

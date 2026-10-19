@@ -19,3 +19,8 @@
 -dontwarn org.slf4j.**
 -dontwarn javax.naming.**
 -dontwarn org.ietf.jgss.**
+
+# Bot 屏幕：WebView 里的 noVNC 页面经 @JavascriptInterface 调 App（方法名不能被混淆）
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
