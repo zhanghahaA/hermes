@@ -78,6 +78,11 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
             shell.exec(command, timeoutSeconds)
         } catch (e: java.io.IOException) {
             throw AdminException("SSH 执行失败：${e.message}")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // SSH 库偶尔抛别的异常（连接状态不对等）：当成普通的执行失败，不能让 App 崩掉
+            throw AdminException("SSH 执行失败：${e.message ?: e.javaClass.simpleName}")
         }
         val clean = output.stripAnsi()
         if (code == 127 || "command not found" in clean) throw AdminException("服务器上找不到 hermes 命令（SSH 登录后的 PATH 里没有它）")
@@ -94,16 +99,20 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
     private suspend fun read(path: String): String? = withContext(Dispatchers.IO) {
         try {
             shell.readFile(path)?.toString(Charsets.UTF_8)
-        } catch (e: java.io.IOException) {
-            throw AdminException("读不了 $path：${e.message}")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw AdminException("读不了 $path：${e.message ?: e.javaClass.simpleName}")
         }
     }
 
     private suspend fun write(path: String, text: String) = withContext(Dispatchers.IO) {
         try {
             shell.writeFile(path, text.toByteArray(Charsets.UTF_8))
-        } catch (e: java.io.IOException) {
-            throw AdminException("写不了 $path：${e.message}")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw AdminException("写不了 $path：${e.message ?: e.javaClass.simpleName}")
         }
     }
 
@@ -310,8 +319,10 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
         val command = hermesPython(dir, BridgeScript, emptyList())
         try {
             shell.openStream(command)
-        } catch (e: java.io.IOException) {
-            throw AdminException("SSH 打不开通道：${e.message}")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw AdminException("SSH 打不开通道：${e.message ?: e.javaClass.simpleName}")
         }
     }
 

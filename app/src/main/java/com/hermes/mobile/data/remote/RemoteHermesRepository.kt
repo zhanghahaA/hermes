@@ -1974,6 +1974,13 @@ class RemoteHermesRepository(
         }
     }
 
+    /** 后台里没接住的异常（App 不退出）：提示一句，记进诊断信息。 */
+    fun reportUnexpected(error: Throwable) {
+        val text = "${error.javaClass.simpleName}: ${error.message ?: ""}".take(300)
+        synchronized(recentErrors) { recentErrors.addLast("${java.time.Instant.ofEpochMilli(clock())} 未处理的异常 $text") }
+        _errors.tryEmit("出了点问题（App 没有退出）：$text")
+    }
+
     override fun diagnosticsReport(): String = buildString {
         val profile = _connections.value.firstOrNull { it.id == _activeConnectionId.value }
         val caps = capabilities
@@ -1989,6 +1996,11 @@ class RemoteHermesRepository(
         appendLine("最近的错误：")
         val errors = synchronized(recentErrors) { recentErrors.toList() }
         if (errors.isEmpty()) appendLine("（没有）") else errors.forEach { appendLine(it) }
+        com.hermes.mobile.data.store.CrashLog.recent()?.let {
+            appendLine()
+            appendLine("闪退记录：")
+            appendLine(it)
+        }
     }
 
     // ---- 管理 ----

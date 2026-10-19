@@ -151,6 +151,27 @@ class ChatInteractionsTest {
         waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("bot 在控制，你在看").fetchSemanticsNodes().isNotEmpty() }
     }
 
+    /** 新建项目：中文文件夹名、中文项目名，一路点下来不出错，项目建好并选中。 */
+    @Test
+    fun newProjectWithChineseNames() = withRepo { repo ->
+        val groupState = androidx.compose.runtime.mutableStateOf<String?>(null)
+        show { ChatsScreen(repo, onOpenChat = {}, onManageConnections = {}, group = groupState.value, onGroupChange = { groupState.value = it }) }
+        onNodeWithText("新建项目").performClick()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("notes").fetchSemanticsNodes().isNotEmpty() }
+        onNodeWithText("新建文件夹").performClick()
+        waitForIdle()
+        onNodeWithText("新文件夹名").performTextInput("读书计划")
+        onNodeWithText("建").performClick()
+        waitUntil(timeoutMillis = 5_000) { onAllNodesWithText("/home/me/读书计划").fetchSemanticsNodes().isNotEmpty() }
+        // 项目名自动用了文件夹名，再改成别的中文名
+        onNodeWithText("读书计划").performTextReplacement("二〇二六年读书计划")
+        onNodeWithText("新建").performClick()
+        waitUntil(timeoutMillis = 5_000) { repo.sessionGroups.value.projects.any { it.name == "二〇二六年读书计划" } }
+        waitForIdle()
+        assertEquals("/home/me/读书计划", repo.sessionGroups.value.projects.first { it.name == "二〇二六年读书计划" }.path)
+        assertEquals("二〇二六年读书计划", groupState.value, "建好后选中新项目")
+    }
+
     @Test
     fun projectCanBeRenamedAndDeleted() = withRepo { repo ->
         val groupState = androidx.compose.runtime.mutableStateOf<String?>(null)

@@ -11,6 +11,12 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.Text
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -66,6 +72,9 @@ fun HermesApp(repository: HermesRepository, navigator: Navigator) {
     }
 
     LaunchedEffect(repository) { repository.errors.collect { showMessage(it) } }
+    // 上次闪退了：把记下来的出错位置给用户看，方便反馈
+    var lastCrash by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { lastCrash = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { com.hermes.mobile.data.store.CrashLog.takeUnseenCrash() } }
 
     HermesTheme(themeMode = settings.themeMode, dynamicColor = settings.dynamicColor) {
         CompositionLocalProvider(
@@ -75,6 +84,7 @@ fun HermesApp(repository: HermesRepository, navigator: Navigator) {
             Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
                     HermesNavHost(repository, navigator)
+                    lastCrash?.let { crash -> CrashDialog(crash, onDismiss = { lastCrash = null }) }
                     SnackbarHost(
                         snackbarHostState,
                         modifier = Modifier
@@ -127,4 +137,42 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
             )
         }
     }
+}
+
+/** 上次闪退的记录：可以复制下来发给开发者。 */
+@Composable
+private fun CrashDialog(crash: String, onDismiss: () -> Unit) {
+    @Suppress("DEPRECATION")
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("上次 App 意外退出了") },
+        text = {
+            Column(verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                Text("下面是出错的位置。点“复制”发给开发者，能很快找到原因（里面没有密码和密钥）。", style = MaterialTheme.typography.bodyMedium)
+                androidx.compose.material3.Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier.heightIn(max = 260.dp),
+                ) {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(
+                            crash,
+                            style = com.hermes.mobile.ui.theme.CodeTextStyle.copy(fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp)),
+                            modifier = Modifier
+                                .verticalScroll(androidx.compose.foundation.rememberScrollState())
+                                .padding(8.dp),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(crash))
+                onDismiss()
+            }) { Text("复制") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("知道了") } },
+    )
 }

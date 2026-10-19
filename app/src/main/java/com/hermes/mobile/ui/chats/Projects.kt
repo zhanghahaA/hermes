@@ -196,7 +196,7 @@ fun NewProjectDialog(admin: AdminApi, onDismiss: () -> Unit, onCreated: (String,
                             Text(
                                 path ?: "…",
                                 style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 2,
+                                maxLines = 1,
                                 overflow = TextOverflow.StartEllipsis,
                             )
                         }
@@ -217,46 +217,10 @@ fun NewProjectDialog(admin: AdminApi, onDismiss: () -> Unit, onCreated: (String,
                                     }
                                     if (current != null) {
                                         item(key = "new-folder") {
-                                            val draft = newFolder
-                                            if (draft == null) {
-                                                FolderRow(Icons.Rounded.CreateNewFolder, "新建文件夹") { newFolder = "" }
-                                            } else {
-                                                Row(
-                                                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                ) {
-                                                    OutlinedTextField(
-                                                        value = draft,
-                                                        onValueChange = { newFolder = it },
-                                                        placeholder = { Text("新文件夹名") },
-                                                        singleLine = true,
-                                                        enabled = !makingFolder,
-                                                        modifier = Modifier.weight(1f),
-                                                    )
-                                                    TextButton(
-                                                        enabled = draft.isNotBlank() && !makingFolder,
-                                                        onClick = {
-                                                            makingFolder = true
-                                                            error = null
-                                                            scope.launch {
-                                                                try {
-                                                                    val made = admin.makeFolder(current, draft)
-                                                                    if (name.isBlank()) name = draft.trim()
-                                                                    newFolder = null
-                                                                    request = made
-                                                                } catch (e: AdminException) {
-                                                                    error = e.message
-                                                                } finally {
-                                                                    makingFolder = false
-                                                                }
-                                                            }
-                                                        },
-                                                    ) { Text("建") }
-                                                }
-                                            }
+                                            FolderRow(Icons.Rounded.CreateNewFolder, "新建文件夹") { if (newFolder == null) newFolder = "" }
                                         }
                                     }
-                                    items(list, key = { it }) { child ->
+                                    items(list, key = { "dir:$it" }) { child ->
                                         FolderRow(Icons.Rounded.Folder, child) {
                                             request = (current ?: "").trimEnd('/') + "/" + child
                                         }
@@ -274,6 +238,41 @@ fun NewProjectDialog(admin: AdminApi, onDismiss: () -> Unit, onCreated: (String,
                                 }
                             }
                         }
+                    }
+                }
+                // 新文件夹的名字：放在列表外面（输入框放在会被换掉的列表项里，中文输入法容易出问题）
+                newFolder?.let { draft ->
+                    val current = path
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = draft,
+                            onValueChange = { newFolder = it },
+                            label = { Text("新文件夹名") },
+                            singleLine = true,
+                            enabled = !makingFolder,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            enabled = draft.isNotBlank() && !makingFolder && current != null,
+                            onClick = {
+                                val parent = current ?: return@TextButton
+                                makingFolder = true
+                                error = null
+                                scope.launch {
+                                    try {
+                                        val made = admin.makeFolder(parent, draft)
+                                        if (name.isBlank()) name = draft.trim()
+                                        newFolder = null
+                                        request = made
+                                    } catch (e: AdminException) {
+                                        error = e.message
+                                    } finally {
+                                        makingFolder = false
+                                    }
+                                }
+                            },
+                        ) { Text("建") }
+                        TextButton(onClick = { newFolder = null }, enabled = !makingFolder) { Text("取消") }
                     }
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
