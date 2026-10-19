@@ -235,6 +235,42 @@ class RemoteRepositoryTest {
     }
 
     @Test
+    fun archiveHidesTheSessionKeepsItFindableAndCanBeUndone() {
+        val s = server(FakeHermesServer.Version.Modern)
+        val repo = repo()
+        repo.saveConnection(s.profile(), s.key)
+        repo.awaitConnected()
+        runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
+
+        repo.setArchived("s1", true)
+        assertTrue(repo.sessions.value.none { it.id == "s1" }, "界面上立刻从列表里拿掉")
+        assertEquals(listOf("s1"), repo.archivedSessions.value.map { it.id }, "归档列表里能找到")
+        Thread.sleep(500)
+        assertEquals("""{"archived":true}""", s.requests.last { it.method == "PATCH" }.body.readUtf8())
+
+        runBlocking { repo.refreshSessions() }
+        assertTrue(repo.sessions.value.none { it.id == "s1" }, "刷新后也不回来")
+        assertEquals(listOf("s1"), repo.archivedSessions.value.map { it.id })
+
+        repo.setArchived("s1", false)
+        assertTrue(repo.archivedSessions.value.isEmpty())
+        runBlocking { withTimeout(5_000) { repo.sessions.first { list -> list.any { it.id == "s1" } } } }
+        assertEquals("""{"archived":false}""", s.requests.last { it.method == "PATCH" }.body.readUtf8())
+
+        // 服务器失败：退回列表，并提示
+        s.failPatch = true
+        val errors = mutableListOf<String>()
+        val job = scope.launch { repo.errors.collect { errors += it } }
+        Thread.sleep(100)
+        repo.setArchived("s2", true)
+        Thread.sleep(800)
+        assertTrue(repo.sessions.value.any { it.id == "s2" }, "失败后回到列表")
+        assertTrue(repo.archivedSessions.value.none { it.id == "s2" })
+        assertTrue(errors.any { "归档失败" in it }, errors.toString())
+        job.cancel()
+    }
+
+    @Test
     fun deleteCallsServer() {
         val s = server(FakeHermesServer.Version.Modern)
         val repo = repo()

@@ -100,6 +100,7 @@ class HermesClient(
         instructions: String? = null,
         model: String? = null,
         provider: String? = null,
+        workspace: String? = null,
     ): RunAcceptedDto {
         val body = patch {
             put("input", input)
@@ -112,6 +113,8 @@ class HermesClient(
         }
         val request = request("/v1/runs")
             .header("Idempotency-Key", idempotencyKey)
+            // 这一轮的工作目录：Hermes 还没合并按请求指定目录的功能（issue #29531），现在会忽略；合并后自动生效
+            .apply { if (workspace != null) header("X-Hermes-Workspace", workspace) }
             .post(body.toString().toRequestBody(JsonMedia))
             .build()
         return decode(execute(request), RunAcceptedDto.serializer())

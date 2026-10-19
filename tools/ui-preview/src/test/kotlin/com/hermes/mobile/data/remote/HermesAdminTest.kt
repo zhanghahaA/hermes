@@ -115,10 +115,12 @@ class HermesAdminTest {
         assertTrue("找不到 hermes" in e.message!!, e.message)
     }
     /** 在本机用真的 bash + python3 跑分组脚本（模拟 SSH 那头）。 */
-    private class LocalShell(private val home: java.io.File) : RemoteShell {
+    private class LocalShell(private val home: java.io.File, private val path: String? = null) : RemoteShell {
         override fun exec(command: String, timeoutSeconds: Long): Pair<Int, String> {
             if ("config path" in command) return 0 to "${home.path}/config.yaml\n"
-            val p = ProcessBuilder("bash", "-c", command).redirectErrorStream(true).start()
+            val pb = ProcessBuilder("bash", "-c", command).redirectErrorStream(true)
+            if (path != null) pb.environment()["PATH"] = path
+            val p = pb.start()
             val out = p.inputStream.readBytes().toString(Charsets.UTF_8)
             return p.waitFor() to out
         }
@@ -176,5 +178,72 @@ class HermesAdminTest {
     fun noProjectsDbStillWorks() = runBlocking<Unit> {
         val home = kotlin.io.path.createTempDirectory("hermes-home2").toFile()
         assertEquals(listOf("默认"), HermesAdmin(LocalShell(home), null).sessionGroups().groups, "什么都没有时只有“默认”")
+    }
+
+    /** 一个假的 hermes 命令：只把参数记下来（不是 Python 脚本，移动会话时就走直接改库那条路）。 */
+    private fun fakeHermesBin(log: java.io.File): String {
+        val bin = kotlin.io.path.createTempDirectory("fake-bin").toFile()
+        java.io.File(bin, "hermes").apply {
+            writeText("#!/bin/bash\nprintf '%s\\n' \"${'$'}@\" >> ${log.path}\n")
+            setExecutable(true)
+        }
+        return "${bin.path}:/usr/bin:/bin"
+    }
+
+    @Test
+    fun foldersAreListedAndProjectsCreated() = runBlocking<Unit> {
+        val home = kotlin.io.path.createTempDirectory("hermes-home3").toFile()
+        val root = kotlin.io.path.createTempDirectory("work").toFile()
+        java.io.File(root, "b-site").mkdirs()
+        java.io.File(root, "A photos").mkdirs()
+        java.io.File(root, "file.txt").writeText("x")
+        val log = java.io.File(home, "calls.txt")
+        val admin = HermesAdmin(LocalShell(home, fakeHermesBin(log)), null)
+
+        val (dir, children) = admin.listFolders(root.path)
+        assertEquals(root.canonicalPath, dir)
+        assertEquals(listOf("A photos", "b-site"), children, "只列文件夹，不分大小写排序，带空格的名字也行")
+        assertTrue(runCatching { admin.listFolders(root.path + "/nope") }.exceptionOrNull() is AdminException)
+
+        admin.createProject("my 'site'", root.path + "/b-site")
+        assertEquals(listOf("project", "create", "my 'site'", root.path + "/b-site"), log.readLines(), "名字原样传给 hermes project create")
+        val missing = runCatching { admin.createProject("x", root.path + "/nope") }.exceptionOrNull()
+        assertTrue(missing is AdminException && "没有这个文件夹" in missing.message!!, missing.toString())
+    }
+
+    @Test
+    fun movingASessionChangesItsWorkingFolder() = runBlocking<Unit> {
+        val home = kotlin.io.path.createTempDirectory("hermes-home4").toFile()
+        val site = kotlin.io.path.createTempDirectory("site").toFile()
+        sql(
+            java.io.File(home, "state.db"),
+            """
+            create table sessions (id text primary key, cwd text, git_repo_root text, git_branch text, git_metadata_generation integer, title text);
+            insert into sessions values ('api_1', '/old', '/old', 'main', 3, 'x');
+            """.trimIndent(),
+        )
+        sql(
+            java.io.File(home, "projects.db"),
+            """
+            create table projects (id text primary key, slug text, name text, primary_path text, created_at integer, archived integer default 0);
+            create table project_folders (project_id text, path text, label text, is_primary integer, added_at integer);
+            insert into projects values ('p1', 'site', '网站', '${site.path}', 1, 0);
+            insert into project_folders values ('p1', '${site.path}', null, 1, 1);
+            """.trimIndent(),
+        )
+        val admin = HermesAdmin(LocalShell(home, fakeHermesBin(java.io.File(home, "calls.txt"))), null)
+
+        admin.moveSession("api_1", site.path)
+        var grouping = admin.sessionGroups()
+        assertEquals("网站", grouping.groupOf("api_1"))
+        assertEquals(site.path, grouping.folders["api_1"])
+
+        admin.moveSession("api_1", null)
+        grouping = admin.sessionGroups()
+        assertEquals("默认", grouping.groupOf("api_1"), "移出项目后回到“默认”")
+
+        assertTrue(runCatching { admin.moveSession("api_2", site.path) }.exceptionOrNull()?.message?.contains("找不到") == true)
+        assertTrue(runCatching { admin.moveSession("x; rm -rf /", site.path) }.exceptionOrNull() is AdminException, "奇怪的 id 不进 shell")
+        assertTrue(runCatching { admin.moveSession("api_1", site.path + "/nope") }.exceptionOrNull() is AdminException)
     }
 }

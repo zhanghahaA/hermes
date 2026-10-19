@@ -28,6 +28,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
     // 测试线程遍历时服务器线程还在写：用写时复制的列表，遍历不会出错
     val requests: MutableList<RecordedRequest> = java.util.concurrent.CopyOnWriteArrayList()
     var failPatch = false
+    /** PATCH 过 archived=true 的会话：列表里就带上 archived，客户端不该再显示。 */
+    val archivedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     /** 模拟有的 Hermes 模式：聊天记录里图片只记一个 [screenshot]，不记路径。 */
     var screenshotOnly = false
     /** 模拟 Hermes 在用户消息后追加系统提示（换了客户端时）。 */
@@ -409,7 +411,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
             )
             path == "/api/sessions" -> json(
                 """{"object":"list","data":[
-                   {"id":"s1","source":"api_server","title":"家庭网络","started_at":1760000000.0,"last_active":1760003600.25,"message_count":6,"preview":"DNS 改好了","pinned":false,"archived":false,"hidden":false,"has_system_prompt":false,"is_internal_child":false,"future_field":[1,2]},
+                   {"id":"s1","source":"api_server","title":"家庭网络","started_at":1760000000.0,"last_active":1760003600.25,"message_count":6,"preview":"DNS 改好了","pinned":false,"archived":${"s1" in archivedIds},"hidden":false,"has_system_prompt":false,"is_internal_child":false,"future_field":[1,2]},
                    {"id":"s2","source":"telegram","title":null,"started_at":1760000000,"last_active":1760001000,"preview":"周五开会提醒\n第二行","pinned":true},
                    {"id":"s3","source":"api_server","title":"被隐藏的","hidden":true},
                    {"id":"s4","source":"api_server","title":"已归档","archived":true},
@@ -441,7 +443,13 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 json("""{"object":"hermes.session","session":{"id":"$id","source":"api_server","title":$title,"started_at":1760009000.0}}""")
             }
             path.startsWith("/api/sessions/") && request.method == "PATCH" ->
-                if (failPatch) error(500, "database is locked") else json("""{"object":"hermes.session","session":{"id":"s1","title":"新标题"}}""")
+                if (failPatch) error(500, "database is locked") else {
+                    val id = path.removePrefix("/api/sessions/")
+                    val body = request.body.clone().readUtf8()
+                    if ("\"archived\":true" in body) archivedIds += id
+                    if ("\"archived\":false" in body) archivedIds -= id
+                    json("""{"object":"hermes.session","session":{"id":"s1","title":"新标题"}}""")
+                }
             path.startsWith("/api/sessions/") && request.method == "DELETE" -> json("""{"object":"hermes.session.deleted","id":"s1","deleted":true}""")
             else -> MockResponse().setResponseCode(404).setBody("404: Not Found")
         }

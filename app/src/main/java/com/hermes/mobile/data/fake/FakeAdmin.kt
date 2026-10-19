@@ -7,7 +7,7 @@ import com.hermes.mobile.data.model.MemoryTarget
 import com.hermes.mobile.data.remote.AdminApi
 
 /** 演示用的管理数据（界面预览、没连 Hermes 时）。 */
-class FakeAdmin : AdminApi {
+class FakeAdmin(private val onProjectCreated: (String, String) -> Unit = { _, _ -> }) : AdminApi {
     private var books = listOf(
         MemoryBook(
             MemoryTarget.User,
@@ -71,6 +71,19 @@ class FakeAdmin : AdminApi {
     override suspend fun logs(lines: Int) =
         "2026-10-18 08:00:02 INFO cron: running job 每日简报\n2026-10-18 08:00:09 INFO cron: job 每日简报 finished (ok)\n" +
             "2026-10-18 09:12:44 INFO api_server: run run_4f2 started (session api_1792)\n2026-10-18 09:12:51 INFO api_server: run run_4f2 completed"
+
+    private val tree = mapOf(
+        "/home/me" to listOf("Downloads", "homelab", "notes", "projects"),
+        "/home/me/projects" to listOf("hermes-mobile", "blog", "scripts"),
+        "/home/me/notes" to listOf("2025", "2026"),
+    )
+
+    override suspend fun listFolders(path: String?): Pair<String, List<String>> {
+        val dir = path?.trimEnd('/')?.ifEmpty { "/" } ?: "/home/me"
+        return dir to tree[dir].orEmpty()
+    }
+
+    override suspend fun createProject(name: String, folder: String) = onProjectCreated(name, folder)
 
     companion object {
         val status = GatewayStatus(

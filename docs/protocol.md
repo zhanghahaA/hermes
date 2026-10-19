@@ -252,7 +252,24 @@ Gateway 状态走 API：`GET /health/detailed` 有 `readiness.checks`（数据�
 API 的会话列表里没有项目信息。Hermes 桌面版的分组来自两处：`<HERMES_HOME>/projects.db`（项目和它们的文件夹）
 和 `state.db` 里每个会话的工作目录（`cwd`、`git_repo_root`）。App 经 SSH 用 `python3` 只读地查这两个库：
 工作目录落在某个项目的文件夹里（取路径最长的）就归到项目名下，否则按工作目录（git 仓库根优先）的文件夹名，
-都没有的归到“默认”。从 App 新建的会话没有工作目录（API 不能指定），都在“默认”里。
+都没有的归到“默认”。
+
+**新建项目**：经 SSH 运行 `hermes project create <名字> <文件夹>`（文件夹在服务器上一层层点选，`cd 目录; pwd; ls -1p` 列子文件夹）。
+
+**把会话移进项目**：和桌面版拖动会话一样，改的是会话的工作目录。桌面版调用的是
+`SessionDB().update_session_cwd(id, cwd, branch, repo_root, replace_git_meta=True)`；App 经 SSH 找到 `hermes` 命令所用的 Python
+（顺着启动脚本找 venv 里的 python），用 `HERMES_HOME` 跑同一个函数；导入不了 Hermes 的代码时退回直接改 `state.db` 的
+`cwd / git_branch / git_repo_root / git_metadata_generation`。移出项目就是把工作目录清空。会话 id 先校验（只允许字母数字和 `_.:-`），不进 shell。
+
+**项目里的新对话**：API 新建会话不能指定工作目录，所以第一轮发出之后再按上面的办法移进去；同时每一轮 `/v1/runs`
+带上 `X-Hermes-Workspace` 请求头（Hermes 还没合并，见 PR #78923，合并后就生效），并在 `instructions` 里告诉模型这个对话的工作文件夹。
+Hermes 的 API 运行目前不读会话的 `cwd`（issue #29531），说明里的文件夹就是让模型知道该在哪里干活。
+
+## 归档
+
+`PATCH /api/sessions/{id}` 带 `{"archived": true}`。Hermes 的会话列表不返回归档的会话（也没有参数能列出来），
+所以 App 在本机记住自己归档的会话（`archived.json`），有 SSH 时再从 `state.db` 读出所有 `archived = 1` 的会话，
+合起来显示在“已归档”里。取消归档就是 `{"archived": false}`。刷新列表时如果归档的会话又出现了，说明在别处取消了归档，App 也跟着取消。
 
 ## 客户端说明（instructions）
 

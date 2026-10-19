@@ -4,6 +4,8 @@ import com.hermes.mobile.data.model.McpServer
 import com.hermes.mobile.data.model.MemoryBook
 import com.hermes.mobile.data.model.MemoryTarget
 import com.hermes.mobile.data.model.SessionGrouping
+import com.hermes.mobile.data.model.ArchivedRef
+import com.hermes.mobile.data.model.ProjectInfo
 import com.hermes.mobile.data.ssh.RemoteShell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,6 +36,12 @@ interface AdminApi {
     suspend fun logs(lines: Int = 200): String
     /** 会话分组（项目 / 工作目录）。 */
     suspend fun sessionGroups(): SessionGrouping = SessionGrouping()
+    /** 新建 Hermes 项目（`hermes project create`），[folder] 是电脑上的文件夹。 */
+    suspend fun createProject(name: String, folder: String): Unit = throw AdminException("不支持")
+    /** 列出文件夹：返回绝对路径和下一级的子文件夹名。[path] 为 null 时从家目录开始。 */
+    suspend fun listFolders(path: String?): Pair<String, List<String>> = throw AdminException("不支持")
+    /** 把会话的工作目录改成 [folder]（桌面版拖到项目里就是这样）；null 表示移出项目。 */
+    suspend fun moveSession(sessionId: String, folder: String?): Unit = throw AdminException("不支持")
 }
 
 /**
@@ -212,8 +220,56 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
             id to group
         }.toMap()
         val groups = projects.values.distinct() + (folderNames - projects.values.toSet()).sorted() + SessionGrouping.DefaultGroup
-        return SessionGrouping(groups.distinct(), of)
+        val projectInfos = (json["projects"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val p = e as? JsonObject ?: return@mapNotNull null
+            val id = (p["id"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            val name = (p["name"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            ProjectInfo(id, name, (p["path"] as? JsonPrimitive)?.contentOrNull)
+        }
+        val folders = sessions.mapNotNull { (id, value) ->
+            ((value as? JsonObject)?.get("cwd") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { id to it }
+        }.toMap()
+        val archived = (json["archived"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val a = e as? JsonObject ?: return@mapNotNull null
+            val id = (a["id"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            val at = (a["at"] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.let { (it * 1000).toLong() } ?: 0L
+            ArchivedRef(id, (a["title"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } ?: "未命名会话", at)
+        }
+        return SessionGrouping(groups.distinct(), of, projectInfos, folders, archived)
     }
+
+    private fun checkFolder(folder: String) = "[ -d ${q(folder)} ] || { echo $NoSuchFolder >&2; exit 2; }; "
+
+    private inline fun <T> noSuchFolder(folder: String?, block: () -> T): T = try {
+        block()
+    } catch (e: AdminException) {
+        throw if (e.message?.contains(NoSuchFolder) == true) AdminException("服务器上没有这个文件夹：$folder") else e
+    }
+
+    override suspend fun createProject(name: String, folder: String) {
+        if (name.isBlank()) throw AdminException("项目名不能为空")
+        noSuchFolder(folder) { run("${checkFolder(folder)}$hermes project create ${q(name.trim())} ${q(folder)}") }
+    }
+
+    override suspend fun listFolders(path: String?): Pair<String, List<String>> {
+        val target = path?.let(::q) ?: "\"\$HOME\""
+        val out = run("cd $target 2>/dev/null || exit 3; pwd; ls -1p 2>/dev/null | grep '/\$' | sed 's#/\$##'")
+        val lines = out.lines().map { it.trimEnd() }.filter { it.isNotEmpty() }
+        val here = lines.firstOrNull()?.takeIf { it.startsWith("/") } ?: throw AdminException("打不开这个文件夹")
+        return here to lines.drop(1).sortedBy { it.lowercase() }
+    }
+
+    override suspend fun moveSession(sessionId: String, folder: String?) {
+        if (!SessionIdPattern.matches(sessionId)) throw AdminException("会话 id 不对：$sessionId")
+        val dir = home()
+        val check = folder?.let(::checkFolder).orEmpty()
+        // 用 Hermes 自己的 Python 跑 Hermes 自己的代码（和桌面版拖动会话调用的是同一个函数），找不到才用系统 python3
+        val script = check + FindHermesPython + "\nHERMES_HOME=${q(dir)} \$PY - ${q(sessionId)} ${q(folder.orEmpty())} ${q(dir)} <<'HERMES_MOBILE_PY'\n$MoveScript\nHERMES_MOBILE_PY"
+        val out = noSuchFolder(folder) { run(script, timeoutSeconds = 60) }
+        if ("NOTFOUND" in out) throw AdminException("Hermes 里找不到这个会话")
+        if ("OK" !in out) throw AdminException("移动失败：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+    }
+
 
     override suspend fun logs(lines: Int): String =
         run("$hermes logs -n ${lines.coerceIn(10, 2000)}", timeoutSeconds = 60).trimEnd()
@@ -244,8 +300,8 @@ folders = []
 db = open_db("projects.db")
 if db is not None:
     try:
-        for pid, name in db.execute("select id, name from projects where archived = 0 order by created_at"):
-            out["projects"].append({"id": pid, "name": name})
+        for pid, name, path in db.execute("select id, name, primary_path from projects where archived = 0 order by created_at"):
+            out["projects"].append({"id": pid, "name": name, "path": path})
         folders = list(db.execute("select pf.project_id, pf.path from project_folders pf join projects p on p.id = pf.project_id where p.archived = 0"))
     except Exception:
         pass
@@ -265,10 +321,73 @@ if db is not None:
         for sid, cwd, repo in db.execute("select id, cwd, " + root + " from sessions where coalesce(cwd, '') != '' or coalesce(" + root + ", '') != ''"):
             cwd = (cwd or "").strip()
             repo = (repo or "").strip()
-            out["sessions"][sid] = {"project": owner(cwd) or (owner(repo) if repo else None), "folder": repo or cwd}
+            out["sessions"][sid] = {"project": owner(cwd) or (owner(repo) if repo else None), "folder": repo or cwd, "cwd": cwd}
+    if "archived" in cols:
+        at = "last_activity_at" if "last_activity_at" in cols else "started_at"
+        out["archived"] = [{"id": i, "title": t, "at": a} for i, t, a in db.execute(
+            "select id, title, " + at + " from sessions where archived = 1 order by " + at + " desc limit 200")]
 print(json.dumps(out))
 """.trimIndent()
 
+        val SessionIdPattern = Regex("[A-Za-z0-9_.:-]+")
+
+        /**
+         * 找 Hermes 用的 Python：顺着 `hermes` 启动器（可能是符号链接、`exec` 转发的 shell 脚本或带 shebang 的
+         * Python 脚本）找到它旁边的 python，或 shebang 里的解释器。找不到就用系统的 python3。
+         */
+        val FindHermesPython = """
+PY=""
+f=${'$'}(command -v hermes 2>/dev/null)
+i=0
+while [ -n "${'$'}f" ] && [ ${'$'}i -lt 5 ]; do
+  i=${'$'}((i + 1))
+  f=${'$'}(readlink -f "${'$'}f" 2>/dev/null || echo "${'$'}f")
+  d=${'$'}(dirname "${'$'}f")
+  for c in "${'$'}d/python" "${'$'}d/python3"; do [ -x "${'$'}c" ] && { PY="${'$'}c"; break 2; }; done
+  first=${'$'}(head -n 1 "${'$'}f" 2>/dev/null)
+  case "${'$'}first" in
+    '#!'*python*) PY=${'$'}{first#\#!}; break ;;  # 可能是 “/usr/bin/env python3”，所以下面调用时不加引号
+  esac
+  f=${'$'}(grep -m1 -oE 'exec "?/[^ "]+' "${'$'}f" 2>/dev/null | sed -E 's/^exec "?//')
+done
+[ -z "${'$'}PY" ] && PY=python3
+""".trimIndent()
+
+        /** 改会话的工作目录：优先用 Hermes 自己的 SessionDB.update_session_cwd（和桌面版一样），不行再直接改库。 */
+        val MoveScript = """
+import os, sqlite3, subprocess, sys
+sid, cwd, home = sys.argv[1], sys.argv[2], sys.argv[3]
+def git(*args):
+    try:
+        return subprocess.run(["git", "-C", cwd] + list(args), capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception:
+        return ""
+if cwd:
+    try:
+        from hermes_state import SessionDB
+        try:
+            from tui_gateway import git_probe
+            branch, root = git_probe.branch(cwd), git_probe.common_repo_root(cwd)
+        except Exception:
+            branch, root = git("rev-parse", "--abbrev-ref", "HEAD"), git("rev-parse", "--show-toplevel")
+        result = SessionDB().update_session_cwd(sid, cwd, branch, root, replace_git_meta=True)
+        print("OK" if result is not None else "NOTFOUND")
+        sys.exit(0)
+    except ImportError:
+        pass
+db = sqlite3.connect(os.path.join(home, "state.db"), timeout=10)
+if db.execute("select 1 from sessions where id = ?", (sid,)).fetchone() is None:
+    print("NOTFOUND")
+    sys.exit(0)
+branch = git("rev-parse", "--abbrev-ref", "HEAD") if cwd else ""
+root = git("rev-parse", "--show-toplevel") if cwd else ""
+db.execute("update sessions set cwd = ?, git_branch = ?, git_repo_root = ?, git_metadata_generation = coalesce(git_metadata_generation, 0) + 1 where id = ?",
+           (cwd or None, branch or None, root or None, sid))
+db.commit()
+print("OK")
+""".trimIndent()
+
+        private const val NoSuchFolder = "HERMES_MOBILE_NO_SUCH_FOLDER"
         val McpName = Regex("[A-Za-z0-9_-]+")
         val Ansi = Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]")
 

@@ -22,6 +22,7 @@ import kotlinx.coroutines.withTimeout
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -273,6 +274,87 @@ class OpenSshIT {
             runBlocking { repo.session(chat).first() }?.id?.let(repo::deleteSession)
             File(path).delete()
         } finally {
+            scope.cancel()
+        }
+    }
+
+    /** 真实 Hermes：建项目、在项目里开新对话、移出项目、归档再取消归档。 */
+    @Test
+    fun projectsAndArchiveOverRealSsh() {
+        if (dir == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_SSH_DIR / HERMES_IT_KEY")
+            return
+        }
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val folder = kotlin.io.path.createTempDirectory("it-project").toFile().canonicalFile
+        val name = "it-proj-${System.nanoTime() % 100000}"
+        try {
+            val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
+            val profile = ConnectionProfile(
+                id = "os", name = "OpenSSH", type = ConnectionType.Ssh, host = "127.0.0.1", port = 8642,
+                sshUser = user, sshPort = sshPort, sshAuth = SshAuthMethod.Key,
+            )
+            repo.saveConnection(profile, key, File(dir, "user_ed25519").readText())
+            runBlocking { withTimeout(30_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
+            val admin = assertNotNull(repo.admin())
+
+            val (home, children) = runBlocking { admin.listFolders(folder.parent) }
+            assertEquals(folder.parentFile.canonicalPath, home)
+            assertTrue(folder.name in children, children.toString())
+
+            runBlocking { admin.createProject(name, folder.path); repo.refreshGroups() }
+            val project = repo.sessionGroups.value.projects.firstOrNull { it.name == name }
+            assertNotNull(project, repo.sessionGroups.value.projects.toString())
+            assertEquals(folder.path, project.path)
+
+            // 在项目里开新对话：发完第一条，它就在项目里
+            val chat = repo.createSession()!!
+            repo.setDraftProject(chat, project)
+            repo.sendMessage(chat, "你好", emptyList())
+            runBlocking {
+                withTimeout(60_000) {
+                    repo.chatItems(chat).first { list -> list.any { it is ChatItem.Message && it.role == Role.Assistant && !it.id.startsWith("reply-") } }
+                }
+            }
+            val real = runBlocking { repo.session(chat).first() }!!.id
+            fun waitGroup(expected: String) = runBlocking {
+                withTimeout(30_000) {
+                    while (true) {
+                        repo.refreshGroups()
+                        if (repo.sessionGroups.value.groupOf(real) == expected) break
+                        kotlinx.coroutines.delay(500)
+                    }
+                }
+            }
+            waitGroup(name)
+            assertEquals(folder.path, repo.sessionGroups.value.folders[real], "Hermes 里会话的工作目录是项目文件夹")
+
+            repo.moveToProject(real, null)
+            waitGroup("默认")
+
+            // 归档：Hermes 的列表里不再有，分组脚本能看到它归档了
+            repo.setArchived(real, true)
+            runBlocking {
+                withTimeout(15_000) {
+                    while (admin.sessionGroups().archived.none { it.id == real }) kotlinx.coroutines.delay(300)
+                    repo.refreshSessions()
+                }
+            }
+            assertTrue(repo.sessions.value.none { it.id == real }, "归档后不在列表里")
+            assertTrue(repo.archivedSessions.value.any { it.id == real })
+            repo.setArchived(real, false)
+            runBlocking { withTimeout(15_000) { repo.sessions.first { list -> list.any { it.id == real } } } }
+            repo.deleteSession(real)
+            Thread.sleep(500)
+        } finally {
+            // 测试建的项目归档掉，不留在测试 Hermes 的项目列表里
+            runCatching {
+                val tunnel = com.hermes.mobile.data.ssh.SshTunnel("127.0.0.1", sshPort, user, com.hermes.mobile.data.ssh.SshAuth.Key(File(dir, "user_ed25519").readText()), 8642, null, {})
+                tunnel.connect()
+                println("清理：" + tunnel.exec("hermes project archive $name", 30).second.trim())
+                tunnel.close()
+            }
+            folder.deleteRecursively()
             scope.cancel()
         }
     }

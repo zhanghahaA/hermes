@@ -55,6 +55,12 @@ data class SessionGrouping(
     val groups: List<String> = emptyList(),
     /** 会话 id → 组名。不在这里的会话属于 [DefaultGroup]。 */
     val of: Map<String, String> = emptyMap(),
+    /** Hermes 的项目（可以把会话移进去）。 */
+    val projects: List<ProjectInfo> = emptyList(),
+    /** 会话 id → 工作目录（项目里的会话让 Agent 在这里干活）。 */
+    val folders: Map<String, String> = emptyMap(),
+    /** 在 Hermes 里归档了的会话（API 的会话列表不返回它们）。 */
+    val archived: List<ArchivedRef> = emptyList(),
 ) {
     fun groupOf(sessionId: String): String = of[sessionId] ?: DefaultGroup
 
@@ -62,3 +68,11 @@ data class SessionGrouping(
         const val DefaultGroup = "默认"
     }
 }
+
+/** Hermes 的一个项目：[path] 是主文件夹，会话移进项目就是把工作目录设成它。 */
+@kotlinx.serialization.Serializable
+data class ProjectInfo(val id: String, val name: String, val path: String?)
+
+/** 归档的会话（只知道 id、标题和最后活动时间）。 */
+@kotlinx.serialization.Serializable
+data class ArchivedRef(val id: String, val title: String, val updatedAt: Long)

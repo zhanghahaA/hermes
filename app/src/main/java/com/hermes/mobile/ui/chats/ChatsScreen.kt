@@ -1,6 +1,13 @@
 package com.hermes.mobile.ui.chats
 
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Unarchive
+import androidx.compose.material.icons.automirrored.rounded.DriveFileMove
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import com.hermes.mobile.data.model.ProjectInfo
 
 import com.hermes.mobile.data.model.SessionGrouping
 
@@ -92,13 +99,16 @@ import com.hermes.mobile.ui.components.TagLabel
 import com.hermes.mobile.ui.components.listTime
 import kotlinx.coroutines.launch
 
-private enum class ChatFilter(val label: String) { All("全部"), Unread("未读"), Pinned("置顶"), External("其他来源") }
+private enum class ChatFilter(val label: String) { All("全部"), Unread("未读"), Pinned("置顶"), External("其他来源"), Archived("已归档") }
 
 @Composable
 fun ChatsScreen(
     repository: HermesRepository,
     onOpenChat: (String) -> Unit,
     onManageConnections: () -> Unit,
+    /** 选中的分组；null 是全部。放在外面是因为选中项目时，右下角的“新对话”要建在这个项目里。 */
+    group: String? = null,
+    onGroupChange: (String?) -> Unit = {},
 ) {
     val sessions by repository.sessions.collectAsState()
     val drafts by repository.drafts.collectAsState()
@@ -110,16 +120,21 @@ fun ChatsScreen(
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(ChatFilter.All) }
     val grouping by repository.sessionGroups.collectAsState()
-    // 选中的分组；null 是全部。分组没了（换了连接）就回到全部
-    var group by rememberSaveable { mutableStateOf<String?>(null) }
-    val showGroups = grouping.groups.any { it != SessionGrouping.DefaultGroup }
-    if (group != null && group !in grouping.groups) group = null
+    val archived by repository.archivedSessions.collectAsState()
+    // 有 SSH 才能建项目、移动对话
+    val admin = remember(activeId, connectionState) { repository.admin() }
+    val showGroups = grouping.groups.any { it != SessionGrouping.DefaultGroup } || admin != null
+    // 分组没了（换了连接）就回到全部
+    LaunchedEffect(group, grouping.groups) { if (group != null && group !in grouping.groups) onGroupChange(null) }
     var refreshing by remember { mutableStateOf(false) }
     var showSwitcher by remember { mutableStateOf(false) }
     var actionTarget by remember { mutableStateOf<Session?>(null) }
     var openRow by remember { mutableStateOf<String?>(null) }
     var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var renameTarget by remember { mutableStateOf<Session?>(null) }
+    var moveTarget by remember { mutableStateOf<Session?>(null) }
+    // 新建项目；带着会话时，建好就把它移进去
+    var newProjectFor by remember { mutableStateOf<NewProjectRequest?>(null) }
 
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -131,7 +146,8 @@ fun ChatsScreen(
     // 列表一滚动就收起展开的那一行
     LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) openRow = null }
 
-    val visible = sessions
+    val source = if (filter == ChatFilter.Archived) archived else sessions
+    val visible = source
         .filter { it.id !in pendingDelete }
         .filter { query.isBlank() || it.title.contains(query, true) || it.preview.contains(query, true) }
         .filter { group == null || grouping.groupOf(it.id) == group }
@@ -141,9 +157,10 @@ fun ChatsScreen(
                 ChatFilter.Unread -> it.unread > 0
                 ChatFilter.Pinned -> it.pinned
                 ChatFilter.External -> it.external
+                ChatFilter.Archived -> true
             }
         }
-        .sortedWith(compareByDescending<Session> { it.pinned }.thenByDescending { it.updatedAt })
+        .sortedWith(compareByDescending<Session> { it.pinned && filter != ChatFilter.Archived }.thenByDescending { it.updatedAt })
 
     // 删除先只在界面上隐藏，提示条消失（没点撤销）才真正删除——服务器上的删除是撤销不了的
     fun delete(session: Session) {
@@ -158,6 +175,23 @@ fun ChatsScreen(
                 if (!undone) repository.deleteSession(session.id)
                 pendingDelete = pendingDelete - session.id
             }
+        }
+    }
+
+    fun archive(session: Session) {
+        repository.setArchived(session.id, true)
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar("已归档「${session.title}」", actionLabel = "撤销", duration = SnackbarDuration.Short)
+            if (result == SnackbarResult.ActionPerformed) repository.setArchived(session.id, false)
+        }
+    }
+
+    fun unarchive(session: Session) {
+        repository.setArchived(session.id, false)
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar("「${session.title}」回到了聊天列表", duration = SnackbarDuration.Short)
         }
     }
 
@@ -231,7 +265,8 @@ fun ChatsScreen(
                             groups = grouping.groups,
                             counts = sessions.groupingBy { grouping.groupOf(it.id) }.eachCount(),
                             selected = group,
-                            onSelect = { group = it },
+                            onSelect = onGroupChange,
+                            onNewProject = admin?.let { { newProjectFor = NewProjectRequest(null) } },
                         )
                     }
                 }
@@ -253,7 +288,9 @@ fun ChatsScreen(
                 }
                 if (visible.isEmpty()) {
                     item(key = "empty") {
-                        if (sessions.isEmpty()) {
+                        if (filter == ChatFilter.Archived && archived.isEmpty()) {
+                            EmptyState(Icons.Rounded.Archive, "没有归档的对话", "在聊天列表里左滑一个对话，点“归档”，它就会收到这里。")
+                        } else if (sessions.isEmpty()) {
                             EmptyState(
                                 Icons.Rounded.Forum,
                                 "还没有对话",
@@ -268,13 +305,28 @@ fun ChatsScreen(
                     SwipeActionsRow(
                         isOpen = openRow == session.id,
                         onOpenChange = { open -> openRow = if (open) session.id else null },
-                        actions = listOf(
-                            SwipeAction(
-                                if (session.pinned) "取消置顶" else "置顶",
-                                Icons.Rounded.PushPin,
-                                MaterialTheme.colorScheme.secondaryContainer,
-                                MaterialTheme.colorScheme.onSecondaryContainer,
-                            ) { repository.togglePin(session.id) },
+                        actions = listOfNotNull(
+                            if (filter == ChatFilter.Archived) {
+                                SwipeAction(
+                                    "取消归档",
+                                    Icons.Rounded.Unarchive,
+                                    MaterialTheme.colorScheme.tertiary,
+                                    MaterialTheme.colorScheme.onTertiary,
+                                ) { unarchive(session) }
+                            } else {
+                                SwipeAction(
+                                    if (session.pinned) "取消置顶" else "置顶",
+                                    Icons.Rounded.PushPin,
+                                    MaterialTheme.colorScheme.secondaryContainer,
+                                    MaterialTheme.colorScheme.onSecondaryContainer,
+                                ) { repository.togglePin(session.id) }
+                            },
+                            if (filter == ChatFilter.Archived) null else SwipeAction(
+                                "归档",
+                                Icons.Rounded.Archive,
+                                MaterialTheme.colorScheme.tertiary,
+                                MaterialTheme.colorScheme.onTertiary,
+                            ) { archive(session) },
                             SwipeAction(
                                 "删除",
                                 Icons.Rounded.Delete,
@@ -316,12 +368,55 @@ fun ChatsScreen(
     }
 
     actionTarget?.let { session ->
+        val isArchived = archived.any { it.id == session.id }
         SessionActionsSheet(
             session = session,
+            archived = isArchived,
             onDismiss = { actionTarget = null },
             onTogglePin = { repository.togglePin(session.id) },
             onRename = { renameTarget = session },
+            onToggleArchive = { if (isArchived) unarchive(session) else archive(session) },
+            onMove = if (admin != null && !isArchived) ({ moveTarget = session }) else null,
             onDelete = { delete(session) },
+        )
+    }
+
+    moveTarget?.let { session ->
+        val current = grouping.of[session.id]
+        ProjectPickerSheet(
+            title = session.title,
+            projects = grouping.projects,
+            current = current,
+            onPick = { project ->
+                repository.moveToProject(session.id, project)
+                scope.launch {
+                    snackbar.currentSnackbarData?.dismiss()
+                    snackbar.showSnackbar(if (project == null) "已移出项目" else "已移到「${project.name}」", duration = SnackbarDuration.Short)
+                }
+            },
+            onNewProject = { newProjectFor = NewProjectRequest(session) },
+            onDismiss = { moveTarget = null },
+        )
+    }
+
+    if (admin != null) newProjectFor?.let { request ->
+        NewProjectDialog(
+            admin = admin,
+            onDismiss = { newProjectFor = null },
+            onCreated = { name, folder ->
+                newProjectFor = null
+                scope.launch {
+                    repository.refreshGroups()
+                    val project = repository.sessionGroups.value.projects.firstOrNull { it.name == name } ?: ProjectInfo("", name, folder)
+                    if (request.session != null) {
+                        repository.moveToProject(request.session.id, project)
+                        snackbar.showSnackbar("已新建项目「$name」，并把对话移了进去", duration = SnackbarDuration.Short)
+                    } else {
+                        onGroupChange(name)
+                        snackbar.showSnackbar("已新建项目「$name」，点右下角就在里面开始新对话", duration = SnackbarDuration.Short)
+                    }
+                }
+            },
         )
     }
 
@@ -484,21 +579,35 @@ private fun SessionActionsSheet(
     onTogglePin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    archived: Boolean = false,
+    onToggleArchive: () -> Unit = {},
+    onMove: (() -> Unit)? = null,
 ) {
     ActionSheet(
         title = session.title,
         onDismiss = onDismiss,
-        actions = listOf(
-            SheetAction(if (session.pinned) "取消置顶" else "置顶", Icons.Rounded.PushPin, onTogglePin),
-            SheetAction("重命名", Icons.Rounded.Edit, onRename, enabled = !session.readOnly),
+        actions = listOfNotNull(
+            if (archived) null else SheetAction(if (session.pinned) "取消置顶" else "置顶", Icons.Rounded.PushPin, onTogglePin),
+            SheetAction("重命名", Icons.Rounded.Edit, onRename, enabled = !session.readOnly && !archived),
+            onMove?.let { SheetAction("移到项目…", Icons.AutoMirrored.Rounded.DriveFileMove, it) },
+            SheetAction(if (archived) "取消归档" else "归档", if (archived) Icons.Rounded.Unarchive else Icons.Rounded.Archive, onToggleArchive),
             SheetAction("删除", Icons.Rounded.Delete, onDelete, destructive = true),
         ),
     )
 }
 
+/** 要新建项目；[session] 不为空时，建好后把它移进去。 */
+private data class NewProjectRequest(val session: Session?)
+
 /** 分组（Hermes 的项目 / 工作目录）：“全部”加每个分组，带会话数。 */
 @Composable
-private fun GroupChips(groups: List<String>, counts: Map<String, Int>, selected: String?, onSelect: (String?) -> Unit) {
+private fun GroupChips(
+    groups: List<String>,
+    counts: Map<String, Int>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+    onNewProject: (() -> Unit)? = null,
+) {
     Row(
         Modifier
             .horizontalScroll(rememberScrollState())
@@ -506,7 +615,16 @@ private fun GroupChips(groups: List<String>, counts: Map<String, Int>, selected:
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.FolderOpen, contentDescription = "分组", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        // 能建项目时，“新建项目”放在最前面，不用滑到最右边去找
+        if (onNewProject != null) {
+            AssistChip(
+                onClick = onNewProject,
+                label = { Text("新建项目") },
+                leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(AssistChipDefaults.IconSize)) },
+            )
+        } else {
+            Icon(Icons.Rounded.FolderOpen, contentDescription = "分组", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
         FilterChip(selected = selected == null, onClick = { onSelect(null) }, label = { Text("全部分组") })
         groups.forEach { name ->
             FilterChip(

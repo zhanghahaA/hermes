@@ -291,13 +291,44 @@ class FakeHermesRepository(
     override val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
 
     override val skillsError: StateFlow<String?> = MutableStateFlow(null)
-    override val sessionGroups: StateFlow<com.hermes.mobile.data.model.SessionGrouping> = MutableStateFlow(
+    private val _groups = MutableStateFlow(
         com.hermes.mobile.data.model.SessionGrouping(
             groups = listOf("downloads", "家庭网络", "默认"),
             of = mapOf("s-1" to "家庭网络", "s-3" to "downloads", "s-5" to "downloads"),
+            projects = listOf(
+                com.hermes.mobile.data.model.ProjectInfo("p1", "downloads", "/home/me/Downloads"),
+                com.hermes.mobile.data.model.ProjectInfo("p2", "家庭网络", "/home/me/homelab"),
+            ),
         ),
     )
-    private val fakeAdmin = FakeAdmin()
+    override val sessionGroups: StateFlow<com.hermes.mobile.data.model.SessionGrouping> = _groups
+
+    private val _archived = MutableStateFlow<List<Session>>(emptyList())
+    override val archivedSessions: StateFlow<List<Session>> = _archived
+
+    override fun setArchived(id: String, archived: Boolean) {
+        if (archived) {
+            val session = sessions.value.firstOrNull { it.id == id } ?: return
+            _sessions.update { list -> list.filterNot { it.id == id } }
+            _archived.update { listOf(session) + it }
+        } else {
+            val session = _archived.value.firstOrNull { it.id == id } ?: return
+            _archived.update { list -> list.filterNot { it.id == id } }
+            _sessions.update { listOf(session) + it }
+        }
+    }
+
+    override fun moveToProject(sessionId: String, project: com.hermes.mobile.data.model.ProjectInfo?) {
+        _groups.update { g -> if (project == null) g.copy(of = g.of - sessionId) else g.copy(of = g.of + (sessionId to project.name)) }
+    }
+    private val fakeAdmin = FakeAdmin { name, folder ->
+        _groups.update { g ->
+            g.copy(
+                groups = listOf(name) + g.groups,
+                projects = g.projects + com.hermes.mobile.data.model.ProjectInfo("p${g.projects.size + 1}", name, folder),
+            )
+        }
+    }
     override fun admin(): com.hermes.mobile.data.remote.AdminApi = fakeAdmin
     override suspend fun gatewayStatus() = FakeAdmin.status
     override val toolsetsBusy: StateFlow<Set<String>> = MutableStateFlow(emptySet())

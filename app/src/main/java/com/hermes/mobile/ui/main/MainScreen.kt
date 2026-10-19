@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
@@ -74,8 +75,18 @@ fun MainScreen(
     val navBar: Dp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val bottomSpace = FloatingBarHeight + FloatingBarMargin * 2 + navBar
 
+    // 聊天列表选中的分组：选的是项目时，新对话直接建在项目里
+    var chatGroup by rememberSaveable { mutableStateOf<String?>(null) }
+    val grouping by repository.sessionGroups.collectAsState()
+    val chatProject = grouping.projects.firstOrNull { it.name == chatGroup && it.path != null }
+
     val action = when (tab) {
-        MainTab.Chats -> FloatingAction(Icons.Rounded.EditNote, "新对话") { repository.createSession()?.let(onOpenChat) }
+        MainTab.Chats -> FloatingAction(Icons.Rounded.EditNote, chatProject?.let { "在「${it.name}」里新对话" } ?: "新对话") {
+            repository.createSession()?.let { id ->
+                if (chatProject != null) repository.setDraftProject(id, chatProject)
+                onOpenChat(id)
+            }
+        }
         MainTab.Jobs -> FloatingAction(Icons.Rounded.Add, "新建任务") { onEditJob(null) }
         else -> null
     }
@@ -99,6 +110,8 @@ fun MainScreen(
                             repository = repository,
                             onOpenChat = onOpenChat,
                             onManageConnections = { tabIndex = MainTab.Settings.ordinal },
+                            group = chatGroup,
+                            onGroupChange = { chatGroup = it },
                         )
                         MainTab.Jobs -> JobsScreen(repository = repository, onEditJob = onEditJob)
                         MainTab.Capabilities -> CapabilitiesScreen(

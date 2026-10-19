@@ -47,6 +47,14 @@ class ChatCache(private val dir: File) {
         write(File(connectionDir(connectionId), "groups.json"), json.encodeToString(SessionGrouping.serializer(), grouping))
     }
 
+    /** App 里归档的会话（Hermes 的列表不再返回它们，靠这里还能找到、取消归档）。 */
+    fun archived(connectionId: String): List<Session> =
+        read(File(connectionDir(connectionId), "archived.json")) { json.decodeFromString(sessionList, it) }.orEmpty()
+
+    fun saveArchived(connectionId: String, sessions: List<Session>) {
+        write(File(connectionDir(connectionId), "archived.json"), json.encodeToString(sessionList, sessions.take(500)))
+    }
+
     fun removeSession(connectionId: String, sessionId: String) {
         messagesFile(connectionId, sessionId).delete()
     }

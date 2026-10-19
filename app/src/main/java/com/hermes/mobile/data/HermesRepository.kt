@@ -113,6 +113,17 @@ interface HermesRepository {
     val sessionGroups: StateFlow<com.hermes.mobile.data.model.SessionGrouping>
         get() = kotlinx.coroutines.flow.MutableStateFlow(com.hermes.mobile.data.model.SessionGrouping())
 
+    /** 归档了的会话（Hermes 的会话列表不返回它们，App 自己记 + 经 SSH 读）。 */
+    val archivedSessions: StateFlow<List<Session>>
+        get() = kotlinx.coroutines.flow.MutableStateFlow(emptyList())
+    fun setArchived(id: String, archived: Boolean) = Unit
+    /** 把会话移进 Hermes 项目（改它的工作目录，和桌面版拖动一样）；null 是移出项目。 */
+    fun moveToProject(sessionId: String, project: com.hermes.mobile.data.model.ProjectInfo?) = Unit
+    /** 新对话还没发第一条消息时选的项目：建好会话后移进去。 */
+    fun setDraftProject(draftId: String, project: com.hermes.mobile.data.model.ProjectInfo?) = Unit
+    /** 重新读分组（新建项目之后）。 */
+    suspend fun refreshGroups() = Unit
+
     // 管理
     /** 经 SSH 的管理功能（记忆、MCP、配置文件、日志）。连接没配 SSH 时为 null。 */
     fun admin(): com.hermes.mobile.data.remote.AdminApi? = null

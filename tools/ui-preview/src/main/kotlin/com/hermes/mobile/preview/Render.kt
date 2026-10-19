@@ -64,6 +64,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
+import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.PushPin
 
 // 典型 Android 手机：412 x 892 dp，2.5 倍密度
 private const val WIDTH_DP = 412
@@ -150,6 +154,20 @@ private val scenes = listOf(
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
     Scene("29-glass-test") { _, _ -> GlassTest() },
+    Scene("30-chats-swipe") { repo, _ -> SwipeStill(repo) },
+    Scene("31-sheet-move-project") { repo, _ ->
+        SheetOver({ mainScreen(repo, MainTab.Chats)() }) {
+            com.hermes.mobile.ui.chats.ProjectPickerContent(
+                "家里 NAS 的备份脚本", repo.sessionGroups.value.projects, current = "家庭网络", onPick = {}, onNewProject = {},
+            )
+        }
+    },
+    Scene("32-new-project", waitMs = 200) { repo, _ ->
+        Box(Modifier.fillMaxSize()) {
+            mainScreen(repo, MainTab.Chats)()
+            com.hermes.mobile.ui.chats.NewProjectDialog(repo.admin()!!, onDismiss = {}, onCreated = { _, _ -> })
+        }
+    },
     Scene("23-predictive-back") { repo, _ -> PredictiveBackStill(repo, progress = 0.4f) },
     Scene("23b-system-back-left") { repo, _ -> PredictiveBackStill(repo, progress = 0f, systemBack = 0.8f) },
     Scene("23c-system-back-right") { repo, _ -> PredictiveBackStill(repo, progress = 0f, systemBack = 0.8f, fromRight = true) },
@@ -166,6 +184,25 @@ private val scenes = listOf(
     Scene("21-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
     Scene("22-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
 )
+
+/** 聊天列表里左滑展开的一行（置顶 / 归档 / 删除）。 */
+@Composable
+private fun SwipeStill(repo: HermesRepository) {
+    val sessions by repo.sessions.collectAsState()
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
+        sessions.take(6).forEachIndexed { i, session ->
+            com.hermes.mobile.ui.components.SwipeActionsRow(
+                isOpen = i == 1,
+                onOpenChange = {},
+                actions = listOf(
+                    com.hermes.mobile.ui.components.SwipeAction("置顶", Icons.Rounded.PushPin, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer) {},
+                    com.hermes.mobile.ui.components.SwipeAction("归档", Icons.Rounded.Archive, MaterialTheme.colorScheme.tertiary, MaterialTheme.colorScheme.onTertiary) {},
+                    com.hermes.mobile.ui.components.SwipeAction("删除", Icons.Rounded.Delete, MaterialTheme.colorScheme.error, MaterialTheme.colorScheme.onError) {},
+                ),
+            ) { com.hermes.mobile.ui.chats.SessionRow(session, onClick = {}, onLongPress = {}) }
+        }
+    }
+}
 
 /** 向右滑返回拖到一半的静帧，用的就是 SwipeBackHost 里的同一套页面变换。 */
 @Composable

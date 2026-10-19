@@ -22,6 +22,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -92,6 +93,50 @@ class ChatInteractionsTest {
         waitForIdle()
         assertTrue(!repo.sessions.value.first { it.id == "s-2" }.pinned)
         assertEquals(x0, onNodeWithText("周末去杭州的行程").fetchSemanticsNode().positionInRoot.x, 0.5f)
+    }
+
+    @Test
+    fun chatListSwipeHasInertia() = withRepo { repo ->
+        show { ChatsScreen(repo, onOpenChat = {}, onManageConnections = {}) }
+        val title = onNodeWithText("周末去杭州的行程")
+        val x0 = title.fetchSemanticsNode().positionInRoot.x
+
+        // 慢慢拖一小段就松手：不够一半，弹回去
+        title.performTouchInput { swipeLeft(startX = centerX + 200f, endX = centerX + 120f, durationMillis = 900) }
+        waitForIdle()
+        assertEquals(x0, title.fetchSemanticsNode().positionInRoot.x, 0.5f, "慢拖一小段应该弹回")
+
+        // 同样一小段但甩得快：靠惯性展开
+        title.performTouchInput { swipeLeft(startX = centerX + 200f, endX = centerX + 120f, durationMillis = 40) }
+        waitForIdle()
+        assertTrue(title.fetchSemanticsNode().positionInRoot.x < x0 - 150f, "快速一甩应该展开：$x0 → ${title.fetchSemanticsNode().positionInRoot.x}")
+
+        // 往右甩一下收回
+        title.performTouchInput { swipeRight(startX = centerX + 40f, endX = centerX + 100f, durationMillis = 40) }
+        waitForIdle()
+        assertEquals(x0, title.fetchSemanticsNode().positionInRoot.x, 0.5f, "往右一甩应该收回")
+    }
+
+    @Test
+    fun chatListArchiveAndUnarchive() = withRepo { repo ->
+        show { ChatsScreen(repo, onOpenChat = {}, onManageConnections = {}) }
+        onNodeWithText("周末去杭州的行程").performTouchInput { swipeLeft(startX = centerX + 200f, endX = centerX - 100f, durationMillis = 300) }
+        waitForIdle()
+        swipeAction("归档").assertIsDisplayed().performClick()
+        waitForIdle()
+        assertTrue(repo.sessions.value.none { it.id == "s-2" })
+        assertEquals(listOf("s-2"), repo.archivedSessions.value.map { it.id })
+        assertTrue(onAllNodesWithText("周末去杭州的行程").fetchSemanticsNodes().isEmpty(), "归档后不在列表里")
+
+        // “已归档”里能找到，左滑可以取消归档
+        onNodeWithText("已归档").performClick()
+        waitForIdle()
+        onNodeWithText("周末去杭州的行程").performTouchInput { swipeLeft(startX = centerX + 200f, endX = centerX - 100f, durationMillis = 300) }
+        waitForIdle()
+        swipeAction("取消归档").performClick()
+        waitForIdle()
+        assertTrue(repo.archivedSessions.value.isEmpty())
+        assertTrue(repo.sessions.value.any { it.id == "s-2" })
     }
 
     @Test

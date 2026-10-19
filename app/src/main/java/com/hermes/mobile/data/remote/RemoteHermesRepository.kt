@@ -18,6 +18,9 @@ import kotlinx.serialization.json.buildJsonObject
 import java.io.File
 import com.hermes.mobile.data.model.GatewayStatus
 import com.hermes.mobile.data.model.SessionGrouping
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
+import com.hermes.mobile.data.model.ProjectInfo
 import java.io.IOException
 import java.util.Base64
 import com.hermes.mobile.data.model.AppFeature
@@ -174,6 +177,7 @@ class RemoteHermesRepository(
         sessionsFresh = false
         _sessions.value = cache?.sessions(id).orEmpty()
         _sessionGroups.value = cache?.groups(id) ?: SessionGrouping()
+        _archivedLocal.value = cache?.archived(id).orEmpty()
         chats.value = emptyMap()
         connectJob = scope.launch {
             try {
@@ -553,6 +557,13 @@ class RemoteHermesRepository(
                     )
                 }
             }
+            // 列表里又出现了：在别处（比如桌面版）取消了归档
+            val listed = fetched.map { it.id }.toSet()
+            if (_archivedLocal.value.any { it.id in listed && it.id !in archivingNow }) {
+                _archivedLocal.update { list -> list.filterNot { it.id in listed && it.id !in archivingNow } }
+                saveArchived()
+            }
+            _sessions.update { list -> list.filterNot { it.id in archivingNow } }
             sessionsFresh = true
             saveSessionsToCache()
             scope.launch { loadGroups() }
@@ -610,13 +621,22 @@ class RemoteHermesRepository(
         }
         connectedId?.let { c -> cache?.removeSession(c, real) }
         val before = _sessions.value
+        val archivedBefore = _archivedLocal.value
         _sessions.update { list -> list.filterNot { it.id == real } }
+        // 归档里的会话也能删
+        _archivedLocal.update { list -> list.filterNot { it.id == real } }
+        _sessionGroups.update { g -> g.copy(archived = g.archived.filterNot { it.id == real }) }
+        if (archivedBefore.size != _archivedLocal.value.size) saveArchived()
         scope.launch {
             try {
                 client?.deleteSession(real) ?: throw HermesError.Unreachable("未连接")
                 chats.update { it - real }
             } catch (e: HermesError) {
                 _sessions.value = before
+                if (archivedBefore.size != _archivedLocal.value.size) {
+                    _archivedLocal.value = archivedBefore
+                    saveArchived()
+                }
                 _errors.tryEmit(e.message ?: "删除失败")
             }
         }
@@ -648,6 +668,7 @@ class RemoteHermesRepository(
         aliases.update { it + (uiId to created.id) }
         moveDraft(uiId, created.id)
         applyInitialModel(uiId, created.id)
+        applyInitialProject(uiId, created.id)
         chats.update { it - uiId }
         draftSessions.update { it - uiId }
         return created.id
@@ -1025,10 +1046,11 @@ class RemoteHermesRepository(
             val c = client ?: throw HermesError.Unreachable("还没连上 Hermes")
             val sessionId = ensureServerSession(uiId)
             val input = buildInput(out)
-            val instructions = ClientInstructions + skillCommandNote(out.text).orEmpty()
+            val workspace = _sessionGroups.value.folders[sessionId]
+            val instructions = ClientInstructions + skillCommandNote(out.text).orEmpty() + workspace?.let(::workspaceNote).orEmpty()
             val (model, provider) = chosenModel(sessionId)
             val accepted = withRetry {
-                c.startRun(sessionId, input, idempotencyKey = localId, instructions = instructions, model = model, provider = provider)
+                c.startRun(sessionId, input, idempotencyKey = localId, instructions = instructions, model = model, provider = provider, workspace = workspace)
             }
             val runId = accepted.run_id ?: throw HermesError.NotHermes()
             outbox.remove(localId)
@@ -1818,6 +1840,124 @@ class RemoteHermesRepository(
         }
     }
 
+    // ---- 项目 ----
+
+    /** 草稿 id → 选好的项目。 */
+    private val pendingProjects = ConcurrentHashMap<String, ProjectInfo>()
+
+    override fun setDraftProject(draftId: String, project: ProjectInfo?) {
+        if (project == null) pendingProjects.remove(draftId) else pendingProjects[draftId] = project
+    }
+
+    /** 新会话建好了：先在本地把它记到项目里（第一条消息就带上工作目录），再经 SSH 真正移过去。 */
+    private fun applyInitialProject(draftId: String, sessionId: String) {
+        val project = pendingProjects.remove(draftId) ?: return
+        val path = project.path ?: return
+        markMoved(sessionId, project.name, path)
+        scope.launch { moveOnServer(sessionId, path) }
+    }
+
+    override fun moveToProject(sessionId: String, project: ProjectInfo?) {
+        val id = resolve(sessionId)
+        if (runs.containsKey(id)) {
+            _errors.tryEmit("Hermes 正在回复这个对话，等它说完再移动")
+            return
+        }
+        val before = _sessionGroups.value
+        if (project?.path != null) markMoved(id, project.name, project.path) else {
+            _sessionGroups.update { g -> g.copy(of = g.of - id, folders = g.folders - id) }
+        }
+        scope.launch {
+            if (!moveOnServer(id, project?.path)) _sessionGroups.value = before
+        }
+    }
+
+    private fun markMoved(sessionId: String, group: String, path: String) {
+        _sessionGroups.update { g ->
+            g.copy(
+                groups = if (group in g.groups) g.groups else listOf(group) + g.groups,
+                of = g.of + (sessionId to group),
+                folders = g.folders + (sessionId to path),
+            )
+        }
+    }
+
+    private suspend fun moveOnServer(sessionId: String, path: String?): Boolean {
+        val admin = admin() ?: run {
+            _errors.tryEmit("移动对话要经 SSH 改 Hermes 的记录，给这个连接配上 SSH 后再试")
+            return false
+        }
+        return try {
+            admin.moveSession(sessionId, path)
+            loadGroups()
+            true
+        } catch (e: AdminException) {
+            _errors.tryEmit("没能移动对话：${e.message}")
+            false
+        }
+    }
+
+    override suspend fun refreshGroups() = loadGroups()
+
+    // ---- 归档 ----
+
+    /** App 里归档的会话（存在本机缓存，Hermes 的会话列表不返回归档的）。 */
+    private val _archivedLocal = MutableStateFlow<List<Session>>(emptyList())
+
+    /** 归档请求还没回来的会话：这期间刷新列表还会看到它，不能当成“在别处取消了归档”。 */
+    private val archivingNow: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    override val archivedSessions: StateFlow<List<Session>> = combine(_archivedLocal, _sessionGroups) { local, grouping ->
+        val known = local.map { it.id }.toSet()
+        (local + grouping.archived.filter { it.id !in known }.map { Session(it.id, it.title, "", it.updatedAt) })
+            .sortedByDescending { it.updatedAt }
+    }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    private fun saveArchived() {
+        val connection = connectedId ?: _activeConnectionId.value ?: return
+        val snapshot = _archivedLocal.value
+        scope.launch(Dispatchers.IO) { cache?.saveArchived(connection, snapshot) }
+    }
+
+    override fun setArchived(id: String, archived: Boolean) {
+        val real = resolve(id)
+        val c = client ?: return run { _errors.tryEmit("还没连上 Hermes") }
+        if (archived) {
+            val session = _sessions.value.firstOrNull { it.id == real } ?: return
+            _sessions.update { list -> list.filterNot { it.id == real } }
+            _archivedLocal.update { list -> listOf(session.copy(running = false, unread = 0)) + list.filterNot { it.id == real } }
+            saveArchived()
+            archivingNow += real
+            scope.launch {
+                try {
+                    c.patchSession(real, HermesClient.patch { put("archived", true) })
+                    archivingNow -= real
+                } catch (e: HermesError) {
+                    archivingNow -= real
+                    _archivedLocal.update { list -> list.filterNot { it.id == real } }
+                    _sessions.update { list -> if (list.any { it.id == real }) list else listOf(session) + list }
+                    saveArchived()
+                    _errors.tryEmit("归档失败：${e.message}")
+                }
+            }
+        } else {
+            val local = _archivedLocal.value.firstOrNull { it.id == real }
+            _archivedLocal.update { list -> list.filterNot { it.id == real } }
+            _sessionGroups.update { g -> g.copy(archived = g.archived.filterNot { it.id == real }) }
+            saveArchived()
+            scope.launch {
+                try {
+                    c.patchSession(real, HermesClient.patch { put("archived", false) })
+                    loadSessions()
+                } catch (e: HermesError) {
+                    if (local != null) _archivedLocal.update { list -> listOf(local) + list }
+                    saveArchived()
+                    _errors.tryEmit("取消归档失败：${e.message}")
+                }
+            }
+        }
+    }
+
     // ---- 诊断 ----
 
     /** 最近的错误提示（带时间），导出诊断信息时附上。 */
@@ -1894,6 +2034,11 @@ class RemoteHermesRepository(
         _errors.tryEmit("「$what」会在后续开发阶段接入真实 Hermes")
         return Unit as T
     }
+
+    /** 项目里的对话：告诉模型这一轮在项目文件夹里干活（API 本身还不支持按对话指定工作目录）。 */
+    private fun workspaceNote(folder: String): String =
+        "\n\nThis conversation belongs to the project folder $folder on the Hermes machine. Treat it as the working " +
+            "directory: run shell commands from there (cd into it first) and resolve relative file paths against it."
 
     /**
      * `/技能名 …` 开头的消息：Hermes 的 API 不像聊天软件那样展开技能命令，
