@@ -116,6 +116,9 @@ fun ChatsScreen(
     val activeId by repository.activeConnectionId.collectAsState()
     val connectionState by repository.connectionState.collectAsState()
     val active = connections.firstOrNull { it.id == activeId }
+    val bots by repository.bots.collectAsState()
+    val activeBotName by repository.activeBot.collectAsState()
+    val activeBotLabel = activeBotName?.takeIf { it != "default" }?.let { name -> bots?.bots?.firstOrNull { it.name == name }?.label ?: name }
 
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(ChatFilter.All) }
@@ -207,7 +210,8 @@ fun ChatsScreen(
                     title = { Text("聊天") },
                     actions = {
                         ConnectionPill(
-                            name = active?.name ?: "未连接",
+                            // 用的不是默认 bot 时，标出正在和哪个 bot 聊
+                            name = (active?.name ?: "未连接") + (activeBotLabel?.let { " · $it" } ?: ""),
                             state = connectionState,
                             onClick = { showSwitcher = true },
                             modifier = Modifier.padding(end = 12.dp),

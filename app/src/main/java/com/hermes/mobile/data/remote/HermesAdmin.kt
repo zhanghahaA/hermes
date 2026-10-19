@@ -1,6 +1,13 @@
 package com.hermes.mobile.data.remote
 
+import com.hermes.mobile.data.model.Bot
+import com.hermes.mobile.data.model.BotAccess
+import com.hermes.mobile.data.model.BotDetails
+import com.hermes.mobile.data.model.BotEdit
+import com.hermes.mobile.data.model.BotSaved
+import com.hermes.mobile.data.model.BotRoster
 import com.hermes.mobile.data.model.BotScreenStatus
+import com.hermes.mobile.data.model.BotSessionRef
 import com.hermes.mobile.data.model.McpServer
 import com.hermes.mobile.data.model.ScreenLease
 import com.hermes.mobile.data.model.MemoryBook
@@ -17,6 +24,10 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /** 管理功能出错：[message] 是给人看的一句话。 */
 class AdminException(message: String) : Exception(message)
@@ -51,6 +62,23 @@ interface AdminApi {
     suspend fun renameProject(projectId: String, name: String): Unit = throw AdminException("不支持")
     /** Hermes 的数据目录（项目、会话都存在这里）：手机和电脑看到的不一样时用来对照。 */
     suspend fun hermesHome(): String = throw AdminException("不支持")
+    /** 所有 bot（Profile）。 */
+    suspend fun bots(): BotRoster = throw AdminException("不支持")
+    /** bot 自己的 API Key（profile 的 .env 里的 API_SERVER_KEY）；没有返回 null。 */
+    suspend fun botKey(name: String): String? = throw AdminException("不支持")
+    /** 开通手机访问：打开 multiplex_profiles、给 bot 生成自己的 API Key（已有就用原来的）。 */
+    suspend fun enableBotAccess(name: String): BotAccess = throw AdminException("不支持")
+    /** 重启 gateway（`hermes gateway restart`），返回输出。 */
+    suspend fun restartGateway(): String = throw AdminException("不支持")
+    /** 编辑 bot 用：描述、性格、模型。 */
+    suspend fun describeBot(name: String): BotDetails = throw AdminException("不支持")
+    /** 新建 bot（和桌面版一样：从默认 bot 复制模型、Key 等设置，不复制聊天平台的 bot token）。 */
+    suspend fun createBot(edit: BotEdit): BotSaved = throw AdminException("不支持")
+    suspend fun configureBot(edit: BotEdit): BotSaved = throw AdminException("不支持")
+    /** 删除 bot：它的对话、记忆、技能都从电脑上删掉。默认 bot 不能删。 */
+    suspend fun deleteBot(name: String): Unit = throw AdminException("不支持")
+    /** 读服务器上的文件（头像等）。 */
+    suspend fun readRemoteFile(path: String): ByteArray? = throw AdminException("不支持")
     /** Bot 屏幕的状态（`hermes computer-use screen status --json`）。 */
     suspend fun screenStatus(): BotScreenStatus = throw AdminException("不支持")
     suspend fun startScreen(): BotScreenStatus = throw AdminException("不支持")
@@ -66,10 +94,10 @@ interface AdminApi {
  * 经 SSH 管理 Hermes。尽量用 `hermes` 自己的命令（config get/set/unset、logs、mcp test），
  * 只有记忆和 config.yaml 原文直接读写文件。
  */
-class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
+class HermesAdmin(private val shell: RemoteShell, val profileName: String?) : AdminApi {
     /** 不带 Profile 参数的 hermes（--print-runtime-command 必须是第一个参数；Profile 已经由 HERMES_HOME 定了）。 */
     private val hermesBare = "hermes"
-    private val hermes = "hermes" + (profile?.trim()?.replace(Regex("[^A-Za-z0-9_.-]"), "")?.takeIf { it.isNotEmpty() }?.let { " -p $it" } ?: "")
+    private val hermes = "hermes" + (profileName?.trim()?.replace(Regex("[^A-Za-z0-9_.-]"), "")?.takeIf { it.isNotEmpty() }?.let { " -p $it" } ?: "")
 
     @Volatile private var home: String? = null
 
@@ -395,6 +423,133 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
 
     override suspend fun hermesHome(): String = home()
 
+    // ---- Bot（Profile） ----
+
+    override suspend fun bots(): BotRoster {
+        val out = run(hermesPython(home(), BotsScript, emptyList()), timeoutSeconds = 60)
+        val line = out.lines().lastOrNull { it.startsWith("BOTS") } ?: throw AdminException("读不到 bot 列表：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+        val json = HermesJson.parseToJsonElement(line.removePrefix("BOTS")) as? JsonObject ?: throw AdminException("bot 列表格式不对")
+        fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        fun JsonObject.ref(k: String): BotSessionRef? = (this[k] as? JsonObject)?.let { r ->
+            val id = r.str("id") ?: return@let null
+            BotSessionRef(id, r.str("title").orEmpty(), ((r["last_active"] as? JsonPrimitive)?.doubleOrNull ?: 0.0).times(1000).toLong(), r.str("preview").orEmpty())
+        }
+        val bots = (json["bots"] as? JsonArray).orEmpty().mapNotNull { e ->
+            val b = e as? JsonObject ?: return@mapNotNull null
+            Bot(
+                name = b.str("name") ?: return@mapNotNull null,
+                isDefault = (b["is_default"] as? JsonPrimitive)?.booleanOrNull == true,
+                displayName = b.str("display_name").orEmpty(),
+                title = b.str("title").orEmpty(),
+                description = b.str("description").orEmpty(),
+                model = b.str("model"),
+                hasKey = (b["has_key"] as? JsonPrimitive)?.booleanOrNull == true,
+                avatarPath = b.str("avatar"),
+                color = b.str("color"),
+                canonical = b.ref("canonical"),
+                last = b.ref("last"),
+                avatarVersion = (b["avatar_mtime"] as? JsonPrimitive)?.longOrNull ?: 0,
+            )
+        }
+        return BotRoster(bots, (json["multiplex"] as? JsonPrimitive)?.booleanOrNull, json.str("active"))
+    }
+
+    override suspend fun botKey(name: String): String? {
+        val out = run(hermesPython(home(), BotKeyScript, listOf("read", botName(name))))
+        return out.lines().lastOrNull { it.startsWith("KEY") }?.removePrefix("KEY")?.trim()?.takeIf { it.length >= 16 }
+    }
+
+    override suspend fun enableBotAccess(name: String): BotAccess {
+        val out = run(hermesPython(home(), BotKeyScript, listOf("enable", botName(name))), timeoutSeconds = 60)
+        val line = out.lines().lastOrNull { it.startsWith("ACCESS") } ?: throw AdminException("没开通成功：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+        val json = HermesJson.parseToJsonElement(line.removePrefix("ACCESS")) as JsonObject
+        val key = (json["key"] as? JsonPrimitive)?.contentOrNull ?: throw AdminException("没拿到 key")
+        val changed = (json["changed"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        // key 是 Hermes 每次请求现读的，不用重启；只有刚打开 multiplex 才要重启 gateway
+        return BotAccess(key, "multiplex" in changed, changed)
+    }
+
+    /**
+     * 没装成系统服务的 gateway，`hermes gateway restart` 会先停掉它、再在自己这个进程里前台跑起来；
+     * 直接在 SSH 命令里跑，SSH 一断 gateway 就跟着没了。所以放到后台、脱离这次 SSH 会话去跑，日志写进 Hermes 的 logs。
+     */
+    override suspend fun restartGateway(): String {
+        val log = home().trimEnd('/') + "/logs/hermes-mobile-restart.log"
+        return run(
+            "mkdir -p ${q(log.substringBeforeLast('/'))}; " +
+                "(setsid nohup $hermesBare gateway restart > ${q(log)} 2>&1 < /dev/null &) ; echo HERMES_MOBILE_RESTARTING",
+            timeoutSeconds = 30,
+            tolerate = { true },
+        ).trim()
+    }
+
+    override suspend fun describeBot(name: String): BotDetails {
+        val json = botEdit("describe", buildJsonObject { put("name", botName(name)) })
+        fun str(k: String) = (json[k] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        return BotDetails(str("description"), str("soul"), str("provider"), str("model"))
+    }
+
+    override suspend fun createBot(edit: BotEdit): BotSaved {
+        val json = botEdit("create", edit.toJson(), timeoutSeconds = 180)
+        return BotSaved.Done((json["name"] as? JsonPrimitive)?.contentOrNull ?: edit.name, (json["needs_model"] as? JsonPrimitive)?.contentOrNull)
+    }
+
+    override suspend fun configureBot(edit: BotEdit): BotSaved {
+        val json = botEdit("configure", edit.toJson())
+        (json["confirm"] as? JsonPrimitive)?.contentOrNull?.let { return BotSaved.ConfirmModel(it) }
+        return BotSaved.Done(edit.name)
+    }
+
+    override suspend fun deleteBot(name: String) {
+        if (name == "default") throw AdminException("默认 bot 不能删")
+        botEdit("delete", buildJsonObject { put("name", botName(name)) }, timeoutSeconds = 120)
+    }
+
+    private fun BotEdit.toJson() = buildJsonObject {
+        put("name", botName(name))
+        title?.let { put("title", it.trim()) }
+        description?.let { put("description", it.trim()) }
+        soul?.let { put("soul", it) }
+        color?.let { put("color", it) }
+        avatar?.let { put("avatar", it) }
+        if (clearAvatar) put("clear_avatar", true)
+        if (!provider.isNullOrBlank() && !model.isNullOrBlank()) {
+            put("provider", provider)
+            put("model", model)
+            if (confirmExpensiveModel) put("confirm_expensive_model", true)
+        }
+    }
+
+    /**
+     * 跑 [BotEditScript]：参数（可能带头像图片）编成 base64 直接写进脚本里，不走命令行参数。
+     * 脚本调用 Hermes 桌面版用的同一套 profiles.create / configure / set_asset。
+     */
+    private suspend fun botEdit(op: String, params: JsonObject, timeoutSeconds: Long = 90): JsonObject {
+        val encoded = java.util.Base64.getEncoder().encodeToString(params.toString().toByteArray(Charsets.UTF_8))
+        val out = run(hermesPython(home(), BotEditScript.replace("@@PARAMS@@", encoded), listOf(op)), timeoutSeconds = timeoutSeconds)
+        out.lines().lastOrNull { it.startsWith("EDITERR") }?.let { line ->
+            val reason = runCatching { (HermesJson.parseToJsonElement(line.removePrefix("EDITERR")) as JsonObject)["error"] as JsonPrimitive }.getOrNull()?.contentOrNull
+            throw AdminException(reason ?: "没改成")
+        }
+        val line = out.lines().lastOrNull { it.startsWith("EDIT") } ?: throw AdminException("没改成：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+        return HermesJson.parseToJsonElement(line.removePrefix("EDIT")) as? JsonObject ?: throw AdminException("服务器回的格式不对")
+    }
+
+    override suspend fun readRemoteFile(path: String): ByteArray? = withContext(Dispatchers.IO) {
+        try {
+            shell.readFile(path)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw AdminException("读不了 $path：${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    private fun botName(name: String): String {
+        if (!BotNamePattern.matches(name)) throw AdminException("bot 名字不对：$name")
+        return name
+    }
+
     /** 用 Hermes 自己的 projects_db（桌面版改项目也是调它）。 */
     private suspend fun project(op: String, projectId: String, name: String) {
         val dir = home()
@@ -530,6 +685,428 @@ db.execute("update sessions set cwd = ?, git_branch = ?, git_repo_root = ?, git_
            (cwd or None, branch or None, root or None, sid))
 db.commit()
 print("OK")
+""".trimIndent()
+
+        val BotNamePattern = Regex("[a-z0-9][a-z0-9_-]{0,63}")
+
+        /**
+         * 列出所有 bot：Hermes 自己的 list_profiles + 每个 profile 的 profile.yaml、头像、state.db（固定对话「Bot Chat」和最近的对话）。
+         * 只读；不输出 key 本身，只说有没有。
+         */
+        val BotsScript = """
+import json, os, sqlite3, sys
+from pathlib import Path
+from hermes_cli.profiles import list_profiles
+try:
+    from hermes_cli.profiles import read_profile_meta
+except Exception:
+    read_profile_meta = None
+try:
+    from hermes_cli.profiles import get_active_profile_name
+except Exception:
+    get_active_profile_name = lambda: None
+try:
+    import hermes_yaml as yaml
+except ImportError:
+    import yaml
+
+def load_yaml(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def has_key(profile_dir):
+    try:
+        with open(Path(profile_dir) / ".env", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                if line.startswith("API_SERVER_KEY="):
+                    return len(line.split("=", 1)[1].strip().strip(chr(34)).strip(chr(39))) >= 16
+    except Exception:
+        pass
+    return False
+
+def preview_of(conn, sid):
+    row = conn.execute("select content from messages where session_id = ? and role in ('user', 'assistant') and coalesce(content, '') != '' order by id desc limit 1", (sid,)).fetchone()
+    if not row:
+        return ""
+    text = row[0]
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            text = " ".join(str(p.get("text", "")) for p in parsed if isinstance(p, dict))
+    except Exception:
+        pass
+    return " ".join(str(text).split())[:160]
+
+def sessions(profile_dir):
+    db = Path(profile_dir) / "state.db"
+    out = {}
+    if not db.exists():
+        return out
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
+        cols = {r[1] for r in conn.execute("pragma table_info(sessions)")}
+        when = "coalesce(last_activity_at, started_at)" if "last_activity_at" in cols else "started_at"
+        alive = " and coalesce(archived, 0) = 0" if "archived" in cols else ""
+        def pick(where, args=()):
+            r = conn.execute("select id, title, " + when + " from sessions where " + where + alive + " order by " + when + " desc limit 1", args).fetchone()
+            if not r:
+                return None
+            return {"id": r[0], "title": r[1] or "", "last_active": r[2] or 0, "preview": preview_of(conn, r[0])}
+        out["canonical"] = pick("title = ?", ("Bot Chat",))
+        out["last"] = pick("parent_session_id is null" if "parent_session_id" in cols else "1 = 1")
+    except Exception as exc:
+        out["error"] = str(exc)
+    return out
+
+bots = []
+for p in list_profiles():
+    path = Path(str(p.path))
+    meta = {}
+    if read_profile_meta is not None:
+        try:
+            meta = read_profile_meta(path) or {}
+        except Exception:
+            meta = {}
+    raw = load_yaml(path / "profile.yaml")
+    ui = raw.get("ui_meta") if isinstance(raw.get("ui_meta"), dict) else {}
+    bot_meta = ui.get("hermes-bots") if isinstance(ui.get("hermes-bots"), dict) else {}
+    avatar, avatar_mtime = None, 0
+    for ext in ("png", "jpg", "jpeg", "webp", "gif"):
+        if (path / "assets" / ("avatar." + ext)).is_file():
+            avatar = str(path / "assets" / ("avatar." + ext))
+            try:
+                avatar_mtime = int(os.path.getmtime(avatar) * 1000)
+            except Exception:
+                pass
+            break
+    row = {
+        "name": p.name, "is_default": bool(p.is_default), "model": p.model, "provider": p.provider,
+        "display_name": meta.get("display_name") or raw.get("display_name") or getattr(p, "display_name", "") or "",
+        "title": meta.get("bot_title") or bot_meta.get("title") or "",
+        "description": meta.get("description") or raw.get("description") or getattr(p, "description", "") or "",
+        "has_key": True if p.is_default else has_key(path), "avatar": avatar, "avatar_mtime": avatar_mtime,
+        "color": bot_meta.get("color"),
+    }
+    row.update(sessions(path))
+    bots.append(row)
+
+root = load_yaml(Path(os.environ["HERMES_HOME"]).resolve() / "config.yaml")
+try:
+    from hermes_constants import get_default_hermes_root
+    root = load_yaml(Path(get_default_hermes_root()) / "config.yaml")
+except Exception:
+    pass
+multiplex = root.get("multiplex_profiles")
+if multiplex is None and isinstance(root.get("gateway"), dict):
+    multiplex = root["gateway"].get("multiplex_profiles")
+env_override = os.environ.get("GATEWAY_MULTIPLEX_PROFILES", "").strip().lower()
+if env_override in ("1", "true", "yes", "on"):
+    multiplex = True
+active = None
+try:
+    active = get_active_profile_name()
+except Exception:
+    pass
+print("BOTS" + json.dumps({"bots": bots, "multiplex": multiplex, "active": active}, default=str, ensure_ascii=False))
+""".trimIndent()
+
+        /**
+         * 读 / 开通 bot 的手机访问：read 只读 bot 的 API_SERVER_KEY；
+         * enable 在需要时打开根配置的 gateway.multiplex_profiles、给 bot 的 .env 写一个新 key（权限 600），
+         * 输出 key 和改了什么（改了才需要重启 gateway）。默认 bot 用连接本身的 key，不动。
+         */
+        val BotKeyScript = """
+import json, os, secrets, sys
+from pathlib import Path
+from hermes_cli.profiles import get_profile_dir
+op, name = sys.argv[1], sys.argv[2]
+profile_dir = Path(get_profile_dir(name))
+env_path = profile_dir / ".env"
+
+def read_key():
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("export "):
+                    s = s[7:].strip()
+                if s.startswith("API_SERVER_KEY="):
+                    v = s.split("=", 1)[1].strip().strip(chr(34)).strip(chr(39))
+                    if len(v) >= 16:
+                        return v
+    except FileNotFoundError:
+        pass
+    return None
+
+if op == "read":
+    key = read_key()
+    print("KEY" + (key or ""))
+    sys.exit(0)
+
+changed = []
+key = read_key()
+if key is None:
+    key = secrets.token_urlsafe(32)
+    lines = []
+    if env_path.exists():
+        with open(env_path, encoding="utf-8") as f:
+            lines = [l for l in f.read().splitlines()
+                     if not (l.strip()[7:].strip() if l.strip().startswith("export ") else l.strip()).startswith("API_SERVER_KEY=")]
+    lines.append("API_SERVER_KEY=" + key)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    tmp = env_path.with_name(".env.hermes-mobile")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, env_path)
+    changed.append("key")
+
+try:
+    import hermes_yaml as yaml
+except ImportError:
+    import yaml
+try:
+    from hermes_constants import get_default_hermes_root
+    root = Path(get_default_hermes_root())
+except Exception:
+    root = Path(os.environ["HERMES_HOME"])
+cfg_path = root / "config.yaml"
+cfg = {}
+if cfg_path.exists():
+    with open(cfg_path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+gw = cfg.get("gateway") if isinstance(cfg.get("gateway"), dict) else {}
+on = cfg.get("multiplex_profiles")
+if on is None:
+    on = gw.get("multiplex_profiles")
+if on is not True:
+    import subprocess
+    r = subprocess.run(["hermes", "config", "set", "gateway.multiplex_profiles", "true"], capture_output=True, text=True,
+                       env=dict(os.environ, HERMES_HOME=str(root)))
+    if r.returncode != 0:
+        sys.stderr.write((r.stderr or r.stdout)[-300:])
+        sys.exit(3)
+    changed.append("multiplex")
+print("ACCESS" + json.dumps({"key": key, "changed": changed}))
+""".trimIndent()
+
+        /**
+         * 新建 / 读 / 改 / 删 bot。参数在 @@PARAMS@@（base64 的 JSON），操作在 argv[1]。
+         * 改动走 Hermes 自己的 tui_gateway（桌面版 Bot 用的就是这些方法），删除用 hermes_cli 的 delete_profile。
+         * 结果一行 EDIT{json}；出错一行 EDITERR{"error": …}。
+         */
+        val BotEditScript = """
+import base64, json, os, sys, time
+op = sys.argv[1]
+# tui_gateway.server 一 import 就把 stdout 换成 stderr（它的 stdout 是 JSON-RPC 通道），先留一份真的 stdout
+_out = os.fdopen(os.dup(1), "w", encoding="utf-8")
+params = json.loads(base64.b64decode("@@PARAMS@@").decode("utf-8"))
+
+def done(obj):
+    _out.write("EDIT" + json.dumps(obj, ensure_ascii=False, default=str) + "\n")
+    _out.flush()
+    sys.exit(0)
+
+def fail(msg):
+    _out.write("EDITERR" + json.dumps({"error": str(msg)[-400:]}, ensure_ascii=False) + "\n")
+    _out.flush()
+    sys.exit(0)
+
+# 当前用的可能是某个 bot 的目录；管理 bot 要站在主目录上（新建时从这里复制模型和 key）
+try:
+    from hermes_constants import get_default_hermes_root
+    os.environ["HERMES_HOME"] = str(get_default_hermes_root())
+except Exception:
+    pass
+
+if op == "delete":
+    from hermes_cli.profiles import delete_profile, get_profile_dir
+    from pathlib import Path
+    name = params["name"]
+    if name.strip().lower() == "default":
+        fail("默认 bot 不能删")
+    path = Path(get_profile_dir(name))
+    try:
+        delete_profile(name, yes=True)
+    except Exception as exc:
+        if path.exists():
+            fail(exc)
+    done({"ok": not path.exists()})
+
+try:
+    import tui_gateway.server as _srv
+    methods = _srv._methods
+except Exception as exc:
+    fail("这个版本的 Hermes 不支持在手机上改 bot（%s）" % exc)
+
+def call(method, p):
+    fn = methods.get(method)
+    if fn is None:
+        fail("这个版本的 Hermes 不支持 " + method)
+    r = fn("hermes-mobile", p) or {}
+    if r.get("error"):
+        fail(r["error"].get("message") or method + " 失败")
+    return r.get("result") or {}
+
+def ui_meta(name):
+    from hermes_cli.profiles import get_profile_dir
+    from pathlib import Path
+    try:
+        import hermes_yaml as yaml
+    except ImportError:
+        import yaml
+    try:
+        with open(Path(get_profile_dir(name)) / "profile.yaml", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except Exception:
+        raw = {}
+    meta = raw.get("ui_meta") if isinstance(raw, dict) and isinstance(raw.get("ui_meta"), dict) else {}
+    look = meta.get("hermes-bots")
+    return dict(look) if isinstance(look, dict) else {}
+
+def protocol(name, roster):
+    handle = "hermes" if name == "default" else name
+    mates = [b for b in roster if b.get("name") != name]
+    lines = [
+        "## Messaging other agents", "",
+        "You work alongside other named agents. Every agent (including you) has",
+        "ONE canonical conversation titled \"Bot Chat\" — created with the agent,",
+        "so it always exists. Agent-to-agent messages are delivered straight",
+        "into it, like a DM. To message a teammate, run:", "",
+        "```",
+        "hermes -p <agent-name> chat --in ~ -c \"Bot Chat\" --create-if-missing -Q -q \"Message from \U0001F916 " + handle + " (@" + handle + "): your message\"",
+        "",
+        "Run the send with background=true and notify_on_complete=true on the",
+        "terminal tool, then finish your turn — the reply arrives later as a",
+        "background process notification. Never block waiting for it.",
+        "```", "",
+        "(`--in ~ -c \"Bot Chat\" --create-if-missing` resumes their canonical",
+        "conversation in the home workspace, creating it if the target has no",
+        "\"Bot Chat\" yet. `-Q` keeps output clean. Always open with the",
+        "\"Message from \U0001F916 " + handle + " (@" + handle + "):\" prefix so they know",
+        "who is talking (the @handle lets the app show your avatar to them).",
+        "Their reply prints to stdout — relay the relevant part back to the",
+        "user, and say which agent it came from.)", "",
+        "If a message in YOUR chat starts with \"Message from \U0001F916 <name>\", it is",
+        "a teammate messaging you, not the user. Answer it directly — your reply",
+        "reaches them via their own delivery — and use the same command if you",
+        "need to start a conversation yourself.", "",
+        "When the user writes @<agent-name> or says \"ask <name> to ...\" /",
+        "\"tell <name> ...\", that is a handoff: message that agent, wait for the",
+        "reply, and report back.", "",
+        "The roster grows over time — run `hermes profile list` for the LIVE",
+        "teammate list before a handoff. Teammates when you were created:",
+    ]
+    lines += ["- `%s`%s" % (b["name"], " — " + b["description"] if b.get("description") else "") for b in mates] or ["- (none yet)"]
+    return "\n".join(lines)
+
+def with_protocol(soul, name):
+    listed = call("profiles.list", {"include_sessions": False})
+    if listed.get("bot_mode_protocol") or "## Messaging other agents" in soul:
+        return soul
+    section = protocol(name, listed.get("profiles") or [])
+    return soul + "\n\n" + section if soul else section
+
+def save_look(name, title, color):
+    look = ui_meta(name)
+    if title is not None:
+        if title:
+            look["title"] = title
+        else:
+            look.pop("title", None)
+    if color:
+        look["color"] = color
+    return call("profiles.configure", {"name": name, "ui_meta": {"hermes-bots": look}}).get("applied", {}).get("ui_meta", False)
+
+def save_avatar(name):
+    if params.get("clear_avatar"):
+        call("profiles.set_asset", {"name": name, "asset": "avatar", "clear": True})
+        look = ui_meta(name)
+        look["imageKind"] = "shape"
+        call("profiles.configure", {"name": name, "ui_meta": {"hermes-bots": look}})
+    elif params.get("avatar"):
+        call("profiles.set_asset", {"name": name, "asset": "avatar", "data": params["avatar"]})
+        look = ui_meta(name)
+        look["imageKind"] = "photo"
+        look["custom"] = True
+        call("profiles.configure", {"name": name, "ui_meta": {"hermes-bots": look}})
+
+if op == "describe":
+    d = call("profiles.describe", {"name": params["name"]})
+    model = d.get("model") or {}
+    done({"description": d.get("description") or "", "soul": d.get("soul") or "",
+          "provider": model.get("provider") or "", "model": model.get("default") or ""})
+
+if op == "create":
+    name, title, description = params["name"], params.get("title") or "", params.get("description") or ""
+    soul = (params.get("soul") or "").strip()
+    if not soul:
+        who = title or " ".join(w[:1].upper() + w[1:] for w in name.replace("_", " ").replace("-", " ").split())
+        soul = "\n".join(l for l in [
+            "# " + who, "",
+            "**Role:** " + title if title else None,
+            "**Mission:** " + description if description else None, "",
+            "You are %s, a persistent named agent (profile `%s`) on this machine." % (who, name),
+            "You keep your own memory, skills, and conversation history across sessions.",
+        ] if l is not None)
+    created = call("profiles.create", {"name": name, "description": description, "clone_from": "default",
+                                       "share_auth": True, "soul": with_protocol(soul, name)})
+    look = {"title": title, "color": params.get("color"), "imageKind": "shape", "shape": "circle",
+            "created": int(time.time() * 1000)}
+    call("profiles.configure", {"name": name, "ui_meta": {"hermes-bots": {k: v for k, v in look.items() if v}}})
+    save_avatar(name)
+    ready = None
+    if "setup.runtime_check" in methods:
+        try:
+            r = methods["setup.runtime_check"]("hermes-mobile", {"profile": name}) or {}
+            res = r.get("result") or {}
+            ready = None if res.get("ok") is not False else (res.get("error") or "这个 bot 还没有能用的模型")
+        except Exception:
+            ready = None
+    done({"name": created.get("name") or name, "needs_model": ready})
+
+if op == "configure":
+    name = params["name"]
+    applied = {}
+    if "title" in params or params.get("color"):
+        applied["look"] = save_look(name, params.get("title"), params.get("color"))
+    save_avatar(name)
+    p = {"name": name}
+    if isinstance(params.get("description"), str):
+        p["description"] = params["description"]
+    if isinstance(params.get("soul"), str):
+        p["soul"] = with_protocol(params["soul"].strip(), name)
+    if params.get("model") and params.get("provider"):
+        p.update(model=params["model"], provider=params["provider"],
+                 confirm_expensive_model=bool(params.get("confirm_expensive_model")))
+    if len(p) > 1:
+        r = call("profiles.configure", p)
+        applied.update(r.get("applied") or {})
+        if r.get("confirm_required"):
+            done({"applied": applied, "confirm": r.get("confirm_message") or "这个模型比较贵，确定要用吗？"})
+        if applied.get("model") is False:
+            # configure 把原因吞掉了：直接再试一次，拿到 Hermes 说的原因
+            try:
+                from pathlib import Path
+                from hermes_cli.profiles import get_profile_dir
+                from hermes_cli.web_routers.profiles import _write_profile_model
+                _write_profile_model(Path(get_profile_dir(name)), p["provider"], p["model"])
+                applied["model"] = True
+            except Exception as exc:
+                fail("模型没改成：" + str(getattr(exc, "detail", None) or exc))
+    failed = [k for k, v in applied.items() if v is False]
+    if failed:
+        fail("这几项没保存成功：" + ", ".join(failed))
+    done({"applied": applied})
+
+fail("unknown op " + op)
 """.trimIndent()
 
         /** 读出临时文件里的脚本，删掉文件，当作 __main__ 运行。 */

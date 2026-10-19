@@ -127,6 +127,30 @@ interface HermesRepository {
     // 管理
     /** 经 SSH 的管理功能（记忆、MCP、配置文件、日志）。连接没配 SSH 时为 null。 */
     fun admin(): com.hermes.mobile.data.remote.AdminApi? = null
+
+    // ---- Bot（Hermes 的 Profile；桌面版叫 Bot） ----
+
+    /** 当前连接上的所有 bot；读不到（没有 SSH 等）是 null。 */
+    val bots: StateFlow<com.hermes.mobile.data.model.BotRoster?> get() = kotlinx.coroutines.flow.MutableStateFlow(null)
+    /** 正在用的 bot 的名字（"default" 是默认那个）。 */
+    val activeBot: StateFlow<String?> get() = kotlinx.coroutines.flow.MutableStateFlow(null)
+    /** bot 列表读取出错的原因。 */
+    val botsError: StateFlow<String?> get() = kotlinx.coroutines.flow.MutableStateFlow(null)
+    suspend fun refreshBots() = Unit
+    /** 换成和 [name] 这个 bot 聊（同一个连接、同一条 SSH）。 */
+    suspend fun switchBot(name: String): com.hermes.mobile.data.model.BotSwitch = com.hermes.mobile.data.model.BotSwitch.Failed("不支持")
+    /** 开通 bot 的手机访问（生成它自己的 key、打开 multiplex、重启 gateway），然后换过去。[progress] 报告进度；返回错误或 null。 */
+    suspend fun enableBotAccess(name: String, progress: (String) -> Unit = {}): String? = "不支持"
+    /** 当前 bot 的固定对话「Bot Chat」：有就返回它的 id，没有就新建一个（草稿，发第一条时建到服务器上）。 */
+    fun openBotChat(): String? = null
+    /** 读 bot 头像（服务器上的文件，读过的存在手机上）。 */
+    suspend fun botAvatar(bot: com.hermes.mobile.data.model.Bot): ByteArray? = null
+    /** 编辑页要的详细信息（描述、性格、模型），经 SSH 读。 */
+    suspend fun botDetails(name: String): Result<com.hermes.mobile.data.model.BotDetails> = Result.failure(IllegalStateException("不支持"))
+    /** 新建（[create]）或修改 bot，成功后刷新列表。 */
+    suspend fun saveBot(edit: com.hermes.mobile.data.model.BotEdit, create: Boolean): Result<com.hermes.mobile.data.model.BotSaved> = Result.failure(IllegalStateException("不支持"))
+    /** 删除 bot；正在用它时先换回默认 bot。返回错误或 null。 */
+    suspend fun deleteBot(name: String): String? = "不支持"
     /** gateway 状态（`/health/detailed`，不需要 SSH）。 */
     suspend fun gatewayStatus(): com.hermes.mobile.data.model.GatewayStatus? = null
 

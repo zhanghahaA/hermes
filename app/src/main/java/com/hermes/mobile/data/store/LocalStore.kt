@@ -22,6 +22,8 @@ data class StoredState(
      * Hermes 的 /v1/runs 不看会话上锁定的模型，所以每一轮都要带上。
      */
     val sessionModels: Map<String, String> = emptyMap(),
+    /** 连接 id → 正在用的 bot（Profile 名）。没有就是连接本身设的 Profile。 */
+    val activeBots: Map<String, String> = emptyMap(),
 )
 
 @Serializable

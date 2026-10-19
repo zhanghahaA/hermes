@@ -137,6 +137,9 @@ private val scenes = listOf(
         }
     },
     Scene("13-jobs") { repo, _ -> mainScreen(repo, MainTab.Jobs)() },
+    Scene("37-bots") { repo, _ -> mainScreen(repo, MainTab.Bots)() },
+    Scene("38-bot-new") { repo, _ -> com.hermes.mobile.ui.bots.BotEditorScreen(repo, null, onClose = {}) },
+    Scene("38b-bot-edit", waitMs = 300) { repo, _ -> com.hermes.mobile.ui.bots.BotEditorScreen(repo, "coder", onClose = {}) },
     Scene("14-job-editor") { repo, _ -> JobEditorScreen(repo, "j-brief", onClose = {}) },
     Scene("14b-job-editor-failed") { repo, _ -> JobEditorScreen(repo, "j-backup", onClose = {}) },
     Scene("14c-job-new") { repo, _ -> JobEditorScreen(repo, null, onClose = {}) },

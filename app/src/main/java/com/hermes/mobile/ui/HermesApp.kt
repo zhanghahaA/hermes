@@ -46,6 +46,7 @@ data class ChatRoute(val sessionId: String)
 data class ConnectionEditRoute(val connectionId: String? = null, val type: String? = null)
 data class JobEditRoute(val jobId: String? = null)
 data class AdminRoute(val page: AdminPage)
+data class BotEditRoute(val botName: String? = null)
 
 /** 全局轻提示，主要用来标注“这个功能还是占位”。 */
 val LocalShowMessage = staticCompositionLocalOf<(String) -> Unit> { {} }
@@ -110,6 +111,7 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 onEditJob = { id -> navigator.push(JobEditRoute(id)) },
                 onOpenWelcome = { navigator.push(WelcomeRoute) },
                 onOpenAdmin = { navigator.push(AdminRoute(it)) },
+                onEditBot = { navigator.push(BotEditRoute(it)) },
             )
             is AdminRoute -> AdminScreen(repository, route.page, onBack = navigator::pop)
             is ChatRoute -> ChatScreen(
@@ -125,6 +127,7 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 initialType = route.type,
                 onClose = navigator::pop,
             )
+            is BotEditRoute -> com.hermes.mobile.ui.bots.BotEditorScreen(repository, route.botName, onClose = navigator::pop)
             is JobEditRoute -> JobEditorScreen(
                 repository = repository,
                 jobId = route.jobId,

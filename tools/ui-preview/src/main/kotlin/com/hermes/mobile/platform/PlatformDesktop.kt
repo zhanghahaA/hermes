@@ -30,6 +30,9 @@ fun rememberAttachmentPickers(onAdd: (List<com.hermes.mobile.data.model.Attachme
 
 /** 桌面版：用 Skia 解码本机文件或 data: URL。 */
 @Composable
+fun rememberAvatarPicker(onImage: (String) -> Unit, onError: (String) -> Unit): () -> Unit = {}
+
+@Composable
 fun rememberImageBitmap(source: String?, maxPx: Int): androidx.compose.ui.graphics.ImageBitmap? =
     androidx.compose.runtime.remember(source, maxPx) {
         runCatching {

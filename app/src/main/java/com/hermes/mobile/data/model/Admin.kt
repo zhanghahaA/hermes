@@ -101,3 +101,107 @@ data class ScreenLease(val humanHolds: Boolean, val viewerHash: String?, val rea
             java.security.MessageDigest.getInstance("SHA-256").digest(viewerId.toByteArray()).joinToString("") { "%02x".format(it) }.take(12)
     }
 }
+
+/**
+ * 一个 bot（Hermes 的一个 Profile；桌面版叫 Bot）。默认那个叫 "default"。
+ * [hasKey]：有自己的 API_SERVER_KEY（手机要经 /p/<名字> 和它聊就得有）。
+ */
+@kotlinx.serialization.Serializable
+data class Bot(
+    val name: String,
+    val isDefault: Boolean,
+    val displayName: String,
+    val title: String,
+    val description: String,
+    val model: String?,
+    val hasKey: Boolean,
+    /** 服务器上头像文件的路径（profile 目录下的 assets/avatar.*）。 */
+    val avatarPath: String?,
+    /** 桌面版给 bot 选的颜色（#RRGGBB）。 */
+    val color: String?,
+    /** 它的固定对话「Bot Chat」。 */
+    val canonical: BotSessionRef?,
+    /** 最近活跃的对话。 */
+    val last: BotSessionRef?,
+    /** 头像文件的修改时间：换了头像，缓存就作废。 */
+    val avatarVersion: Long = 0,
+) {
+    /** 显示的名字，和桌面版的顺序一样：Bot 名字（title）→ Profile 的显示名 → 默认 bot 叫 Hermes → id。 */
+    val label: String get() = title.ifBlank { displayName }.ifBlank {
+        if (isDefault || name == "default") "Hermes" else name.replace(Regex("[-_]+"), " ").trim()
+            .split(' ').joinToString(" ") { w -> w.replaceFirstChar { it.uppercaseChar() } }
+    }
+}
+
+/** 编辑 bot 时从服务器读到的：描述、性格（SOUL.md）、模型。 */
+data class BotDetails(val description: String, val soul: String, val provider: String, val model: String)
+
+/**
+ * 新建或修改一个 bot。null 表示这一项不改；新建时 [soul] 为空就按名字和描述自动写一份。
+ * [avatar] 是图片的 data URL。
+ */
+data class BotEdit(
+    val name: String,
+    val title: String? = null,
+    val description: String? = null,
+    val soul: String? = null,
+    val color: String? = null,
+    val avatar: String? = null,
+    val clearAvatar: Boolean = false,
+    val provider: String? = null,
+    val model: String? = null,
+    val confirmExpensiveModel: Boolean = false,
+)
+
+/** 保存 bot 的结果。 */
+sealed interface BotSaved {
+    /** 存好了；[needsModel] 不为空表示这个 bot 还没有能用的模型（新建时检查）。 */
+    data class Done(val name: String, val needsModel: String? = null) : BotSaved
+    /** 选的模型比较贵或有数据政策提醒，用户确认后带 confirmExpensiveModel 再存一次。 */
+    data class ConfirmModel(val message: String) : BotSaved
+}
+
+/**
+ * 用户输入的 bot 名字 → Hermes 接受的 Profile id（只能是小写字母、数字、- 和 _）。
+ * 和桌面版一样：带音调的拉丁字母去掉音调，其它文字（比如中文）每个字变成 `u<十六进制>`，
+ * 「小助手」→ `u5c0f-u52a9-u624b`。
+ */
+fun botIdFor(name: String): String {
+    val text = java.text.Normalizer.normalize(name.trim(), java.text.Normalizer.Form.NFC)
+    val folded = StringBuilder()
+    var i = 0
+    while (i < text.length) {
+        val cp = text.codePointAt(i)
+        i += Character.charCount(cp)
+        val ch = String(Character.toChars(cp))
+        if (Character.isLetterOrDigit(cp)) {
+            val base = java.text.Normalizer.normalize(ch, java.text.Normalizer.Form.NFKD).replace(Regex("\\p{M}+"), "")
+            if (base.matches(Regex("[a-zA-Z0-9]+"))) folded.append(base) else folded.append("-u").append(Integer.toHexString(cp)).append('-')
+        } else {
+            folded.append(ch)
+        }
+    }
+    val slug = folded.toString().replace(Regex("-+"), "-").lowercase().replace(Regex("[^a-z0-9_-]+"), "-").trim('-')
+    if (slug.length <= 64) return slug
+    val cut = slug.take(64)
+    val boundary = if (slug[64] == '-') 64 else cut.lastIndexOf('-')
+    return (if (boundary > 0) cut.take(boundary) else cut).trimEnd('-')
+}
+
+@kotlinx.serialization.Serializable
+data class BotSessionRef(val id: String, val title: String, val lastActive: Long, val preview: String)
+
+/** 所有 bot，以及 gateway 是否同时服务多个 bot（multiplex_profiles）。 */
+@kotlinx.serialization.Serializable
+data class BotRoster(val bots: List<Bot>, val multiplex: Boolean?, val activeProfile: String?)
+
+/** 开通手机访问的结果：bot 的 key，以及要不要重启 gateway 才生效。 */
+data class BotAccess(val key: String, val restartNeeded: Boolean, val changed: List<String>)
+
+/** 切换 bot 的结果。 */
+sealed interface BotSwitch {
+    data object Done : BotSwitch
+    /** 这个 bot 还没有自己的 API Key（或者 gateway 没开 multiplex），要先开通手机访问。 */
+    data object NeedsAccess : BotSwitch
+    data class Failed(val reason: String) : BotSwitch
+}

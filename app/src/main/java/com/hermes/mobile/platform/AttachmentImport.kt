@@ -48,6 +48,28 @@ class AttachmentImporter(private val context: Context) {
         return save(scale(rotate(decoded, rotation)))
     }
 
+    /** 头像：从中间裁成正方形、缩到 [AvatarPx]，压成 JPEG，返回 data URL（Hermes 的头像最大 2 MB）。 */
+    fun avatar(uri: Uri): String {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalArgumentException("打不开这张图片")
+        var sample = 1
+        while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= AvatarPx) sample *= 2
+        val decoded = resolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: throw IllegalArgumentException("打不开这张图片")
+        val rotation = runCatching {
+            resolver.openInputStream(uri)?.use { ExifInterface(it).rotationDegrees() } ?: 0
+        }.getOrDefault(0)
+        val upright = rotate(decoded, rotation)
+        val side = minOf(upright.width, upright.height)
+        val square = Bitmap.createBitmap(upright, (upright.width - side) / 2, (upright.height - side) / 2, side, side)
+        val sized = if (side > AvatarPx) Bitmap.createScaledBitmap(square, AvatarPx, AvatarPx, true) else square
+        val out = ByteArrayOutputStream()
+        sized.compress(Bitmap.CompressFormat.JPEG, 88, out)
+        return "data:image/jpeg;base64," + java.util.Base64.getEncoder().encodeToString(out.toByteArray())
+    }
+
     /** 文件：按类型分别处理成图片、PDF、文本或普通文件。 */
     fun file(uri: Uri): Attachment {
         val (name, size) = nameAndSize(uri)
@@ -204,6 +226,7 @@ class AttachmentImporter(private val context: Context) {
 
     companion object {
         const val MaxEdge = 2048
+        const val AvatarPx = 256
         /** 单张图片编码后的上限：多数看图模型限制 5 MB（base64 之后还要大三分之一）。 */
         const val MaxImageBytes = 3_500_000
         const val MaxPdfPages = 8

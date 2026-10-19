@@ -321,6 +321,71 @@ class FakeHermesRepository(
     override fun moveToProject(sessionId: String, project: com.hermes.mobile.data.model.ProjectInfo?) {
         _groups.update { g -> if (project == null) g.copy(of = g.of - sessionId) else g.copy(of = g.of + (sessionId to project.name)) }
     }
+    // ---- Bot（演示） ----
+    private val _bots = MutableStateFlow<com.hermes.mobile.data.model.BotRoster?>(
+        com.hermes.mobile.data.model.BotRoster(
+            bots = listOf(
+                com.hermes.mobile.data.model.Bot("default", true, "", "小助手", "日常杂事、查资料、管家里的设备", "deepseek-v4.1-flash", true, null, "#5C6BC0",
+                    com.hermes.mobile.data.model.BotSessionRef("s-2", "Bot Chat", System.currentTimeMillis() - 3_600_000, "第二天上午建议先去灵隐寺，人少一些。"),
+                    com.hermes.mobile.data.model.BotSessionRef("s-1", "家庭网络排查", System.currentTimeMillis() - 600_000, "已经把路由器的 DNS 改回 223.5.5.5")),
+                com.hermes.mobile.data.model.Bot("coder", false, "", "码农", "帮我写脚本、看日志、改配置", "claude-sonnet", true, null, "#00897B",
+                    null, com.hermes.mobile.data.model.BotSessionRef("c-1", "整理照片脚本", System.currentTimeMillis() - 86_400_000, "脚本写好了，放在 ~/scripts/sort_photos.py")),
+                com.hermes.mobile.data.model.Bot("writer", false, "", "笔杆子", "周报、文案、读书笔记", "gemini-2.5-pro", false, null, "#F4511E", null, null),
+            ),
+            multiplex = true,
+            activeProfile = "default",
+        ),
+    )
+    override val bots: StateFlow<com.hermes.mobile.data.model.BotRoster?> = _bots
+    private val _activeBot = MutableStateFlow<String?>("default")
+    override val activeBot: StateFlow<String?> = _activeBot
+
+    override suspend fun switchBot(name: String): com.hermes.mobile.data.model.BotSwitch {
+        val bot = _bots.value?.bots?.firstOrNull { it.name == name } ?: return com.hermes.mobile.data.model.BotSwitch.Failed("没有这个 bot")
+        if (!bot.hasKey) return com.hermes.mobile.data.model.BotSwitch.NeedsAccess
+        _activeBot.value = name
+        return com.hermes.mobile.data.model.BotSwitch.Done
+    }
+
+    override suspend fun enableBotAccess(name: String, progress: (String) -> Unit): String? {
+        progress("正在给 bot 生成自己的 API Key…")
+        _bots.update { r -> r?.copy(bots = r.bots.map { if (it.name == name) it.copy(hasKey = true) else it }) }
+        _activeBot.value = name
+        return null
+    }
+
+    override fun openBotChat(): String? = _bots.value?.bots?.firstOrNull { it.name == _activeBot.value }?.canonical?.id ?: createSession()
+
+    override suspend fun botDetails(name: String): Result<com.hermes.mobile.data.model.BotDetails> {
+        val bot = _bots.value?.bots?.firstOrNull { it.name == name } ?: return Result.failure(IllegalStateException("没有这个 bot"))
+        return Result.success(com.hermes.mobile.data.model.BotDetails(bot.description, "# ${bot.label}\n\n你是${bot.label}，${bot.description}。", "openrouter", bot.model.orEmpty()))
+    }
+
+    override suspend fun saveBot(edit: com.hermes.mobile.data.model.BotEdit, create: Boolean): Result<com.hermes.mobile.data.model.BotSaved> {
+        _bots.update { r ->
+            r ?: return@update r
+            if (create) {
+                r.copy(bots = r.bots + com.hermes.mobile.data.model.Bot(edit.name, false, "", edit.title.orEmpty(), edit.description.orEmpty(), "deepseek-v4.1-flash", false, null, edit.color, null, null))
+            } else {
+                r.copy(bots = r.bots.map { b ->
+                    if (b.name != edit.name) b else b.copy(
+                        title = edit.title ?: b.title,
+                        description = edit.description ?: b.description,
+                        color = edit.color ?: b.color,
+                        model = edit.model ?: b.model,
+                    )
+                })
+            }
+        }
+        return Result.success(com.hermes.mobile.data.model.BotSaved.Done(edit.name))
+    }
+
+    override suspend fun deleteBot(name: String): String? {
+        if (_activeBot.value == name) _activeBot.value = "default"
+        _bots.update { r -> r?.copy(bots = r.bots.filterNot { it.name == name }) }
+        return null
+    }
+
     private val fakeAdmin = FakeAdmin(
         onProjectCreated = { name, folder ->
             _groups.update { g ->

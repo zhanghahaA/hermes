@@ -143,6 +143,33 @@ fun rememberAttachmentPickers(onAdd: (List<com.hermes.mobile.data.model.Attachme
     }
 }
 
+/**
+ * 选一张照片当头像：处理成正方形小 JPEG 的 data URL 交给 [onImage]，处理不了把原因交给 [onError]。
+ */
+@Composable
+fun rememberAvatarPicker(onImage: (String) -> Unit, onError: (String) -> Unit): () -> Unit {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val currentImage = androidx.compose.runtime.rememberUpdatedState(onImage)
+    val currentError = androidx.compose.runtime.rememberUpdatedState(onError)
+    val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { AttachmentImporter(context.applicationContext).avatar(uri) }
+            }
+            result.onSuccess { currentImage.value(it) }.onFailure { currentError.value(it.message ?: "处理不了这张图片") }
+        }
+    }
+    return {
+        launcher.launch(
+            androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly),
+        )
+    }
+}
+
 private val bitmapCache = object : android.util.LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(48 * 1024 * 1024) {
     override fun sizeOf(key: String, value: androidx.compose.ui.graphics.ImageBitmap) = value.width * value.height * 4
 }

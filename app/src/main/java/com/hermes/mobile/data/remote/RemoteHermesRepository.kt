@@ -148,6 +148,31 @@ class RemoteHermesRepository(
     private fun newRunScope() = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
 
     private fun keyOf(id: String): String? = state.value.keys[id]?.let(secrets::decrypt)
+
+    // ---- 正在用哪个 bot ----
+
+    /** 连接本身设的 Profile（没设就是 "default"）。 */
+    private fun baseBot(p: ConnectionProfile): String = p.profile?.trim()?.takeIf { it.isNotEmpty() } ?: "default"
+    /** 这个连接上正在用的 bot；没换过就是 null（用连接本身的 Profile）。 */
+    private fun botOf(connectionId: String): String? = state.value.activeBots[connectionId]
+    private fun botKeyName(connectionId: String, bot: String) = "bot:$connectionId:$bot"
+    private fun botKeyOf(connectionId: String, bot: String): String? = state.value.keys[botKeyName(connectionId, bot)]?.let(secrets::decrypt)
+
+    /** 按正在用的 bot 改过的连接设置：Profile 换成 bot（默认 bot 不加 /p/ 前缀）。 */
+    private fun effectiveProfile(p: ConnectionProfile): ConnectionProfile {
+        val bot = botOf(p.id) ?: return p
+        return p.copy(profile = bot.takeIf { it != "default" })
+    }
+
+    /** 正在用的 bot 的 key：连接本身的 Profile 用连接的 key，别的 bot 用它自己的。 */
+    private fun effectiveKey(p: ConnectionProfile): String? {
+        val bot = botOf(p.id) ?: return keyOf(p.id)
+        return if (bot == baseBot(p)) keyOf(p.id) else botKeyOf(p.id, bot)
+    }
+
+    /** 缓存、没收到的回复、模型偏好都按“连接 + bot”分开存。 */
+    private fun scopeOf(connectionId: String): String = botOf(connectionId)?.let { "$connectionId#$it" } ?: connectionId
+    private val scopeId: String? get() = connectedId?.let(::scopeOf)
     private fun sshSecretOf(id: String): String? = state.value.keys[SshSecretPrefix + id]?.let(secrets::decrypt)
 
     /** 当前连接的 SSH 隧道（不是 SSH 连接时为 null）。 */
@@ -175,14 +200,17 @@ class RemoteHermesRepository(
         _connectionState.value = ConnectionState.Connecting
         // 先显示上次存下的列表，连上之后再换成服务器的
         sessionsFresh = false
-        _sessions.value = cache?.sessions(id).orEmpty()
-        _sessionGroups.value = cache?.groups(id) ?: SessionGrouping()
-        _archivedLocal.value = cache?.archived(id).orEmpty()
+        val scope0 = scopeOf(id)
+        _sessions.value = cache?.sessions(scope0).orEmpty()
+        _sessionGroups.value = cache?.groups(scope0) ?: SessionGrouping()
+        _archivedLocal.value = cache?.archived(scope0).orEmpty()
+        _activeBot.value = botOf(id) ?: baseBot(profile)
+        if (_bots.value == null) _bots.value = cache?.bots(id)
         chats.value = emptyMap()
         connectJob = scope.launch {
             try {
                 val started = clock()
-                val newClient = openClient(profile, keyOf(id), sshSecretOf(id)) { fingerprint -> pinHostKey(id, fingerprint) }
+                val newClient = openClient(effectiveProfile(profile), effectiveKey(profile), sshSecretOf(id)) { fingerprint -> pinHostKey(id, fingerprint) }
                 val health = newClient.health()
                 if (health.platform != null && health.platform != "hermes-agent") throw HermesError.NotHermes()
                 val caps = newClient.probeCapabilities(health.version)
@@ -195,7 +223,8 @@ class RemoteHermesRepository(
                     serverVersion = health.knownVersion() ?: "未知版本",
                 )
                 loadSessions()
-                resumeStoredRuns(id)
+                resumeStoredRuns(scopeOf(id))
+                scope.launch { refreshBots() }
                 scope.launch { loadModels() }
                 scope.launch { loadJobs() }
                 scope.launch { refreshCapabilities() }
@@ -278,7 +307,12 @@ class RemoteHermesRepository(
         cache?.removeConnection(id)
         _connections.update { list -> list.filterNot { it.id == id } }
         persist { s ->
-            s.copy(connections = _connections.value, keys = s.keys - id - (SshSecretPrefix + id), runs = s.runs.filterNot { it.connectionId == id })
+            s.copy(
+                connections = _connections.value,
+                keys = s.keys.filterKeys { k -> k != id && k != SshSecretPrefix + id && !k.startsWith("bot:$id:") },
+                runs = s.runs.filterNot { it.connectionId == id || it.connectionId.startsWith("$id#") },
+                activeBots = s.activeBots - id,
+            )
         }
         if (_activeConnectionId.value == id) {
             val next = _connections.value.firstOrNull()?.id
@@ -619,7 +653,7 @@ class RemoteHermesRepository(
             draftSessions.update { it - real }
             return
         }
-        connectedId?.let { c -> cache?.removeSession(c, real) }
+        scopeId?.let { c -> cache?.removeSession(c, real) }
         val before = _sessions.value
         val archivedBefore = _archivedLocal.value
         _sessions.update { list -> list.filterNot { it.id == real } }
@@ -778,7 +812,7 @@ class RemoteHermesRepository(
                 .withSentImages(sessionId)
             val running = runs.containsKey(sessionId)
             updateChat(sessionId) { st -> st.copy(server = items, local = st.local.reconcile(items, running), loaded = true) }
-            val connection = connectedId
+            val connection = scopeId
             if (cache != null && connection != null) withContext(Dispatchers.IO) { cache.saveMessages(connection, sessionId, items) }
         } catch (e: HermesError) {
             _errors.tryEmit(e.message ?: "读取聊天记录失败")
@@ -955,7 +989,7 @@ class RemoteHermesRepository(
 
     private fun publishRuns() {
         _activeRuns.value = runs.keys.toSet()
-        val connection = connectedId ?: return
+        val connection = scopeId ?: return
         persist { s ->
             s.copy(runs = s.runs.filterNot { it.connectionId == connection } +
                 runs.values.map { StoredRun(connection, it.sessionId, it.runId) })
@@ -1550,7 +1584,7 @@ class RemoteHermesRepository(
     }
 
     private fun appDefaultModel(): ModelOption? {
-        val id = state.value.defaultModels[connectedId ?: return null] ?: return null
+        val id = state.value.defaultModels[scopeId ?: return null] ?: return null
         return _models.value.firstOrNull { it.id == id }
     }
 
@@ -1567,7 +1601,7 @@ class RemoteHermesRepository(
         optimistic(key, { it.copy(model = option.model) }) { lockSessionModel(key, option.model, option.providerSlug) }
     }
 
-    private fun sessionModelKey(sessionId: String) = "${connectedId.orEmpty()}/$sessionId"
+    private fun sessionModelKey(sessionId: String) = "${scopeId.orEmpty()}/$sessionId"
 
     private fun rememberSessionModel(sessionId: String, option: ModelOption) {
         if (connectedId == null) return
@@ -1587,7 +1621,7 @@ class RemoteHermesRepository(
 
     /** “新对话默认模型”：只影响从手机新建的对话（Hermes 自己的默认在服务器配置里，API 改不了）。 */
     override fun setDefaultModel(modelId: String) {
-        val connection = connectedId ?: return
+        val connection = scopeId ?: return
         val toServerDefault = modelId == serverDefaultModel
         persist { st -> st.copy(defaultModels = if (toServerDefault) st.defaultModels - connection else st.defaultModels + (connection to modelId)) }
         _defaultModelId.value = modelId
@@ -1680,7 +1714,7 @@ class RemoteHermesRepository(
 
     /** 当前连接的 Profile（hermes 命令要用 -p 指定）。 */
     private fun profileFlag(): String =
-        connections.value.firstOrNull { it.id == connectedId }?.profile?.trim()?.takeIf { it.isNotEmpty() }
+        connections.value.firstOrNull { it.id == connectedId }?.let(::effectiveProfile)?.profile?.trim()?.takeIf { it.isNotEmpty() }
             ?.let { " -p " + it.replace(Regex("[^A-Za-z0-9_.-]"), "") }.orEmpty()
 
     /** API 不能改工具集，经 SSH 运行 `hermes tools enable|disable … --platform api_server`（改的是 config.yaml，下一条消息起生效）。 */
@@ -1829,7 +1863,7 @@ class RemoteHermesRepository(
     /** 经 SSH 读 Hermes 的项目和每个会话的工作目录；没有 SSH 或读不了就保持原样（不打扰）。 */
     private suspend fun loadGroups() {
         val admin = admin() ?: return
-        val connection = connectedId ?: return
+        val connection = scopeId ?: return
         try {
             val grouping = admin.sessionGroups()
             _sessionGroups.value = grouping
@@ -1914,7 +1948,7 @@ class RemoteHermesRepository(
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private fun saveArchived() {
-        val connection = connectedId ?: _activeConnectionId.value ?: return
+        val connection = scopeId ?: _activeConnectionId.value?.let(::scopeOf) ?: return
         val snapshot = _archivedLocal.value
         scope.launch(Dispatchers.IO) { cache?.saveArchived(connection, snapshot) }
     }
@@ -2009,9 +2043,158 @@ class RemoteHermesRepository(
 
     override fun admin(): AdminApi? {
         val t = tunnel ?: return null
-        adminFor?.let { (tt, a) -> if (tt === t) return a }
-        val profile = _connections.value.firstOrNull { it.id == connectedId }?.profile
+        val profile = _connections.value.firstOrNull { it.id == connectedId }?.let(::effectiveProfile)?.profile
+        adminFor?.let { (tt, a) -> if (tt === t && a.profileName == profile) return a }
         return HermesAdmin(t, profile).also { adminFor = t to it }
+    }
+
+    // ---- Bot ----
+
+    private val _bots = MutableStateFlow<com.hermes.mobile.data.model.BotRoster?>(null)
+    override val bots: StateFlow<com.hermes.mobile.data.model.BotRoster?> = _bots.asStateFlow()
+    private val _activeBot = MutableStateFlow<String?>(null)
+    override val activeBot: StateFlow<String?> = _activeBot.asStateFlow()
+    private val _botsError = MutableStateFlow<String?>(null)
+    override val botsError: StateFlow<String?> = _botsError.asStateFlow()
+
+    override suspend fun refreshBots() {
+        val connection = connectedId ?: return
+        val admin = admin() ?: run {
+            _botsError.value = "看 bot 要经 SSH 读 Hermes 的 Profile，给这个连接配上 SSH 后再试"
+            return
+        }
+        try {
+            val roster = admin.bots()
+            _bots.value = roster
+            _botsError.value = null
+            cache?.let { c -> withContext(Dispatchers.IO) { c.saveBots(connection, roster) } }
+        } catch (e: AdminException) {
+            _botsError.value = e.message
+        }
+    }
+
+    override suspend fun switchBot(name: String): com.hermes.mobile.data.model.BotSwitch {
+        val connection = connectedId ?: _activeConnectionId.value ?: return com.hermes.mobile.data.model.BotSwitch.Failed("还没连上 Hermes")
+        val profile = _connections.value.firstOrNull { it.id == connection } ?: return com.hermes.mobile.data.model.BotSwitch.Failed("找不到这个连接")
+        if (name == (_activeBot.value ?: baseBot(profile)) && _connectionState.value is ConnectionState.Connected) return com.hermes.mobile.data.model.BotSwitch.Done
+        if (name != baseBot(profile)) {
+            // 用 bot 自己的 key：手机上没有就去服务器上读（可能电脑版已经配过）
+            if (botKeyOf(connection, name) == null) {
+                val key = try {
+                    admin()?.botKey(name)
+                } catch (e: AdminException) {
+                    return com.hermes.mobile.data.model.BotSwitch.Failed(e.message ?: "读不到 bot 的 key")
+                } ?: return com.hermes.mobile.data.model.BotSwitch.NeedsAccess
+                persist { st -> st.copy(keys = st.keys + (botKeyName(connection, name) to secrets.encrypt(key))) }
+            }
+            if (_bots.value?.multiplex != true) return com.hermes.mobile.data.model.BotSwitch.NeedsAccess
+        }
+        persist { st -> st.copy(activeBots = if (name == baseBot(profile)) st.activeBots - connection else st.activeBots + (connection to name)) }
+        connect(connection)
+        // 等连上；这个 bot 在 gateway 上没开（multiplex 没生效）会连不上
+        val result = withTimeoutOrNull(30_000) { _connectionState.first { it is ConnectionState.Connected || it is ConnectionState.Failed } }
+        return when (result) {
+            is ConnectionState.Connected -> com.hermes.mobile.data.model.BotSwitch.Done
+            is ConnectionState.Failed -> com.hermes.mobile.data.model.BotSwitch.Failed(result.reason)
+            else -> com.hermes.mobile.data.model.BotSwitch.Failed("连接超时")
+        }
+    }
+
+    override suspend fun enableBotAccess(name: String, progress: (String) -> Unit): String? {
+        val connection = connectedId ?: return "还没连上 Hermes"
+        val admin = admin() ?: return "开通要经 SSH 改 Hermes 的配置，给这个连接配上 SSH 后再试"
+        return try {
+            progress("正在给 bot 生成自己的 API Key…")
+            val access = admin.enableBotAccess(name)
+            persist { st -> st.copy(keys = st.keys + (botKeyName(connection, name) to secrets.encrypt(access.key))) }
+            if (access.restartNeeded) {
+                progress("已打开 multiplex_profiles，正在重启 gateway（正在进行的回复会中断）…")
+                admin.restartGateway()
+                // 先等它停下，再等它回来（最多一分半）
+                progress("等 gateway 重新启动…")
+                delay(5000)
+                val back = withTimeoutOrNull(90_000) {
+                    while (true) {
+                        if (runCatching { client?.health() }.getOrNull() != null) break
+                        delay(2000)
+                    }
+                    true
+                }
+                if (back == null) return "gateway 没有自己重新启动起来。key 已经写好，请在电脑上启动 Hermes gateway 后再切换到这个 bot"
+            }
+            refreshBots()
+            progress("正在切换到这个 bot…")
+            when (val r = switchBot(name)) {
+                com.hermes.mobile.data.model.BotSwitch.Done -> null
+                com.hermes.mobile.data.model.BotSwitch.NeedsAccess -> "已经写好了 key，但 gateway 还没生效：请在电脑上重启 Hermes gateway 后再试"
+                is com.hermes.mobile.data.model.BotSwitch.Failed -> "已经写好了 key，但还连不上这个 bot（${r.reason}）。如果 gateway 没有自动重启，请在电脑上重启 Hermes gateway 后再试"
+            }
+        } catch (e: AdminException) {
+            e.message ?: "开通失败"
+        }
+    }
+
+    override fun openBotChat(): String? {
+        val bot = _bots.value?.bots?.firstOrNull { it.name == _activeBot.value }
+        // 固定对话按标题找（和桌面版一样）：先看会话列表，再看 bot 列表里记的
+        _sessions.value.firstOrNull { it.title == BotChatTitle }?.let { return it.id }
+        bot?.canonical?.id?.let { return it }
+        val draft = createSession() ?: return null
+        renameSession(draft, BotChatTitle)
+        return draft
+    }
+
+    override suspend fun botAvatar(bot: com.hermes.mobile.data.model.Bot): ByteArray? {
+        val path = bot.avatarPath ?: return null
+        val connection = connectedId ?: return null
+        // 换头像后文件名不变，按修改时间区分
+        val key = "$path@${bot.avatarVersion}"
+        cache?.avatar(connection, key)?.let { return it }
+        val bytes = runCatching { admin()?.readRemoteFile(path) }.getOrNull() ?: return null
+        cache?.saveAvatar(connection, key, bytes)
+        return bytes
+    }
+
+    override suspend fun botDetails(name: String): Result<com.hermes.mobile.data.model.BotDetails> {
+        val admin = admin() ?: return Result.failure(AdminException("改 bot 要经 SSH，给这个连接配上 SSH 后再试"))
+        return try {
+            Result.success(admin.describeBot(name))
+        } catch (e: AdminException) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun saveBot(edit: com.hermes.mobile.data.model.BotEdit, create: Boolean): Result<com.hermes.mobile.data.model.BotSaved> {
+        val admin = admin() ?: return Result.failure(AdminException("改 bot 要经 SSH，给这个连接配上 SSH 后再试"))
+        return try {
+            val saved = if (create) admin.createBot(edit) else admin.configureBot(edit)
+            refreshBots()
+            Result.success(saved)
+        } catch (e: AdminException) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun deleteBot(name: String): String? {
+        val connection = connectedId ?: return "还没连上 Hermes"
+        val profile = _connections.value.firstOrNull { it.id == connection } ?: return "找不到这个连接"
+        if (name == baseBot(profile)) return "这个连接本身用的就是它，不能在这里删"
+        // 正在用它：先换回默认 bot，删完再连会连不上
+        if (_activeBot.value == name) {
+            when (val r = switchBot(baseBot(profile))) {
+                is com.hermes.mobile.data.model.BotSwitch.Failed -> return "没能先换回默认 bot：${r.reason}"
+                else -> Unit
+            }
+        }
+        val admin = admin() ?: return "删 bot 要经 SSH，给这个连接配上 SSH 后再试"
+        return try {
+            admin.deleteBot(name)
+            persist { st -> st.copy(keys = st.keys - botKeyName(connection, name), activeBots = if (st.activeBots[connection] == name) st.activeBots - connection else st.activeBots) }
+            refreshBots()
+            null
+        } catch (e: AdminException) {
+            e.message ?: "删除失败"
+        }
     }
 
     override suspend fun gatewayStatus(): GatewayStatus? {
@@ -2093,13 +2276,15 @@ class RemoteHermesRepository(
         }
         /** 加密保存 SSH 私钥/密码时用的键：`ssh:<连接 id>`。 */
         const val SshSecretPrefix = "ssh:"
+        /** bot 的固定对话的标题（Hermes 桌面版按这个标题认）。 */
+        const val BotChatTitle = "Bot Chat"
         val ApprovalOrder = listOf("once", "session", "always", "deny")
     }
 
     // 放在最后：自动连接会用到上面所有状态，必须等它们都初始化完（否则重启 App 时会崩溃）
     /** 会话列表变了（改名、新消息预览……）就写回缓存，攒一会儿再写。 */
     private fun saveSessionsToCache() {
-        val connection = connectedId ?: return
+        val connection = scopeId ?: return
         if (cache == null || !sessionsFresh) return
         val snapshot = _sessions.value
         scope.launch(Dispatchers.IO) { cache.saveSessions(connection, snapshot) }

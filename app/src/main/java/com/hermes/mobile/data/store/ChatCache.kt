@@ -47,6 +47,25 @@ class ChatCache(private val dir: File) {
         write(File(connectionDir(connectionId), "groups.json"), json.encodeToString(SessionGrouping.serializer(), grouping))
     }
 
+    /** bot 列表（没连上时也能先显示）。 */
+    fun bots(connectionId: String): com.hermes.mobile.data.model.BotRoster? =
+        read(File(connectionDir(connectionId), "bots.json")) { json.decodeFromString(com.hermes.mobile.data.model.BotRoster.serializer(), it) }
+
+    fun saveBots(connectionId: String, roster: com.hermes.mobile.data.model.BotRoster) {
+        write(File(connectionDir(connectionId), "bots.json"), json.encodeToString(com.hermes.mobile.data.model.BotRoster.serializer(), roster))
+    }
+
+    /** bot 头像（服务器上的文件）存一份在手机上，按服务器路径区分。 */
+    fun avatar(connectionId: String, path: String): ByteArray? = synchronized(this) {
+        File(connectionDir(connectionId), "avatars/${hash(path)}").takeIf { it.exists() }?.readBytes()
+    }
+
+    fun saveAvatar(connectionId: String, path: String, bytes: ByteArray) {
+        synchronized(this) {
+            runCatching { File(connectionDir(connectionId), "avatars/${hash(path)}").apply { parentFile?.mkdirs() }.writeBytes(bytes) }
+        }
+    }
+
     /** App 里归档的会话（Hermes 的列表不再返回它们，靠这里还能找到、取消归档）。 */
     fun archived(connectionId: String): List<Session> =
         read(File(connectionDir(connectionId), "archived.json")) { json.decodeFromString(sessionList, it) }.orEmpty()

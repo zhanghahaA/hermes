@@ -20,6 +20,8 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Forum
+import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +51,7 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 enum class MainTab(val label: String, val selectedIcon: ImageVector, val icon: ImageVector) {
     Chats("聊天", Icons.Rounded.Forum, Icons.Outlined.Forum),
+    Bots("Bot", Icons.Rounded.SmartToy, Icons.Outlined.SmartToy),
     Jobs("任务", Icons.Rounded.Schedule, Icons.Outlined.Schedule),
     Capabilities("能力", Icons.Rounded.Extension, Icons.Outlined.Extension),
     Settings("设置", Icons.Rounded.Settings, Icons.Outlined.Settings),
@@ -65,6 +68,7 @@ fun MainScreen(
     onEditJob: (String?) -> Unit,
     onOpenWelcome: () -> Unit,
     onOpenAdmin: (AdminPage) -> Unit = {},
+    onEditBot: (String?) -> Unit = {},
     initialTab: MainTab = MainTab.Chats,
 ) {
     var tabIndex by rememberSaveable { mutableIntStateOf(initialTab.ordinal) }
@@ -88,6 +92,7 @@ fun MainScreen(
             }
         }
         MainTab.Jobs -> FloatingAction(Icons.Rounded.Add, "新建任务") { onEditJob(null) }
+        MainTab.Bots -> FloatingAction(Icons.Rounded.Add, "新建 bot") { onEditBot(null) }
         else -> null
     }
 
@@ -112,6 +117,12 @@ fun MainScreen(
                             onManageConnections = { tabIndex = MainTab.Settings.ordinal },
                             group = chatGroup,
                             onGroupChange = { chatGroup = it },
+                        )
+                        MainTab.Bots -> com.hermes.mobile.ui.bots.BotsScreen(
+                            repository = repository,
+                            onOpenChat = onOpenChat,
+                            onShowChats = { tabIndex = MainTab.Chats.ordinal },
+                            onEditBot = onEditBot,
                         )
                         MainTab.Jobs -> JobsScreen(repository = repository, onEditJob = onEditJob)
                         MainTab.Capabilities -> CapabilitiesScreen(
