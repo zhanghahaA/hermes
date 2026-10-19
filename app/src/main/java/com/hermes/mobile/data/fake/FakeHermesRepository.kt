@@ -216,15 +216,6 @@ class FakeHermesRepository(
         sendMessage(sessionId, failed.text, emptyList(), failed.quote)
     }
 
-    override fun regenerate(sessionId: String, itemId: String) {
-        editItems(sessionId) { list -> list.filterNot { it.id == itemId } }
-        startRun(sessionId) {
-            setPhase(sessionId, RunPhase.Working)
-            delay(1400)
-            reply(sessionId, "（占位）这是重新生成的回复。真实实现会调用 Hermes 重新回答上一条消息。")
-        }
-    }
-
     override fun deleteItem(sessionId: String, itemId: String) = editItems(sessionId) { list -> list.filterNot { it.id == itemId } }
 
     override fun stop(sessionId: String) {

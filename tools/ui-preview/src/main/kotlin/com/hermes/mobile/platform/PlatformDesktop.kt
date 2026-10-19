@@ -53,3 +53,9 @@ class FileActions(
 @Suppress("UNUSED_PARAMETER")
 @Composable
 fun rememberFileActions(onError: (String) -> Unit): FileActions = FileActions({ _, _ -> }, { _, _ -> }, { _, _ -> null }, { _, _ -> null })
+
+@Composable
+fun appVersion(): String = "预览"
+
+@Composable
+fun rememberShareText(): (title: String, text: String) -> Unit = { _, _ -> }

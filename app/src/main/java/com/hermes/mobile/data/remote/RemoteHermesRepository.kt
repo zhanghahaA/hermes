@@ -1456,7 +1456,6 @@ class RemoteHermesRepository(
         }
     }
 
-    override fun regenerate(sessionId: String, itemId: String) = notYet<Unit>("重新生成")
     override fun deleteItem(sessionId: String, itemId: String) {
         val key = resolve(sessionId)
         // 只有没发出去的消息能删；服务器上的记录 Hermes 不提供单条删除
@@ -1797,6 +1796,39 @@ class RemoteHermesRepository(
         jobCall("删除任务失败", before) { deleteJob(id) }
     }
 
+    // ---- 诊断 ----
+
+    /** 最近的错误提示（带时间），导出诊断信息时附上。 */
+    private val recentErrors = java.util.ArrayDeque<String>()
+
+    private fun watchErrorsForDiagnostics() {
+        scope.launch {
+            _errors.collect { message ->
+                synchronized(recentErrors) {
+                    recentErrors.addLast("${java.time.Instant.ofEpochMilli(clock())} $message")
+                    while (recentErrors.size > 40) recentErrors.removeFirst()
+                }
+            }
+        }
+    }
+
+    override fun diagnosticsReport(): String = buildString {
+        val profile = _connections.value.firstOrNull { it.id == _activeConnectionId.value }
+        val caps = capabilities
+        appendLine("连接：${profile?.type ?: "无"}" + (profile?.let { " · 端口 ${it.port}" + (if (!it.sshUser.isNullOrBlank()) " · SSH 端口 ${it.sshPort}" else "") + (it.profile?.let { p -> " · Profile $p" } ?: "") } ?: ""))
+        appendLine("状态：${_connectionState.value}")
+        appendLine("SSH：${if (tunnel != null) "已连上" else "未使用"}")
+        appendLine("服务器版本：${caps?.version ?: "未知"}${if (caps?.probed == true) "（靠探测）" else ""}")
+        appendLine("服务器接口：${caps?.endpoints?.sorted()?.joinToString(", ") ?: "未知"}")
+        appendLine("App 功能：${_features.value.joinToString(", ")}")
+        appendLine("会话数：${_sessions.value.size}；进行中：${runs.size}")
+        appendLine("模型：${_models.value.size} 个；技能：${_skills.value.size} 个${_skillsError.value?.let { "（$it）" } ?: ""}；工具集：${_toolsets.value.size} 个")
+        appendLine()
+        appendLine("最近的错误：")
+        val errors = synchronized(recentErrors) { recentErrors.toList() }
+        if (errors.isEmpty()) appendLine("（没有）") else errors.forEach { appendLine(it) }
+    }
+
     // ---- 管理 ----
 
     private var adminFor: Pair<SshTunnel, HermesAdmin>? = null
@@ -1901,6 +1933,7 @@ class RemoteHermesRepository(
     }
 
     init {
+        watchErrorsForDiagnostics()
         watchSessionsForCache()
         _activeConnectionId.value?.let { connect(it) }
     }

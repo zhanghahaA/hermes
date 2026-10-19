@@ -1,5 +1,11 @@
 package com.hermes.mobile.ui.chat
 
+import androidx.compose.ui.focus.focusRequester
+
+import com.hermes.mobile.platform.SystemBackHandler
+
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -9,6 +15,8 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.unit.Density
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -82,7 +90,6 @@ import com.hermes.mobile.ui.components.NoInsets
 import com.hermes.mobile.ui.components.SessionAvatar
 import com.hermes.mobile.ui.components.dayLabel
 import com.hermes.mobile.ui.components.sameDay
-import com.hermes.mobile.ui.rememberPlaceholder
 import com.hermes.mobile.data.model.Quote
 import com.hermes.mobile.data.model.AppFeature
 import androidx.compose.runtime.CompositionLocalProvider
@@ -165,10 +172,12 @@ fun ChatScreen(
     var quote by remember(sessionId) { mutableStateOf<Quote?>(null) }
     var selection by remember { mutableStateOf<MessageSelection?>(null) }
     var highlightId by remember { mutableStateOf<String?>(null) }
+    var searching by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var matchCursor by remember { mutableIntStateOf(0) }
     val inputFocus = remember { FocusRequester() }
 
     val showMessage = LocalShowMessage.current
-    val placeholder = rememberPlaceholder()
     @Suppress("DEPRECATION")
     val clipboard = LocalClipboardManager.current
     val listState = rememberLazyListState()
@@ -176,6 +185,29 @@ fun ChatScreen(
 
     val rows = remember(items, phase, streaming, settings.showTyping) {
         buildRows(items, phase, streaming, settings.showTyping).asReversed()
+    }
+
+    // 会话内搜索：匹配的行号（列表是倒着的，0 是最新的），从最新的一条往前翻
+    val matches = remember(rows, searchQuery) {
+        val q = searchQuery.trim()
+        if (q.isEmpty()) emptyList()
+        else rows.indices.filter { i -> ((rows[i] as? ChatRow.Item)?.item as? ChatItem.Message)?.text?.contains(q, ignoreCase = true) == true }
+    }
+    LaunchedEffect(matches, matchCursor, searching) {
+        if (!searching) return@LaunchedEffect
+        val index = matches.getOrNull(matchCursor) ?: run { highlightId = null; return@LaunchedEffect }
+        highlightId = rows[index].key
+        listState.animateScrollToItem(index)
+    }
+    fun closeSearch() {
+        searching = false
+        searchQuery = ""
+        matchCursor = 0
+        highlightId = null
+    }
+    SystemBackHandler(enabled = searching) { gesture ->
+        gesture.collect { }
+        closeSearch()
     }
 
     /** 新选的附件：超过图片上限的丢掉，当前连接发不了的文件提示一下。 */
@@ -238,15 +270,25 @@ fun ChatScreen(
         contentWindowInsets = NoInsets,
         topBar = {
             GlassTopBar(backdrop) {
-                ChatTopBar(
+                if (searching) {
+                    SearchTopBar(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it; matchCursor = 0 },
+                        position = if (searchQuery.isBlank()) null else if (matches.isEmpty()) "无结果" else "${matchCursor + 1}/${matches.size}",
+                        canOlder = matchCursor < matches.size - 1,
+                        canNewer = matchCursor > 0,
+                        onOlder = { matchCursor++ },
+                        onNewer = { matchCursor-- },
+                        onClose = ::closeSearch,
+                    )
+                } else ChatTopBar(
                     session = session,
                     phase = phase,
                     onBack = onBack,
                     onModelClick = { if (session?.readOnly == false) showModels = true },
                     onRename = { showRename = true },
                     onFork = { repository.forkSession(sessionId, null)?.let(onOpenChat) },
-                    onSearch = { placeholder("会话内搜索") },
-                    onDiagnostics = { placeholder("查看原始事件（诊断模式）") },
+                    onSearch = { searching = true },
                     onDelete = {
                         repository.deleteSession(sessionId)
                         onBack()
@@ -267,6 +309,8 @@ fun ChatScreen(
                 if (items.isEmpty() && phase == RunPhase.Idle) {
                     NewChatHint(Modifier.align(Alignment.Center))
                 }
+                // 聊天字号：只放大消息列表里的字
+                CompositionLocalProvider(LocalDensity provides Density(density.density, density.fontScale * settings.fontScale)) {
                 MessageList(
                     rows = rows,
                     listState = listState,
@@ -292,6 +336,7 @@ fun ChatScreen(
                     onApprove = { item, choice -> repository.resolveApproval(sessionId, item.id, choice) },
                     onAnswer = { item, answer -> repository.answerClarify(sessionId, item.id, answer) },
                 )
+                }
             }
             Box(
                 Modifier
@@ -302,7 +347,7 @@ fun ChatScreen(
                 if (current != null && current.readOnly) {
                     ReadOnlyBar(backdrop, current.source.label, onFork = { repository.forkSession(sessionId, null)?.let(onOpenChat) })
                 } else if (AppFeature.SendMessages !in features) {
-                    NoticeBar(backdrop, "当前版本还不能发消息，下一阶段接入")
+                    NoticeBar(backdrop, "这台 Hermes 版本太旧，不能从 App 发消息（需要 /v1/runs 接口），升级 Hermes 后再试")
                 } else {
                     ChatInputBar(
                         backdrop = backdrop,
@@ -447,10 +492,8 @@ fun ChatScreen(
                     clipboard.setText(AnnotatedString(message.text))
                     showMessage("已复制")
                 }))
-                if (message.role == Role.Assistant && !readOnly) {
-                    add(SheetAction("重新生成", Icons.Rounded.Refresh, { repository.regenerate(sessionId, message.id) }))
-                }
-                add(SheetAction("从这里分叉", Icons.Rounded.AccountTree, { repository.forkSession(sessionId, message.id)?.let(onOpenChat) }))
+                // Hermes 只能分叉整个会话（复制全部记录）
+                add(SheetAction("分叉这个会话", Icons.Rounded.AccountTree, { repository.forkSession(sessionId, null)?.let(onOpenChat) }))
                 if (!readOnly) {
                     add(SheetAction("删除", Icons.Rounded.Delete, { repository.deleteItem(sessionId, message.id) }, destructive = true))
                 }
@@ -548,7 +591,6 @@ private fun ChatTopBar(
     onRename: () -> Unit,
     onFork: () -> Unit,
     onSearch: () -> Unit,
-    onDiagnostics: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
@@ -609,11 +651,6 @@ private fun ChatTopBar(
                             leadingIcon = { Icon(Icons.Rounded.AccountTree, null) },
                             onClick = { menu = false; onFork() },
                         )
-                        DropdownMenuItem(
-                            text = { Text("查看原始事件") },
-                            leadingIcon = { Icon(Icons.Rounded.BugReport, null) },
-                            onClick = { menu = false; onDiagnostics() },
-                        )
                         HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text("删除会话", color = MaterialTheme.colorScheme.error) },
@@ -625,6 +662,49 @@ private fun ChatTopBar(
             },
         )
     }
+}
+
+/** 会话内搜索时的顶栏：输入框 + 第几条/共几条 + 上一条、下一条。 */
+@Composable
+private fun SearchTopBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    position: String?,
+    canOlder: Boolean,
+    canNewer: Boolean,
+    onOlder: () -> Unit,
+    onNewer: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    TopAppBar(
+        colors = TransparentBarColors(),
+        navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "结束搜索") } },
+        title = {
+            androidx.compose.foundation.text.BasicTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { if (canOlder) onOlder() }),
+                decorationBox = { inner ->
+                    Box(contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) Text("搜索这个对话", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        inner()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+        },
+        actions = {
+            if (position != null) Text(position, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            IconButton(onClick = onOlder, enabled = canOlder) { Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "上一条（更早）") }
+            IconButton(onClick = onNewer, enabled = canNewer) { Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "下一条（更新）") }
+        },
+    )
 }
 
 @Composable

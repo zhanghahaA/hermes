@@ -255,3 +255,28 @@ private fun sniffImageMime(bytes: ByteArray): String = when {
     bytes.size > 11 && bytes[8] == 'W'.code.toByte() && bytes[9] == 'E'.code.toByte() -> "image/webp"
     else -> "image/jpeg"
 }
+
+/** App 的版本号（versionName）。 */
+@Composable
+fun appVersion(): String {
+    val context = LocalContext.current
+    return androidx.compose.runtime.remember {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }.getOrNull() ?: "?"
+    }
+}
+
+/** 用系统分享面板发出一段文字（例如诊断信息）。 */
+@Composable
+fun rememberShareText(): (title: String, text: String) -> Unit {
+    val context = LocalContext.current
+    return androidx.compose.runtime.remember {
+        { title, text ->
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_SUBJECT, title)
+                putExtra(android.content.Intent.EXTRA_TEXT, text)
+            }
+            context.startActivity(android.content.Intent.createChooser(send, title).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+}

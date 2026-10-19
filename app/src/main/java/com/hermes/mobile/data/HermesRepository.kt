@@ -84,7 +84,6 @@ interface HermesRepository {
     /** 消息里的文件准备好给系统打开：返回本机路径；拿不到（服务器上的文件但没有 SSH）返回 null。 */
     suspend fun fileForOpening(file: FileRef): String? = file.localPath?.takeIf { java.io.File(it).isFile }
     fun retryMessage(sessionId: String, itemId: String)
-    fun regenerate(sessionId: String, itemId: String)
     fun deleteItem(sessionId: String, itemId: String)
     fun stop(sessionId: String)
     fun resolveApproval(sessionId: String, itemId: String, choice: String)
@@ -106,6 +105,9 @@ interface HermesRepository {
     val toolsetsBusy: StateFlow<Set<String>>
     /** 重新读技能和工具集（打开“能力”页时）。 */
     suspend fun refreshCapabilities() = Unit
+
+    /** 给“导出诊断信息”用的一段文字：连接、服务器能力、最近的错误。不含 Key、密码、私钥。 */
+    fun diagnosticsReport(): String = "（演示数据）"
 
     // 管理
     /** 经 SSH 的管理功能（记忆、MCP、配置文件、日志）。连接没配 SSH 时为 null。 */

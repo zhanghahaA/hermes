@@ -1,5 +1,13 @@
 package com.hermes.mobile.ui.settings
 
+import androidx.compose.foundation.clickable
+
+import androidx.compose.runtime.setValue
+
+import androidx.compose.runtime.mutableStateOf
+
+import androidx.compose.runtime.remember
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,7 +58,8 @@ import com.hermes.mobile.ui.components.NoInsets
 import com.hermes.mobile.ui.components.StatusDot
 import com.hermes.mobile.ui.components.connectionLabel
 import com.hermes.mobile.ui.components.icon
-import com.hermes.mobile.ui.rememberPlaceholder
+import com.hermes.mobile.platform.appVersion
+import com.hermes.mobile.platform.rememberShareText
 import com.hermes.mobile.ui.glass.GlassTopBar
 import com.hermes.mobile.ui.glass.TransparentBarColors
 import com.hermes.mobile.ui.main.LocalBottomBarSpace
@@ -69,7 +78,10 @@ fun SettingsScreen(
     val connections by repository.connections.collectAsState()
     val activeId by repository.activeConnectionId.collectAsState()
     val state by repository.connectionState.collectAsState()
-    val placeholder = rememberPlaceholder()
+    val share = rememberShareText()
+    val version = appVersion()
+    var pickFont by remember { mutableStateOf(false) }
+    val activeProfile = connections.firstOrNull { it.id == activeId }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val backdrop = rememberLayerBackdrop()
     val bottomSpace = LocalBottomBarSpace.current
@@ -149,7 +161,7 @@ fun SettingsScreen(
                     onCheckedChange = { value -> repository.updateSettings { it.copy(dynamicColor = value) } },
                 )
                 GroupDivider()
-                SettingsRow(Icons.Rounded.TextFields, "聊天字号", "标准", onClick = { placeholder("聊天字号") })
+                SettingsRow(Icons.Rounded.TextFields, "聊天字号", fontLabel(settings.fontScale), onClick = { pickFont = true })
             }
 
             SettingsGroup("聊天") {
@@ -189,21 +201,18 @@ fun SettingsScreen(
             }
 
             SettingsGroup("高级") {
-                SettingsRow(Icons.Rounded.Person, "Hermes Profile", "default", onClick = { placeholder("Profile 切换") })
-                GroupDivider()
-                SwitchRow(
-                    Icons.Rounded.BugReport,
-                    "诊断模式",
-                    "在聊天菜单里查看原始事件，排查问题时用",
-                    checked = settings.diagnostics,
-                    onCheckedChange = { value -> repository.updateSettings { it.copy(diagnostics = value) } },
+                SettingsRow(
+                    Icons.Rounded.Person,
+                    "Hermes Profile",
+                    activeProfile?.let { (it.profile?.takeIf(String::isNotBlank) ?: "默认") + " · 在连接设置里修改" } ?: "还没有连接",
+                    onClick = { activeProfile?.let { onEditConnection(it.id) } },
                 )
                 GroupDivider()
                 SettingsRow(Icons.Rounded.RocketLaunch, "重新运行连接向导", onClick = onOpenWelcome)
             }
 
             SettingsGroup("关于") {
-                SettingsRow(Icons.Rounded.Info, "Hermes 移动版", "0.2.0 · 阶段 1（连接与会话）", trailing = null)
+                SettingsRow(Icons.Rounded.Info, "Hermes 移动版", "版本 $version", trailing = null)
                 GroupDivider()
                 SettingsRow(
                     Icons.Rounded.AutoAwesome,
@@ -213,9 +222,53 @@ fun SettingsScreen(
                 )
             }
 
-            TextButton(onClick = { placeholder("导出诊断日志") }, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp)) {
-                Text("导出诊断日志")
+            TextButton(
+                onClick = { share("Hermes 移动版诊断信息", "Hermes 移动版 $version\n" + repository.diagnosticsReport()) },
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp),
+            ) {
+                Text("导出诊断信息")
+            }
+            if (pickFont) {
+                FontScaleDialog(
+                    current = settings.fontScale,
+                    onPick = { scale -> repository.updateSettings { it.copy(fontScale = scale) }; pickFont = false },
+                    onDismiss = { pickFont = false },
+                )
             }
         }
     }
+}
+
+private val FontScales = listOf(0.9f to "小", 1f to "标准", 1.15f to "大", 1.3f to "特大")
+
+private fun fontLabel(scale: Float) = FontScales.minByOrNull { kotlin.math.abs(it.first - scale) }?.second ?: "标准"
+
+/** 聊天字号：只影响聊天里的消息，界面其它地方跟随系统字号。 */
+@Composable
+private fun FontScaleDialog(current: Float, onPick: (Float) -> Unit, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("聊天字号") },
+        text = {
+            Column {
+                FontScales.forEach { (scale, label) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onPick(scale) }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.RadioButton(selected = fontLabel(current) == label, onClick = { onPick(scale) })
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "$label · Hermes 回复的样子",
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = MaterialTheme.typography.bodyLarge.fontSize * scale),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+    )
 }

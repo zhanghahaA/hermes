@@ -1,5 +1,9 @@
 package com.hermes.mobile.ui
 
+import androidx.compose.ui.test.performTextReplacement
+
+import androidx.compose.ui.test.hasText
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -194,5 +198,24 @@ class ChatInteractionsTest {
         waitForIdle()
         onNodeWithContentDescription("复制").assertIsDisplayed()
         assertEquals(0, onAllNodesWithText("追问").fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun searchInChatFindsAndStepsThroughMatches() = withRepo { repo ->
+        show { ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {}) }
+        onNodeWithContentDescription("搜索").performClick()
+        waitForIdle()
+        onNode(hasSetTextAction() and hasText("搜索这个对话")).performTextInput("两")
+        waitForIdle()
+        onNodeWithText("1/2").assertIsDisplayed()
+        onNodeWithContentDescription("上一条（更早）").performClick()
+        waitForIdle()
+        onNodeWithText("2/2").assertIsDisplayed()
+        onNode(hasSetTextAction() and hasText("两")).performTextReplacement("不存在的词")
+        waitForIdle()
+        onNodeWithText("无结果").assertIsDisplayed()
+        onNodeWithContentDescription("结束搜索").performClick()
+        waitForIdle()
+        onNodeWithText("周末去杭州的行程").assertIsDisplayed()
     }
 }

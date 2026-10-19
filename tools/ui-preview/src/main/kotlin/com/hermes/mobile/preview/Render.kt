@@ -114,8 +114,7 @@ private val scenes = listOf(
                 null,
                 listOf(
                     SheetAction("复制", Icons.Rounded.ContentCopy, {}),
-                    SheetAction("重新生成", Icons.Rounded.Refresh, {}),
-                    SheetAction("从这里分叉", Icons.Rounded.AccountTree, {}),
+                    SheetAction("分叉这个会话", Icons.Rounded.AccountTree, {}),
                     SheetAction("删除", Icons.Rounded.Delete, {}, destructive = true),
                 ),
                 {},
