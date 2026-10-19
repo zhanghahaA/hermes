@@ -317,3 +317,21 @@ Hermes 在 Linux 主机上给每个 Profile 开一个 TigerVNC（Xvnc）+ Xfce �
 - 管理 bot 的脚本把 `HERMES_HOME` 设成 `get_default_hermes_root()`：当前用的可能是某个 bot 的目录，而新建要从主目录复制设置。
 - 删除：`hermes_cli.profiles.delete_profile(name, yes=True)`（先停它的 gateway、写墓碑再删目录；直接 `rm -rf` 会被正在跑的 gateway 重新建出来）。
 
+## 群聊（hosted rooms）
+
+Hermes 现在的群聊（电脑版叫 canonical group）完全在 gateway 进程里跑：房间和记录存在 `hosted_rooms` / `hosted_room_events` 表里，
+每一轮由 gateway 的 driver 调度（先回答 `@` 到的，没 `@` 就所有人；之后只有被别的 bot `@` 到的再答；最多 3 轮、10 条；回 `(pass)` 算不说话）。
+客户端只发消息、读记录。接口只有 gateway 的 `/api/ws` JSON-RPC（`groups.*`），API Server（8642）上没有。
+
+App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cli.gateway_client`）：
+
+- `discover_gateway_endpoint()` 找正在跑的 gateway（不会去启动它），经本机控制 socket 的 `session-ticket` 换一张一次性票据。
+  票据要 `scope: "host"`：只有 host 范围的连接才能把别的 Profile 拉进群（否则 `groups.create` 报 `permission_denied`：`only a host-scoped connection seats a served profile`）。
+- 连上 `/api/ws` 后，stdin 一行一个 `{id, method, params}`，stdout 一行一个 `{id, result | error}`，第一行是 `{ready}`。一条 SSH 通道一直开着，断了下次调用时重开。
+- 所有调用带 `profile: "default"`，房间建在默认 Profile 的库里；房间的主人是连接的身份（同一台机器的同一个用户，和电脑版一样），别的身份建的群看不到。
+- 用到的方法：`groups.list` / `create`（`room_id` 客户端生成的 UUID，成员 `{member_id, profile, handle, display_name, target:{kind:"local", profile}}`，默认 bot 的 handle 是 `hermes`）/
+  `state`（`driver_status.working`、`pending_actions`）/ `log`（`since_seq` 增量）/ `send`（`payload: {text, thread_id}`，和电脑版一样 `thread_id = event_id`）/
+  `stop` / `rename` / `disband` / `approve` / `retry` / `discard`。没有推送，App 有 bot 在回复时 1.5 秒读一次，平时 4 秒。
+- 显示：`message.user` / `message.member` 是消息；`turn.failed` / `turn.cancelled` / `turn.deferred` / `room.activity`（`status: bounded`）等显示成一行提示；其它事件不显示。
+- 每个 bot 在自己的 Profile 里有一个隐藏会话（标题 `Group: <room_id>`，来源 `bot_room`）跑它的回合。
+

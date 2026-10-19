@@ -84,6 +84,9 @@ fun ChatInputBar(
     onClearQuote: () -> Unit = {},
     focusRequester: FocusRequester = remember { FocusRequester() },
     placeholder: String = if (quote != null) "针对这段追问…" else "给 Hermes 发消息",
+    /** 左边圆按钮的图标和说明（默认是加附件；群聊里是 @ 某个 bot）。 */
+    attachIcon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Rounded.Add,
+    attachDescription: String = "添加图片",
 ) {
     val canSend = text.isNotBlank() || attachments.isNotEmpty()
     // 引用消失时继续显示上一次的内容，收起动画才不会空白
@@ -100,8 +103,8 @@ fun ChatInputBar(
     ) {
         GlassCircleButton(
             backdrop = backdrop,
-            icon = Icons.Rounded.Add,
-            contentDescription = "添加图片",
+            icon = attachIcon,
+            contentDescription = attachDescription,
             onClick = onAttach,
             size = 52.dp,
             tint = MaterialTheme.colorScheme.onSurface,

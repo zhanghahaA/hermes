@@ -205,3 +205,53 @@ sealed interface BotSwitch {
     data object NeedsAccess : BotSwitch
     data class Failed(val reason: String) : BotSwitch
 }
+
+// ---- 群聊（Hermes 的 hosted room：房间和每一轮都在 gateway 里跑，App 只发消息、读记录） ----
+
+/** 群里的一个 bot。[handle] 是 @ 它用的名字。 */
+data class RoomMember(val memberId: String, val profile: String, val handle: String, val displayName: String?)
+
+data class Room(
+    val id: String,
+    val name: String,
+    val members: List<RoomMember>,
+    /** 最新一条记录的序号，有新消息时变大。 */
+    val latestSeq: Long,
+    val updatedAt: Long,
+)
+
+/**
+ * 群聊记录里的一条。[kind] 是 Hermes 的事件类型（message.user / message.member / turn.failed / room.activity…）。
+ * 时间是毫秒。
+ */
+data class RoomEvent(
+    val seq: Long,
+    val kind: String,
+    val actorKind: String,
+    val actorId: String,
+    val actorProfile: String?,
+    val actorName: String?,
+    val text: String,
+    val threadId: String?,
+    val memberId: String?,
+    val status: String?,
+    val reason: String?,
+    val attachments: Int,
+    val createdAt: Long,
+) {
+    val isMessage: Boolean get() = kind == "message.user" || kind == "message.member" || kind == "message"
+    val fromUser: Boolean get() = kind == "message.user" || actorKind == "user"
+}
+
+/** 群里等人处理的事：批准一个操作、重试或放弃一轮失败的回复。 */
+data class RoomAction(
+    val kind: String,
+    val memberId: String,
+    val taskId: String,
+    val generation: Long,
+    val requestId: String?,
+    val description: String?,
+)
+
+/** 群聊这一刻的状态：gateway 的群聊服务在不在跑、有没有 bot 正在回复、有什么要你处理。 */
+data class RoomStatus(val room: Room, val driverRunning: Boolean, val working: Boolean, val actions: List<RoomAction>)

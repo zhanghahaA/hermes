@@ -2,7 +2,14 @@ package com.hermes.mobile.ui.bots
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedTextField
+import com.hermes.mobile.data.model.RoomMember
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -86,6 +93,8 @@ fun BotsScreen(
     onShowChats: () -> Unit,
     /** 编辑 bot（null 是新建）。 */
     onEditBot: (String?) -> Unit = {},
+    /** 打开一个群聊。 */
+    onOpenRoom: (String) -> Unit = {},
 ) {
     val roster by repository.bots.collectAsState()
     val active by repository.activeBot.collectAsState()
@@ -97,11 +106,17 @@ fun BotsScreen(
     var message by remember { mutableStateOf<String?>(null) }
     var enableFor by remember { mutableStateOf<Bot?>(null) }
     var deleteFor by remember { mutableStateOf<Bot?>(null) }
+    val rooms by repository.rooms.collectAsState()
+    val roomsError by repository.roomsError.collectAsState()
+    var newRoom by remember { mutableStateOf(false) }
     val backdrop = rememberLayerBackdrop()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val bottomSpace = LocalBottomBarSpace.current
 
-    LaunchedEffect(Unit) { repository.refreshBots() }
+    LaunchedEffect(Unit) {
+        launch { repository.refreshBots() }
+        launch { repository.refreshRooms() }
+    }
 
     /** 换到 [bot]，然后 [then]（打开对话或去聊天列表）。 */
     fun open(bot: Bot, then: () -> Unit) {
@@ -134,6 +149,7 @@ fun BotsScreen(
                             onClick = {
                                 scope.launch {
                                     refreshing = true
+                                    launch { repository.refreshRooms() }
                                     repository.refreshBots()
                                     refreshing = false
                                 }
@@ -179,6 +195,29 @@ fun BotsScreen(
                         )
                     }
                 }
+                // 群聊：几个 bot 在一个房间里讨论（电脑版的群聊，同一份）
+                val roomList = rooms.orEmpty()
+                if (hasSsh && (bots.size >= 2 || roomList.isNotEmpty())) {
+                    item(key = "rooms-header") {
+                        SectionTitle("群聊") {
+                            TextButton(onClick = { newRoom = true }, enabled = bots.size >= 2) { Text("新建群聊") }
+                        }
+                    }
+                    items(roomList, key = { "room-" + it.id }) { room ->
+                        RoomRow(repository, room, bots, onOpen = { onOpenRoom(room.id) })
+                    }
+                    if (roomList.isEmpty()) {
+                        item(key = "rooms-empty") {
+                            Text(
+                                roomsError ?: if (rooms == null) "正在读群聊…" else "还没有群聊。拉几个 bot 进群，它们会一起讨论你的问题。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (roomsError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                    }
+                    if (bots.isNotEmpty()) item(key = "bots-header") { SectionTitle("Bot") }
+                }
                 items(bots, key = { it.name }) { bot ->
                     BotRow(
                         repository = repository,
@@ -222,6 +261,19 @@ fun BotsScreen(
         )
     }
 
+    if (newRoom) {
+        NewRoomDialog(
+            repository = repository,
+            bots = roster?.bots.orEmpty(),
+            multiplexOff = roster?.multiplex != true,
+            onDismiss = { newRoom = false },
+            onCreated = { id ->
+                newRoom = false
+                onOpenRoom(id)
+            },
+        )
+    }
+
     deleteFor?.let { bot ->
         AlertDialog(
             onDismissRequest = { deleteFor = null },
@@ -252,6 +304,115 @@ fun BotsScreen(
         )
     }
 }
+
+@Composable
+private fun SectionTitle(text: String, action: (@Composable () -> Unit)? = null) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+        action?.invoke()
+    }
+}
+
+/** 新建群聊：起个名字，勾 2～6 个 bot。 */
+@Composable
+private fun NewRoomDialog(
+    repository: HermesRepository,
+    bots: List<Bot>,
+    multiplexOff: Boolean,
+    onDismiss: () -> Unit,
+    onCreated: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var picked by remember { mutableStateOf(emptySet<String>()) }
+    var running by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val chosen = bots.filter { it.name in picked }
+    val autoName = chosen.joinToString("、") { it.label }.take(60)
+    AlertDialog(
+        onDismissRequest = { if (!running) onDismiss() },
+        title = { Text("新建群聊") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(200) },
+                    label = { Text("群名") },
+                    placeholder = { Text(autoName.ifBlank { "例如：周末出游" }) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("拉谁进群（2～6 个）", style = MaterialTheme.typography.labelLarge)
+                Column(
+                    Modifier
+                        .heightIn(max = 280.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    bots.forEach { bot ->
+                        val on = bot.name in picked
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = on || picked.size < 6) { picked = if (on) picked - bot.name else picked + bot.name }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = on, onCheckedChange = null)
+                            Spacer(Modifier.width(8.dp))
+                            BotAvatar(repository, bot, 32.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(bot.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text("@" + roomHandle(bot), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                if (multiplexOff) {
+                    Text(
+                        "群里的 bot 都由电脑上的 gateway 同时服务，要先打开 multiplex_profiles：在列表里点任意一个别的 bot，按提示开通手机访问时会一起打开。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    "在群里发一条消息，bot 们会依次回答；@ 某个 bot 就只让它回答，它们之间互相 @ 会再接着聊（最多 3 轮）。电脑版里也能看到这个群。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !running && picked.size in 2..6,
+                onClick = {
+                    val api = repository.roomApi() ?: run { error = "群聊要经 SSH，给这个连接配上 SSH 后再试"; return@TextButton }
+                    running = true
+                    error = null
+                    scope.launch {
+                        try {
+                            val members = chosen.map { RoomMember(it.name, it.name, roomHandle(it), it.label) }
+                            val room = api.create(name.ifBlank { autoName }, members)
+                            repository.refreshRooms()
+                            onCreated(room.id)
+                        } catch (e: com.hermes.mobile.data.remote.AdminException) {
+                            error = e.message
+                        }
+                        running = false
+                    }
+                },
+            ) { Text(if (running) "正在建…" else "建群") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !running) { Text("取消") } },
+    )
+}
+
+/** 群里 @ 这个 bot 用的名字，和电脑版一样：默认 bot 叫 hermes，其它就是 Profile 名。 */
+internal fun roomHandle(bot: Bot): String = if (bot.isDefault || bot.name == "default") "hermes" else bot.name
 
 @Composable
 private fun Notice(text: String) {

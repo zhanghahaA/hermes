@@ -69,6 +69,7 @@ fun MainScreen(
     onOpenWelcome: () -> Unit,
     onOpenAdmin: (AdminPage) -> Unit = {},
     onEditBot: (String?) -> Unit = {},
+    onOpenRoom: (String) -> Unit = {},
     initialTab: MainTab = MainTab.Chats,
 ) {
     var tabIndex by rememberSaveable { mutableIntStateOf(initialTab.ordinal) }
@@ -123,6 +124,7 @@ fun MainScreen(
                             onOpenChat = onOpenChat,
                             onShowChats = { tabIndex = MainTab.Chats.ordinal },
                             onEditBot = onEditBot,
+                            onOpenRoom = onOpenRoom,
                         )
                         MainTab.Jobs -> JobsScreen(repository = repository, onEditJob = onEditJob)
                         MainTab.Capabilities -> CapabilitiesScreen(

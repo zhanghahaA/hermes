@@ -151,6 +151,12 @@ interface HermesRepository {
     suspend fun saveBot(edit: com.hermes.mobile.data.model.BotEdit, create: Boolean): Result<com.hermes.mobile.data.model.BotSaved> = Result.failure(IllegalStateException("不支持"))
     /** 删除 bot；正在用它时先换回默认 bot。返回错误或 null。 */
     suspend fun deleteBot(name: String): String? = "不支持"
+    /** 群聊列表（多个 bot 在一个房间里讨论）；读不到是 null。 */
+    val rooms: StateFlow<List<com.hermes.mobile.data.model.Room>?> get() = kotlinx.coroutines.flow.MutableStateFlow(null)
+    val roomsError: StateFlow<String?> get() = kotlinx.coroutines.flow.MutableStateFlow(null)
+    suspend fun refreshRooms() = Unit
+    /** 群聊的操作（经 SSH 连 gateway）；没有 SSH 时为 null。 */
+    fun roomApi(): com.hermes.mobile.data.remote.RoomApi? = null
     /** gateway 状态（`/health/detailed`，不需要 SSH）。 */
     suspend fun gatewayStatus(): com.hermes.mobile.data.model.GatewayStatus? = null
 

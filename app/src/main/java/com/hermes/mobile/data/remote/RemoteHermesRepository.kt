@@ -206,6 +206,11 @@ class RemoteHermesRepository(
         _archivedLocal.value = cache?.archived(scope0).orEmpty()
         _activeBot.value = botOf(id) ?: baseBot(profile)
         if (_bots.value == null) _bots.value = cache?.bots(id)
+        // 群聊跟着连接（同一台电脑）走：换了别的连接就清空，切 bot 不用
+        if (roomsConnection != id) {
+            _rooms.value = null
+            roomsConnection = id
+        }
         chats.value = emptyMap()
         connectJob = scope.launch {
             try {
@@ -2194,6 +2199,36 @@ class RemoteHermesRepository(
             null
         } catch (e: AdminException) {
             e.message ?: "删除失败"
+        }
+    }
+
+    // ---- 群聊 ----
+
+    private val _rooms = MutableStateFlow<List<com.hermes.mobile.data.model.Room>?>(null)
+    override val rooms: StateFlow<List<com.hermes.mobile.data.model.Room>?> = _rooms.asStateFlow()
+    private val _roomsError = MutableStateFlow<String?>(null)
+    override val roomsError: StateFlow<String?> = _roomsError.asStateFlow()
+    private var roomClientFor: Pair<SshTunnel, RoomClient>? = null
+    private var roomsConnection: String? = null
+
+    override fun roomApi(): RoomApi? {
+        val t = tunnel ?: return null
+        roomClientFor?.let { (tt, c) -> if (tt === t) return c else c.close() }
+        // 群聊脚本自己站在 Hermes 主目录上，和当前用哪个 bot 无关，所以一条 SSH 隧道一个就够
+        val admin = admin() ?: return null
+        return RoomClient { admin.openRooms() }.also { roomClientFor = t to it }
+    }
+
+    override suspend fun refreshRooms() {
+        val api = roomApi() ?: run {
+            _roomsError.value = "群聊要经 SSH 连 Hermes gateway，给这个连接配上 SSH 后再试"
+            return
+        }
+        try {
+            _rooms.value = api.rooms()
+            _roomsError.value = null
+        } catch (e: AdminException) {
+            _roomsError.value = e.message
         }
     }
 

@@ -88,6 +88,8 @@ interface AdminApi {
     suspend fun handBackScreen(viewerId: String?): ScreenLease = throw AdminException("不支持")
     /** 打开屏幕的 RFB（VNC）字节流。 */
     suspend fun openScreen(): com.hermes.mobile.data.ssh.RemoteStream = throw AdminException("不支持")
+    /** 开一条到 gateway 群聊接口（groups.* JSON-RPC）的通道，一行请求一行回复，见 [RoomClient]。 */
+    suspend fun openRooms(): com.hermes.mobile.data.ssh.RemoteStream = throw AdminException("不支持")
 }
 
 /**
@@ -345,6 +347,17 @@ class HermesAdmin(private val shell: RemoteShell, val profileName: String?) : Ad
         val dir = home()
         // 桥接脚本从 -c 传进去：stdin 要留给画面数据
         val command = hermesPython(dir, BridgeScript, emptyList())
+        try {
+            shell.openStream(command)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw AdminException("SSH 打不开通道：${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    override suspend fun openRooms(): com.hermes.mobile.data.ssh.RemoteStream = withContext(Dispatchers.IO) {
+        val command = hermesPython(home(), GroupBridgeScript, emptyList())
         try {
             shell.openStream(command)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1107,6 +1120,79 @@ if op == "configure":
     done({"applied": applied})
 
 fail("unknown op " + op)
+""".trimIndent()
+
+        /**
+         * 群聊的桥：群聊（hosted rooms）在 gateway 进程里跑，只有 /api/ws 的 groups.* JSON-RPC 能用。
+         * 桥用 Hermes 自己的 gateway_client：经本机控制 socket 换一张 host 范围的一次性票据，连上后
+         * stdin 一行一个请求 {id, method, params}，stdout 一行一个回复 {id, result | error}；第一行是 {ready}。
+         */
+        val GroupBridgeScript = """
+import asyncio, json, os, sys
+# 群聊在 gateway 里跑（hosted rooms），只能经它的 /api/ws JSON-RPC 访问：
+# 用本机控制 socket 换一张一次性票据（和电脑版、TUI 一样），连上后把 stdin 的每行请求转发过去，回复写到 stdout。
+try:
+    from hermes_constants import get_default_hermes_root
+    os.environ["HERMES_HOME"] = str(get_default_hermes_root())
+except Exception:
+    pass
+out = os.fdopen(os.dup(1), "w", encoding="utf-8")
+sys.stdout = sys.stderr
+
+def emit(obj):
+    out.write(json.dumps(obj, ensure_ascii=False, default=str) + "\n")
+    out.flush()
+
+async def main():
+    try:
+        from hermes_constants import get_hermes_home
+        from hermes_cli.gateway_runtime import discover_gateway_endpoint, attachable, gateway_profile_home
+        from hermes_cli.gateway_client import GatewayClient, _session_ticket, gateway_ws_target
+        from websockets.asyncio.client import connect
+    except Exception as exc:
+        emit({"ready": False, "error": "这个版本的 Hermes 不支持群聊（%s）" % exc})
+        return
+    home = gateway_profile_home(get_hermes_home())
+    found = await asyncio.to_thread(discover_gateway_endpoint, home)
+    if not attachable(found):
+        emit({"ready": False, "error": "Hermes gateway 没在运行（%s）" % (found.reason_code or found.state)})
+        return
+    try:
+        # host 范围：房间里能坐这个 gateway 服务的所有 bot（电脑版也是这样连的）
+        ticket = await asyncio.to_thread(_session_ticket, home, found.endpoint, scope="host")
+        url, protocols = gateway_ws_target(found.endpoint, ticket)
+        ws_cm = connect(url, subprotocols=protocols, open_timeout=10, max_size=8 * 1024 * 1024, proxy=None)
+        ws = await ws_cm.__aenter__()
+    except Exception as exc:
+        emit({"ready": False, "error": "连不上 Hermes gateway：%s" % exc})
+        return
+    async with GatewayClient(ws) as client:
+        emit({"ready": True})
+        loop = asyncio.get_running_loop()
+        reader = asyncio.StreamReader()
+        await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
+
+        async def handle(req):
+            rid = req.get("id")
+            try:
+                result = await client.rpc(req["method"], **(req.get("params") or {}))
+                emit({"id": rid, "result": result})
+            except Exception as exc:
+                emit({"id": rid, "error": {"reason": str(getattr(exc, "reason", None) or exc),
+                                           "data": getattr(exc, "data", None)}})
+
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+            try:
+                req = json.loads(line)
+            except ValueError:
+                continue
+            asyncio.ensure_future(handle(req))
+    await ws_cm.__aexit__(None, None, None)
+
+asyncio.run(main())
 """.trimIndent()
 
         /** 读出临时文件里的脚本，删掉文件，当作 __main__ 运行。 */

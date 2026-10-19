@@ -533,6 +533,72 @@ class OpenSshIT {
         }
     }
 
+    /** 真实 Hermes：经 SSH 上的桥连 gateway 的群聊（hosted room）：建群（默认 bot + testbot）、发消息、两个 bot 都回答、改名、解散。 */
+    @Test
+    fun groupChatOverRealSsh() {
+        if (dir == null || key == null) {
+            println("跳过：没有设置 HERMES_IT_SSH_DIR / HERMES_IT_KEY")
+            return
+        }
+        val tunnel = com.hermes.mobile.data.ssh.SshTunnel(
+            "127.0.0.1", sshPort, user, com.hermes.mobile.data.ssh.SshAuth.Key(File(dir, "user_ed25519").readText()), 8642, null, {},
+        )
+        try {
+            tunnel.connect()
+            val admin = com.hermes.mobile.data.remote.HermesAdmin(tunnel, null)
+            val rooms = com.hermes.mobile.data.remote.RoomClient { admin.openRooms() }
+            runBlocking {
+                if (admin.bots().bots.none { it.name == "testbot" }) {
+                    println("跳过：测试 Hermes 里没有 testbot")
+                    return@runBlocking
+                }
+                val before = rooms.rooms().size
+                val room = rooms.create(
+                    "IT group",
+                    listOf(
+                        com.hermes.mobile.data.model.RoomMember("default", "default", "hermes", "Hermes"),
+                        com.hermes.mobile.data.model.RoomMember("testbot", "testbot", "testbot", "Testbot"),
+                    ),
+                )
+                try {
+                    assertEquals(before + 1, rooms.rooms().size, "列表里多了这个群")
+                    assertEquals(listOf("hermes", "testbot"), room.members.map { it.handle })
+                    rooms.send(room.id, "hello both of you")
+                    val events = mutableListOf<com.hermes.mobile.data.model.RoomEvent>()
+                    withTimeout(120_000) {
+                        while (events.none { it.kind == "room.activity" }) {
+                            val log = rooms.log(room.id, events.lastOrNull()?.seq ?: 0)
+                            events += log.events
+                            if (log.events.isEmpty()) kotlinx.coroutines.delay(1500)
+                        }
+                    }
+                    events.forEach { println("${it.seq} ${it.kind} ${it.actorId}: ${it.text.take(60)}") }
+                    val user = events.first { it.kind == "message.user" }
+                    assertTrue(user.fromUser)
+                    assertEquals("hello both of you", user.text)
+                    val speakers = events.filter { it.kind == "message.member" }.map { it.actorProfile }.toSet()
+                    assertEquals(setOf("default", "testbot"), speakers, "没 @ 谁时两个 bot 都回答")
+                    val status = rooms.status(room.id)
+                    assertTrue(status.driverRunning)
+                    assertFalse(status.working, "讨论结束了")
+                    rooms.rename(room.id, "IT group 2")
+                    assertEquals("IT group 2", rooms.status(room.id).room.name)
+                    // 只读新记录
+                    assertTrue(rooms.log(room.id, events.last().seq).events.none { it.isMessage })
+                } finally {
+                    rooms.disband(room.id)
+                }
+                assertTrue(rooms.rooms().none { it.id == room.id }, "解散后列表里没有了")
+                val bad = runCatching { rooms.status("no-such-room") }.exceptionOrNull()
+                println("不存在的群：${bad?.message}")
+                assertTrue(bad is com.hermes.mobile.data.remote.AdminException)
+            }
+            rooms.close()
+        } finally {
+            tunnel.close()
+        }
+    }
+
     /** 真实 Hermes：换成 testbot 聊天（它自己的 key、/p/testbot），在它的 Bot Chat 里收到回复，再换回默认 bot。 */
     @Test
     fun chatWithAnotherBotOverRealSsh() {

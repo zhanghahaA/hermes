@@ -380,6 +380,14 @@ class FakeHermesRepository(
         return Result.success(com.hermes.mobile.data.model.BotSaved.Done(edit.name))
     }
 
+    private val fakeRooms = FakeRoomApi()
+    private val _rooms = MutableStateFlow<List<com.hermes.mobile.data.model.Room>?>(null)
+    override val rooms: StateFlow<List<com.hermes.mobile.data.model.Room>?> = _rooms
+    override suspend fun refreshRooms() {
+        _rooms.value = fakeRooms.rooms()
+    }
+    override fun roomApi(): com.hermes.mobile.data.remote.RoomApi = fakeRooms
+
     override suspend fun deleteBot(name: String): String? {
         if (_activeBot.value == name) _activeBot.value = "default"
         _bots.update { r -> r?.copy(bots = r.bots.filterNot { it.name == name }) }
