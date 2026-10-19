@@ -48,4 +48,46 @@ class MarkdownTest {
         val names = doc.all().map { it::class.simpleName }.toSet()
         assertTrue("TableBlock" in names && "Strikethrough" in names && "OrderedList" in names && "BulletList" in names && "TaskListItemMarker" in names, names.toString())
     }
+
+    /** 截图里的回复：全角竖线的“表格”、没有分隔行，温度用 ~ 写范围。 */
+    private val weather = """
+        这是结合官方预报和两个模型对过之后的结果：
+        日期 ｜ 天气 ｜ 气温 ｜ 风 ｜ 空气
+        10/19 周一 ｜ 阴转多云 ｜ 13~22°C ｜ 南风2级 ｜ AQI 54 良
+        10/20 周二 ｜ 小雨 ｜ 13~21°C ｜ 东南风2级 ｜ AQI 58 良
+        10/21 周三 ｜ 晴 ｜ 8~18°C ｜ 东风2级 ｜ AQI 45 优
+
+        这几处不太一致的地方，我得如实说一下。
+    """.trimIndent()
+
+    @Test
+    fun singleTildeIsNotStrikethrough() {
+        val names = parseMarkdown("13~22°C ｜ 南风 13~21°C").all().map { it::class.simpleName }.toList()
+        assertFalse("Strikethrough" in names, names.toString())
+        assertTrue("13~22°C" in literal("温度 13~22°C，明天 13~21°C"))
+        assertTrue("Strikethrough" in parseMarkdown("~~划掉~~").all().map { it::class.simpleName }.toList())
+    }
+
+    @Test
+    fun looseTablesBecomeTables() {
+        val doc = parseMarkdown(weather)
+        val cells = doc.all().filterIsInstance<org.commonmark.ext.gfm.tables.TableCell>()
+            .map { c -> c.all().filterIsInstance<Text>().joinToString("") { it.literal } }.toList()
+        assertEquals(20, cells.size, cells.toString())
+        assertEquals(listOf("日期", "天气", "气温", "风", "空气"), cells.take(5))
+        assertEquals("13~22°C", cells[7])
+        assertTrue("这是结合官方预报" in literal(weather) && "如实说一下" in literal(weather), "表格前后的话还在")
+    }
+
+    @Test
+    fun ordinaryTextWithPipesIsNotATable() {
+        assertEquals("a | b", looseTables("a | b"))
+        assertEquals("用 grep | wc 数一下\n然后看结果", looseTables("用 grep | wc 数一下\n然后看结果"))
+        // 代码块里的竖线不动
+        val code = "```\na | b | c\nd | e | f\n```"
+        assertEquals(code, looseTables(code))
+        // 规范的表格照常
+        val gfm = "| a | b |\n|---|---|\n| 1 | 2 |"
+        assertEquals(1, parseMarkdown(gfm).all().filterIsInstance<org.commonmark.ext.gfm.tables.TableBlock>().count())
+    }
 }

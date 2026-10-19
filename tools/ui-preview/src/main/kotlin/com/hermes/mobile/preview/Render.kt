@@ -174,6 +174,13 @@ private val scenes = listOf(
             }
         }
     },
+    Scene("33b-markdown-weather") { _, _ ->
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(12.dp)) {
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                com.hermes.mobile.ui.components.MarkdownText(WeatherSample, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+            }
+        }
+    },
     Scene("34-md-file-preview") { _, _ ->
         com.hermes.mobile.ui.chat.TextFilePreview("周报.md", MarkdownSample, onDismiss = {}, onShare = {})
     },
@@ -388,4 +395,18 @@ private val MarkdownSample = """
 ```bash
 nslookup baidu.com 223.5.5.5
 ```
+""".trimIndent()
+
+private val WeatherSample = """
+这是结合官方预报和两个模型对过之后的结果：
+日期 ｜ 天气 ｜ 气温 ｜ 风 ｜ 空气
+10/19 周一 ｜ 阴转多云 ｜ 13~22°C ｜ 南风2级 ｜ AQI 54 良
+10/20 周二 ｜ 小雨 ｜ 13~21°C ｜ 东南风2级 ｜ AQI 58 良
+10/21 周三 ｜ 晴 ｜ 8~18°C ｜ 东风2级 ｜ AQI 45 优
+10/22 周四 ｜ 小雨 ｜ 9~16°C ｜ 南风2级 ｜ AQI 66 良
+10/23 周五 ｜ 晴 ｜ 11~19°C ｜ 南风2级 ｜ AQI 70 良
+
+这几处不太一致的地方，我得如实说一下，不糊弄你：
+
+10/20 的小雨，官方报了，但 open-meteo 给 0 mm、降水概率 4%，met.no 也是 0 mm。
 """.trimIndent()

@@ -115,10 +115,17 @@ private class MdContext(
 )
 
 private val parser: Parser = Parser.builder()
-    .extensions(listOf(TablesExtension.create(), StrikethroughExtension.create(), TaskListItemsExtension.create()))
+    .extensions(
+        listOf(
+            TablesExtension.create(),
+            // 只认 ~~删除线~~：单个 ~ 在中文里常用来写范围（13~22°C），不能当删除线
+            StrikethroughExtension.builder().requireTwoTildes(true).build(),
+            TaskListItemsExtension.create(),
+        ),
+    )
     .build()
 
-internal fun parseMarkdown(text: String): Node = parser.parse(cjkFriendly(text))
+internal fun parseMarkdown(text: String): Node = parser.parse(cjkFriendly(looseTables(text)))
 
 private fun Node.children(): Sequence<Node> = generateSequence(firstChild) { it.next }
 
@@ -228,7 +235,7 @@ private fun Table(table: TableBlock, ctx: MdContext) {
                             modifier = Modifier
                                 .then(if (header) Modifier.background(headerBg) else Modifier)
                                 .border(0.5.dp, border)
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
                         )
                     }
                     repeat(columns - row.children().count()) { Box(Modifier.border(0.5.dp, border)) }
@@ -338,6 +345,72 @@ private fun CodeBlock(code: String, language: String?, color: Color, onCopy: ((S
                 .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
         )
     }
+}
+
+// ---- 不规范的表格 ----
+
+private val tableSeparatorCell = Regex("""^\s*:?-{1,}:?\s*$""")
+
+private fun tableCells(line: String): List<String>? {
+    val normalized = line.replace('｜', '|').trim()
+    if ('|' !in normalized) return null
+    val cells = normalized.removePrefix("|").removeSuffix("|").split('|').map { it.trim() }
+    return cells.takeIf { it.size >= 2 }
+}
+
+private fun isSeparatorRow(cells: List<String>) = cells.all { tableSeparatorCell.matches(it) }
+
+/**
+ * 模型常把表格写成“用竖线（常是全角的 ｜）隔开的几行字”，没有 `|---|` 分隔行，Markdown 不认，竖线原样露出来。
+ * 连续几行列数相同（至少 3 列两行，或 2 列三行）就当表格：竖线换成半角，补上分隔行，前后空一行。
+ * 代码块里的不动。
+ */
+internal fun looseTables(source: String): String {
+    if ('|' !in source && '｜' !in source) return source
+    val lines = source.lines()
+    val out = ArrayList<String>(lines.size + 8)
+    var inFence = false
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val trimmed = line.trimStart()
+        if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+            inFence = !inFence
+            out += line
+            i++
+            continue
+        }
+        val first = if (inFence) null else tableCells(line)
+        if (first == null) {
+            out += line
+            i++
+            continue
+        }
+        // 往下找列数相同的连续行
+        var end = i + 1
+        while (end < lines.size) {
+            val cells = tableCells(lines[end]) ?: break
+            if (cells.size != first.size) break
+            end++
+        }
+        val rows = (i until end).map { tableCells(lines[it])!! }
+        val hasSeparator = rows.size >= 2 && isSeparatorRow(rows[1])
+        val bodyRows = rows.size - 1 - (if (hasSeparator) 1 else 0)
+        val isTable = !isSeparatorRow(rows[0]) && bodyRows >= 1 && (first.size >= 3 || bodyRows >= 2)
+        if (!isTable) {
+            out += line
+            i++
+            continue
+        }
+        if (out.isNotEmpty() && out.last().isNotBlank()) out += ""
+        fun row(cells: List<String>) = "| " + cells.joinToString(" | ") { it.ifEmpty { " " } } + " |"
+        out += row(rows[0])
+        out += row(List(first.size) { "---" })
+        rows.drop(if (hasSeparator) 2 else 1).forEach { out += row(it) }
+        if (end < lines.size && lines[end].isNotBlank()) out += ""
+        i = end
+    }
+    return out.joinToString("\n")
 }
 
 // ---- 中文友好的粗体 ----
