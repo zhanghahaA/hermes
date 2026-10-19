@@ -48,9 +48,9 @@ class HermesAdminTest {
     @Test
     fun memoryIsSplitAndLimitsComeFromConfig() = runBlocking<Unit> {
         val shell = FakeShell()
-        shell.files["/home/u/.hermes/memories/USER.md"] = "叫小张\n§\n住杭州\n"
+        shell.files["/home/u/.hermes/memories/USER.md"] = "叫小林\n§\n住苏州\n"
         val books = HermesAdmin(shell, null).memory()
-        assertEquals(listOf("叫小张", "住杭州"), books.first { it.target == MemoryTarget.User }.entries)
+        assertEquals(listOf("叫小林", "住苏州"), books.first { it.target == MemoryTarget.User }.entries)
         assertEquals(50, books.first { it.target == MemoryTarget.User }.charLimit)
         assertEquals(false, books.first { it.target == MemoryTarget.User }.enabled)
         assertEquals(emptyList(), books.first { it.target == MemoryTarget.Notes }.entries, "文件不存在就是空的")
@@ -60,8 +60,8 @@ class HermesAdminTest {
     fun memoryIsWrittenAtomicallyAndRespectsTheLimit() = runBlocking<Unit> {
         val shell = FakeShell()
         val admin = HermesAdmin(shell, null)
-        admin.saveMemory(MemoryTarget.User, listOf(" 叫小张 ", "", "住杭州"))
-        assertEquals("叫小张\n§\n住杭州", shell.files["/home/u/.hermes/memories/USER.md"])
+        admin.saveMemory(MemoryTarget.User, listOf(" 叫小林 ", "", "住苏州"))
+        assertEquals("叫小林\n§\n住苏州", shell.files["/home/u/.hermes/memories/USER.md"])
         assertTrue(shell.commands.any { it.startsWith("mkdir -p '/home/u/.hermes/memories'") })
         val e = assertFailsWith<AdminException> { admin.saveMemory(MemoryTarget.User, listOf("很长".repeat(30))) }
         assertTrue("上限 50" in e.message!!, e.message)

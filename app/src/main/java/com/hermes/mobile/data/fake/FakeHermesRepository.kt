@@ -293,10 +293,10 @@ class FakeHermesRepository(
     override val skillsError: StateFlow<String?> = MutableStateFlow(null)
     private val _groups = MutableStateFlow(
         com.hermes.mobile.data.model.SessionGrouping(
-            groups = listOf("downloads", "家庭网络", "默认"),
-            of = mapOf("s-1" to "家庭网络", "s-3" to "downloads", "s-5" to "downloads"),
+            groups = listOf("读书笔记", "家庭网络", "默认"),
+            of = mapOf("s-1" to "家庭网络", "s-3" to "读书笔记", "s-5" to "读书笔记"),
             projects = listOf(
-                com.hermes.mobile.data.model.ProjectInfo("p1", "downloads", "/home/me/Downloads"),
+                com.hermes.mobile.data.model.ProjectInfo("p1", "读书笔记", "/home/me/notes"),
                 com.hermes.mobile.data.model.ProjectInfo("p2", "家庭网络", "/home/me/homelab"),
             ),
         ),

@@ -12,7 +12,7 @@ class FakeAdmin(private val onProjectCreated: (String, String) -> Unit = { _, _ 
         MemoryBook(
             MemoryTarget.User,
             listOf(
-                "用户叫小张，在杭州，习惯用中文交流，回答尽量简短。",
+                "用户叫小林，在苏州，习惯用中文交流，回答尽量简短。",
                 "家里的 NAS 是群晖 DS920+，IP 192.168.1.20，用户名 admin。",
                 "早上 8 点前不要发通知。",
             ),
