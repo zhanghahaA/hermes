@@ -185,6 +185,8 @@ private object ScreenLeases {
 
 @Composable
 private fun LiveScreen(admin: AdminApi, initial: BotScreenStatus, padding: PaddingValues) {
+    // 手指要在画面上拖，不能被当成“右滑返回”；返回用左上角或系统返回手势
+    com.hermes.mobile.ui.navigation.BlockSwipeBack()
     val showMessage = LocalShowMessage.current
     val scope = rememberCoroutineScope()
     // 每次打开页面一个查看者 id（转屏不变）；Hermes 只公开它的哈希，用来认出“是不是我接管的”
@@ -269,7 +271,8 @@ private fun LiveScreen(admin: AdminApi, initial: BotScreenStatus, padding: Paddi
                 .fillMaxWidth()
                 .background(Color(0xFF1B1B1F)),
         ) {
-            ScreenWebView(host, Modifier.fillMaxSize())
+            // 接管时，屏幕边缘的滑动也尽量留给画面（系统每条边最多让出 200dp 高）
+            ScreenWebView(host, Modifier.fillMaxSize(), excludeSystemGestures = held)
             val overlay = openError ?: (connState as? ScreenConnection.State.Closed)?.reason
             when {
                 overlay != null -> ScreenOverlay(overlay) {

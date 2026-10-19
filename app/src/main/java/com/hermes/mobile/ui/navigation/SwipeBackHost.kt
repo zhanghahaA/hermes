@@ -8,7 +8,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.background
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -84,10 +86,27 @@ fun SwipeBackHost(
                     else -> Modifier.underPage { maxOf(top.offset.value, top.back.value * 0.02f) }
                 }
                 Box(pageModifier.fillMaxSize().blockTouchesBehind()) {
-                    stateHolder.SaveableStateProvider(entry.key) { content(entry.route) }
+                    CompositionLocalProvider(LocalNavEntry provides entry) {
+                        stateHolder.SaveableStateProvider(entry.key) { content(entry.route) }
+                    }
                 }
             }
         }
+    }
+}
+
+private val LocalNavEntry = staticCompositionLocalOf<Navigator.Entry?> { null }
+
+/**
+ * 这个页面在屏幕上时，关掉“页面任意位置右滑返回”（手指要拖页面里的内容，比如远程桌面）。
+ * 左上角的返回按钮和系统的返回手势照常可用。
+ */
+@Composable
+fun BlockSwipeBack() {
+    val entry = LocalNavEntry.current ?: return
+    DisposableEffect(entry) {
+        entry.swipeBackBlocks++
+        onDispose { entry.swipeBackBlocks-- }
     }
 }
 
@@ -143,6 +162,7 @@ private fun Modifier.swipeBackGesture(navigator: Navigator, scope: CoroutineScop
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         if (!navigator.canGoBack) return@awaitEachGesture
         val top = navigator.entries.last()
+        if (top.swipeBackBlocks > 0) return@awaitEachGesture
         val width = size.width.toFloat()
         val tracker = VelocityTracker()
         tracker.addPosition(down.uptimeMillis, down.position)

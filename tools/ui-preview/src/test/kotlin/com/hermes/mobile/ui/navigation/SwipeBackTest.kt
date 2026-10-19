@@ -37,6 +37,8 @@ class SwipeBackTest {
         setContent {
             Box(Modifier.size(400.dp, 800.dp).testTag("host")) {
                 SwipeBackHost(navigator) { route ->
+                    // "screen" 页面像 Bot 屏幕一样不让右滑返回
+                    if (route == "screen") BlockSwipeBack()
                     Box(Modifier.fillMaxSize().background(if (route == "root") Color.Gray else Color.White))
                 }
             }
@@ -46,6 +48,30 @@ class SwipeBackTest {
         val host = onNodeWithTag("host")
         val width = host.fetchSemanticsNode().size.width.toFloat()
         Ctx(navigator, width, { b -> host.performTouchInput(b) }, { waitForIdle() }, { ms -> mainClock.advanceTimeBy(ms) }, { mainClock.autoAdvance = it }).case()
+    }
+
+    /** 不让右滑返回的页面（Bot 屏幕）：怎么拖都不返回；回到普通页面后照常能右滑返回。 */
+    @Test
+    fun blockedPageIgnoresSwipeBack() = runCase {
+        navigator.push("screen")
+        idle()
+        touch {
+            down(Offset(100f, 400f))
+            repeat(20) { moveBy(Offset(width * 0.03f, 0f)) }
+            up()
+        }
+        idle()
+        assertEquals(3, navigator.entries.size, "Bot 屏幕上右滑不该返回")
+        assertEquals(0f, top.offset.value)
+        navigator.pop()
+        idle()
+        touch {
+            down(Offset(100f, 400f))
+            repeat(20) { moveBy(Offset(width * 0.03f, 0f)) }
+            up()
+        }
+        idle()
+        assertEquals(1, navigator.entries.size, "离开 Bot 屏幕后，普通页面照常右滑返回")
     }
 
     /** 手指按住拖动时，页面实时跟着手指移动（松手前就已经在动）。 */

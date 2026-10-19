@@ -20,13 +20,13 @@ import com.hermes.mobile.data.screen.ScreenPageHost
  */
 @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
 @Composable
-fun ScreenWebView(host: ScreenPageHost, modifier: Modifier = Modifier) {
+fun ScreenWebView(host: ScreenPageHost, modifier: Modifier = Modifier, excludeSystemGestures: Boolean = false) {
     val context = LocalContext.current
     val html = remember { context.assets.open("screen/screen.html").bufferedReader().use { it.readText() } }
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            WebView(ctx).apply {
+            ScreenView(ctx).apply {
                 setBackgroundColor(0xFF1B1B1F.toInt())
                 settings.javaScriptEnabled = true
                 settings.allowFileAccess = false
@@ -57,10 +57,31 @@ fun ScreenWebView(host: ScreenPageHost, modifier: Modifier = Modifier) {
                 loadDataWithBaseURL("https://hermes-screen.invalid/", html, "text/html", "utf-8", null)
             }
         },
+        update = { view -> view.excludeSystemGestures = excludeSystemGestures },
         onRelease = { view ->
             host.evaluate = null
             view.removeJavascriptInterface("HermesScreen")
             view.destroy()
         },
     )
+}
+
+/** 记着要不要让系统把边缘滑动留给画面；大小变了重新告诉系统。 */
+private class ScreenView(context: android.content.Context) : WebView(context) {
+    var excludeSystemGestures = false
+        set(value) {
+            field = value
+            applyExclusion()
+        }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        if (changed) applyExclusion()
+    }
+
+    /** Android 10+：请系统别把画面上的边缘滑动当成返回（系统每条边最多让出 200dp 高）。 */
+    private fun applyExclusion() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
+        systemGestureExclusionRects = if (excludeSystemGestures) listOf(android.graphics.Rect(0, 0, width, height)) else emptyList()
+    }
 }

@@ -33,6 +33,9 @@ class Navigator(root: Any) {
 
         /** 正在播放返回动画，避免重复返回。 */
         internal var leaving by mutableStateOf(false)
+
+        /** 页面里有多少处不让“右滑返回”（比如 Bot 屏幕：手指要拖远程桌面）。系统的返回手势不受影响。 */
+        internal var swipeBackBlocks = 0
     }
 
     private var nextKey = 0

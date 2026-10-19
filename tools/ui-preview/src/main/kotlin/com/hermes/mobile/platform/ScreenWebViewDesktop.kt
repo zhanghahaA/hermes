@@ -11,7 +11,7 @@ import com.hermes.mobile.data.screen.ScreenPageHost
 
 /** 桌面预览没有 WebView：画一个示意的桌面（截图用），并假装页面已经连上。 */
 @Composable
-fun ScreenWebView(host: ScreenPageHost, modifier: Modifier = Modifier) {
+fun ScreenWebView(host: ScreenPageHost, modifier: Modifier = Modifier, excludeSystemGestures: Boolean = false) {
     androidx.compose.runtime.DisposableEffect(host) {
         host.evaluate = { js -> if (js.startsWith("hm.start")) host.onEvent("connect", "") }
         host.onEvent("ready", "")
