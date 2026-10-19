@@ -133,6 +133,7 @@ fun ChatsScreen(
     var pendingDelete by remember { mutableStateOf(setOf<String>()) }
     var renameTarget by remember { mutableStateOf<Session?>(null) }
     var moveTarget by remember { mutableStateOf<Session?>(null) }
+    var projectAction by remember { mutableStateOf<ProjectAction?>(null) }
     // 新建项目；带着会话时，建好就把它移进去
     var newProjectFor by remember { mutableStateOf<NewProjectRequest?>(null) }
 
@@ -269,6 +270,17 @@ fun ChatsScreen(
                             onNewProject = admin?.let { { newProjectFor = NewProjectRequest(null) } },
                         )
                     }
+                    // 选中的是项目：显示它的文件夹，可以改名、删除
+                    val selectedProject = grouping.projects.firstOrNull { it.name == group }
+                    if (selectedProject != null && admin != null) {
+                        item(key = "project-bar") {
+                            ProjectBar(
+                                project = selectedProject,
+                                onRename = { projectAction = ProjectAction.Rename(selectedProject) },
+                                onDelete = { projectAction = ProjectAction.Delete(selectedProject) },
+                            )
+                        }
+                    }
                 }
                 item(key = "filters") {
                     Row(
@@ -397,6 +409,48 @@ fun ChatsScreen(
             onNewProject = { newProjectFor = NewProjectRequest(session) },
             onDismiss = { moveTarget = null },
         )
+    }
+
+    if (admin != null) when (val action = projectAction) {
+        is ProjectAction.Rename -> RenameDialog(
+            initial = action.project.name,
+            title = "重命名项目",
+            onDismiss = { projectAction = null },
+            onConfirm = { newName ->
+                projectAction = null
+                scope.launch {
+                    try {
+                        admin.renameProject(action.project.id, newName)
+                        repository.refreshGroups()
+                        onGroupChange(newName)
+                    } catch (e: com.hermes.mobile.data.remote.AdminException) {
+                        snackbar.showSnackbar("没能改名：${e.message}")
+                    }
+                }
+            },
+        )
+        is ProjectAction.Delete -> androidx.compose.material3.AlertDialog(
+            onDismissRequest = { projectAction = null },
+            title = { Text("删除项目「${action.project.name}」？") },
+            text = { Text("只删除项目本身（和电脑版的删除一样）。里面的对话不会删，会回到按文件夹分组；电脑上的文件夹和文件也都还在。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    projectAction = null
+                    scope.launch {
+                        try {
+                            admin.deleteProject(action.project.id)
+                            onGroupChange(null)
+                            repository.refreshGroups()
+                            snackbar.showSnackbar("已删除项目「${action.project.name}」")
+                        } catch (e: com.hermes.mobile.data.remote.AdminException) {
+                            snackbar.showSnackbar("没能删除：${e.message}")
+                        }
+                    }
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { projectAction = null }) { Text("取消") } },
+        )
+        null -> Unit
     }
 
     if (admin != null) newProjectFor?.let { request ->
@@ -594,6 +648,36 @@ private fun SessionActionsSheet(
             SheetAction("删除", Icons.Rounded.Delete, onDelete, destructive = true),
         ),
     )
+}
+
+private sealed interface ProjectAction {
+    val project: ProjectInfo
+    data class Rename(override val project: ProjectInfo) : ProjectAction
+    data class Delete(override val project: ProjectInfo) : ProjectAction
+}
+
+/** 选中项目时，分组标签下面的一行：项目的文件夹，改名、删除。 */
+@Composable
+private fun ProjectBar(project: ProjectInfo, onRename: () -> Unit, onDelete: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.FolderOpen, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            project.path ?: "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.StartEllipsis,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onRename) { Text("重命名") }
+        TextButton(onClick = onDelete) { Text("删除", color = MaterialTheme.colorScheme.error) }
+    }
 }
 
 /** 要新建项目；[session] 不为空时，建好后把它移进去。 */

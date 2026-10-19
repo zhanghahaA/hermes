@@ -44,6 +44,13 @@ interface AdminApi {
     suspend fun listFolders(path: String?): Pair<String, List<String>> = throw AdminException("不支持")
     /** 把会话的工作目录改成 [folder]（桌面版拖到项目里就是这样）；null 表示移出项目。 */
     suspend fun moveSession(sessionId: String, folder: String?): Unit = throw AdminException("不支持")
+    /** 在 [parent] 下新建文件夹 [name]，返回新文件夹的绝对路径。 */
+    suspend fun makeFolder(parent: String, name: String): String = throw AdminException("不支持")
+    /** 删除项目（只删项目本身；对话和文件夹都还在，和桌面版的删除一样）。 */
+    suspend fun deleteProject(projectId: String): Unit = throw AdminException("不支持")
+    suspend fun renameProject(projectId: String, name: String): Unit = throw AdminException("不支持")
+    /** Hermes 的数据目录（项目、会话都存在这里）：手机和电脑看到的不一样时用来对照。 */
+    suspend fun hermesHome(): String = throw AdminException("不支持")
     /** Bot 屏幕的状态（`hermes computer-use screen status --json`）。 */
     suspend fun screenStatus(): BotScreenStatus = throw AdminException("不支持")
     suspend fun startScreen(): BotScreenStatus = throw AdminException("不支持")
@@ -60,6 +67,8 @@ interface AdminApi {
  * 只有记忆和 config.yaml 原文直接读写文件。
  */
 class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
+    /** 不带 Profile 参数的 hermes（--print-runtime-command 必须是第一个参数；Profile 已经由 HERMES_HOME 定了）。 */
+    private val hermesBare = "hermes"
     private val hermes = "hermes" + (profile?.trim()?.replace(Regex("[^A-Za-z0-9_.-]"), "")?.takeIf { it.isNotEmpty() }?.let { " -p $it" } ?: "")
 
     @Volatile private var home: String? = null
@@ -283,7 +292,7 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
 
     private suspend fun lease(op: String, viewerId: String, reason: String): ScreenLease {
         val dir = home()
-        val script = FindHermesPython + "\nHERMES_HOME=${q(dir)} \$PY - ${q(op)} ${q(viewerId)} ${q(reason)} <<'HERMES_MOBILE_PY'\n$LeaseScript\nHERMES_MOBILE_PY"
+        val script = hermesPython(dir, LeaseScript, listOf(op, viewerId, reason))
         val out = run(script)
         val line = out.lines().lastOrNull { it.startsWith("LEASE") } ?: throw AdminException("接管失败：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
         return parseLease(HermesJson.parseToJsonElement(line.removePrefix("LEASE")) as? JsonObject)
@@ -298,12 +307,41 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
     override suspend fun openScreen(): com.hermes.mobile.data.ssh.RemoteStream = withContext(Dispatchers.IO) {
         val dir = home()
         // 桥接脚本从 -c 传进去：stdin 要留给画面数据
-        val command = FindHermesPython + "\nHERMES_HOME=${q(dir)} exec \$PY -c ${q(BridgeScript)}"
+        val command = hermesPython(dir, BridgeScript, emptyList())
         try {
             shell.openStream(command)
         } catch (e: java.io.IOException) {
             throw AdminException("SSH 打不开通道：${e.message}")
         }
+    }
+
+    /**
+     * 用 Hermes 自己的 Python 环境跑一段脚本（脚本里能 import Hermes 的代码）。
+     * 新的源码安装：`hermes` 启动器是“自带的 Python + -I + 引导代码”，裸跑那个 Python 是 import 不到 Hermes 的；
+     * 用 `hermes --print-runtime-command` 拿到它启动自己的那条命令，把最后“运行 hermes_cli.main”换成运行我们的脚本。
+     * 旧的安装方式（venv / pip）没有这个参数，就照老办法顺着启动脚本找 Python。
+     * 脚本先写进临时文件（读完就删），stdin 留给脚本用（Bot 屏幕的画面数据走 stdin/stdout）。
+     */
+    internal fun hermesPython(dir: String, script: String, args: List<String>): String {
+        val argv = args.joinToString(" ") { q(it) }
+        return listOf(
+            "HM_SCRIPT=\$(mktemp \"\${TMPDIR:-/tmp}/hermes-mobile.XXXXXX\") || exit 1",
+            "cat > \"\$HM_SCRIPT\" <<'HERMES_MOBILE_PY'",
+            script,
+            "HERMES_MOBILE_PY",
+            "HM_LOADER=${q(PythonLoader)}",
+            "export HM_SCRIPT HM_LOADER HERMES_HOME=${q(dir)}",
+            "HM_RC=\$($hermesBare --print-runtime-command 2>/dev/null | tail -n 1)",
+            "case \"\$HM_RC\" in",
+            "  '[\"'*)",
+            "    export HM_RC",
+            "    HM_PY=\$(printf '%s' \"\$HM_RC\" | sed -n 's/^\\[\"\\([^\"]*\\)\".*/\\1/p')",
+            "    if [ -x \"\$HM_PY\" ]; then \"\$HM_PY\" -I -c ${q(RuntimeShim)} $argv; HM_CODE=\$?; [ \$HM_CODE -ne 70 ] && exit \$HM_CODE; fi",
+            "    ;;",
+            "esac",
+            FindHermesPython,
+            "exec \$PY -c \"\$HM_LOADER\" $argv",
+        ).joinToString("\n")
     }
 
     private fun checkFolder(folder: String) = "[ -d ${q(folder)} ] || { echo $NoSuchFolder >&2; exit 2; }; "
@@ -327,12 +365,40 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
         return here to lines.drop(1).sortedBy { it.lowercase() }
     }
 
+    override suspend fun makeFolder(parent: String, name: String): String {
+        val clean = name.trim()
+        if (clean.isEmpty() || clean == "." || clean == ".." || '/' in clean || '\u0000' in clean) throw AdminException("文件夹名不能为空，也不能带 /")
+        val path = parent.trimEnd('/') + "/" + clean
+        noSuchFolder(parent) {
+            run("${checkFolder(parent)}[ -e ${q(path)} ] && { echo 已经有同名的文件或文件夹 >&2; exit 4; }; mkdir -- ${q(path)} && echo HERMES_MOBILE_OK")
+        }
+        return path
+    }
+
+    override suspend fun deleteProject(projectId: String) = project("delete", projectId, "")
+
+    override suspend fun renameProject(projectId: String, name: String) {
+        if (name.isBlank()) throw AdminException("项目名不能为空")
+        project("rename", projectId, name.trim())
+    }
+
+    override suspend fun hermesHome(): String = home()
+
+    /** 用 Hermes 自己的 projects_db（桌面版改项目也是调它）。 */
+    private suspend fun project(op: String, projectId: String, name: String) {
+        val dir = home()
+        val script = hermesPython(dir, ProjectScript, listOf(op, projectId, name))
+        val out = run(script)
+        if ("NOTFOUND" in out) throw AdminException("Hermes 里找不到这个项目（可能已经被删了）")
+        if ("OK" !in out) throw AdminException("没改成：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+    }
+
     override suspend fun moveSession(sessionId: String, folder: String?) {
         if (!SessionIdPattern.matches(sessionId)) throw AdminException("会话 id 不对：$sessionId")
         val dir = home()
         val check = folder?.let(::checkFolder).orEmpty()
         // 用 Hermes 自己的 Python 跑 Hermes 自己的代码（和桌面版拖动会话调用的是同一个函数），找不到才用系统 python3
-        val script = check + FindHermesPython + "\nHERMES_HOME=${q(dir)} \$PY - ${q(sessionId)} ${q(folder.orEmpty())} ${q(dir)} <<'HERMES_MOBILE_PY'\n$MoveScript\nHERMES_MOBILE_PY"
+        val script = check + hermesPython(dir, MoveScript, listOf(sessionId, folder.orEmpty(), dir))
         val out = noSuchFolder(folder) { run(script, timeoutSeconds = 60) }
         if ("NOTFOUND" in out) throw AdminException("Hermes 里找不到这个会话")
         if ("OK" !in out) throw AdminException("移动失败：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
@@ -452,6 +518,49 @@ root = git("rev-parse", "--show-toplevel") if cwd else ""
 db.execute("update sessions set cwd = ?, git_branch = ?, git_repo_root = ?, git_metadata_generation = coalesce(git_metadata_generation, 0) + 1 where id = ?",
            (cwd or None, branch or None, root or None, sid))
 db.commit()
+print("OK")
+""".trimIndent()
+
+        /** 读出临时文件里的脚本，删掉文件，当作 __main__ 运行。 */
+        val PythonLoader = """
+import os, sys
+_hm_path = os.environ.pop("HM_SCRIPT")
+with open(_hm_path, encoding="utf-8") as _hm_file:
+    _hm_source = _hm_file.read()
+os.unlink(_hm_path)
+exec(compile(_hm_source, "hermes-mobile", "exec"), {"__name__": "__main__"})
+""".trimIndent()
+
+        /**
+         * 拿 `hermes --print-runtime-command` 打印的命令（[Python, "-I", "-c", 引导代码]），
+         * 把引导代码最后的 runpy.run_module(…) 换成 [PythonLoader]，原样 exec。格式不对时退出码 70，外面改用老办法。
+         */
+        val RuntimeShim = """
+import json, os, sys
+try:
+    cmd = json.loads(os.environ["HM_RC"])
+    code = cmd[3] if len(cmd) > 3 and cmd[1:3] == ["-I", "-c"] else ""
+except Exception:
+    code = ""
+i = code.rfind("runpy.run_module(")
+if i < 0:
+    sys.exit(70)
+os.execv(cmd[0], cmd[:3] + [code[:i] + "\n" + os.environ["HM_LOADER"]] + sys.argv[1:])
+""".trimIndent()
+
+        /** 删除 / 重命名项目：调 Hermes 自己的 projects_db。 */
+        val ProjectScript = """
+import sys
+from hermes_cli import projects_db as pdb
+op, pid, name = sys.argv[1], sys.argv[2], sys.argv[3]
+with pdb.connect_closing() as conn:
+    if pdb.get_project(conn, pid) is None:
+        print("NOTFOUND")
+        sys.exit(0)
+    if op == "delete":
+        pdb.delete_project(conn, pid)
+    elif op == "rename":
+        pdb.update_project(conn, pid, name=name)
 print("OK")
 """.trimIndent()
 

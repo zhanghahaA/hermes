@@ -89,11 +89,11 @@ fun ActionSheetContent(title: String?, actions: List<SheetAction>, onDismiss: ()
 }
 
 @Composable
-fun RenameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+fun RenameDialog(initial: String, onDismiss: () -> Unit, title: String = "重命名会话", onConfirm: (String) -> Unit) {
     var text by rememberSaveable { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("重命名会话") },
+        title = { Text(title) },
         text = {
             OutlinedTextField(value = text, onValueChange = { text = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
         },

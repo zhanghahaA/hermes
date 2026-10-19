@@ -333,6 +333,16 @@ class OpenSshIT {
             repo.moveToProject(real, null)
             waitGroup("默认")
 
+            // 新建文件夹、改名、删除项目（用 Hermes 自己的 projects_db）
+            val sub = runBlocking { admin.makeFolder(folder.path, "sub folder") }
+            assertTrue(File(sub).isDirectory)
+            assertEquals(admin.let { runBlocking { it.hermesHome() } }.isNotBlank(), true)
+            runBlocking { admin.renameProject(project.id, "$name-改名"); repo.refreshGroups() }
+            assertTrue(repo.sessionGroups.value.projects.any { it.id == project.id && it.name == "$name-改名" }, repo.sessionGroups.value.projects.toString())
+            runBlocking { admin.deleteProject(project.id); repo.refreshGroups() }
+            assertTrue(repo.sessionGroups.value.projects.none { it.id == project.id }, "删除后项目不在了")
+            assertTrue(runCatching { runBlocking { admin.deleteProject(project.id) } }.exceptionOrNull()?.message?.contains("找不到") == true)
+
             // 归档：Hermes 的列表里不再有，分组脚本能看到它归档了
             repo.setArchived(real, true)
             runBlocking {

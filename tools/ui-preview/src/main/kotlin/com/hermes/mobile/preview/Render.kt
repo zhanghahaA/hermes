@@ -200,6 +200,9 @@ private val scenes = listOf(
             )
         }
     },
+    Scene("31b-project-bar") { repo, _ ->
+        com.hermes.mobile.ui.chats.ChatsScreen(repo, onOpenChat = {}, onManageConnections = {}, group = "读书笔记")
+    },
     Scene("32-new-project", waitMs = 200) { repo, _ ->
         Box(Modifier.fillMaxSize()) {
             mainScreen(repo, MainTab.Chats)()

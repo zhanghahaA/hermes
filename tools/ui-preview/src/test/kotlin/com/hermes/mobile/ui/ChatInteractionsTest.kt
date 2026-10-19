@@ -152,6 +152,22 @@ class ChatInteractionsTest {
     }
 
     @Test
+    fun projectCanBeRenamedAndDeleted() = withRepo { repo ->
+        val groupState = androidx.compose.runtime.mutableStateOf<String?>(null)
+        show { ChatsScreen(repo, onOpenChat = {}, onManageConnections = {}, group = groupState.value, onGroupChange = { groupState.value = it }) }
+        onNodeWithText("读书笔记 · 2").performClick()
+        waitForIdle()
+        onNodeWithText("/home/me/notes").assertIsDisplayed()
+        onNodeWithText("删除").performClick()
+        waitForIdle()
+        onAllNodesWithText("删除")[1].performClick()
+        waitUntil(timeoutMillis = 5_000) { repo.sessionGroups.value.projects.none { it.name == "读书笔记" } }
+        waitForIdle()
+        assertNull(groupState.value, "删除后回到全部分组")
+        assertTrue(onAllNodesWithText("读书笔记 · 2").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
     fun chatListOpenRowClosesOnTap() = withRepo { repo ->
         var opened: String? = null
         show { ChatsScreen(repo, onOpenChat = { opened = it }, onManageConnections = {}) }

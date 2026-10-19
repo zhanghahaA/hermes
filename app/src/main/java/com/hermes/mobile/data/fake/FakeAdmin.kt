@@ -7,7 +7,11 @@ import com.hermes.mobile.data.model.MemoryTarget
 import com.hermes.mobile.data.remote.AdminApi
 
 /** 演示用的管理数据（界面预览、没连 Hermes 时）。 */
-class FakeAdmin(private val onProjectCreated: (String, String) -> Unit = { _, _ -> }) : AdminApi {
+class FakeAdmin(
+    private val onProjectCreated: (String, String) -> Unit = { _, _ -> },
+    /** 项目被改名（新名字）或删除（null）。 */
+    private val onProjectEdited: (id: String, newName: String?) -> Unit = { _, _ -> },
+) : AdminApi {
     private var books = listOf(
         MemoryBook(
             MemoryTarget.User,
@@ -72,7 +76,7 @@ class FakeAdmin(private val onProjectCreated: (String, String) -> Unit = { _, _ 
         "2026-10-18 08:00:02 INFO cron: running job 每日简报\n2026-10-18 08:00:09 INFO cron: job 每日简报 finished (ok)\n" +
             "2026-10-18 09:12:44 INFO api_server: run run_4f2 started (session api_1792)\n2026-10-18 09:12:51 INFO api_server: run run_4f2 completed"
 
-    private val tree = mapOf(
+    private val tree = mutableMapOf(
         "/home/me" to listOf("Downloads", "homelab", "notes", "projects"),
         "/home/me/projects" to listOf("hermes-mobile", "blog", "scripts"),
         "/home/me/notes" to listOf("2025", "2026"),
@@ -84,6 +88,18 @@ class FakeAdmin(private val onProjectCreated: (String, String) -> Unit = { _, _ 
     }
 
     override suspend fun createProject(name: String, folder: String) = onProjectCreated(name, folder)
+
+    override suspend fun makeFolder(parent: String, name: String): String {
+        val dir = parent.trimEnd('/')
+        tree[dir] = (tree[dir].orEmpty() + name.trim()).sorted()
+        return "$dir/${name.trim()}"
+    }
+
+    override suspend fun deleteProject(projectId: String) = onProjectEdited(projectId, null)
+
+    override suspend fun renameProject(projectId: String, name: String) = onProjectEdited(projectId, name)
+
+    override suspend fun hermesHome() = "/home/me/.hermes"
 
     // ---- Bot 屏幕（演示：一直开着，接管谁就记谁） ----
 

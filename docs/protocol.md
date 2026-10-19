@@ -256,6 +256,15 @@ API 的会话列表里没有项目信息。Hermes 桌面版的分组来自两处
 
 **新建项目**：经 SSH 运行 `hermes project create <名字> <文件夹>`（文件夹在服务器上一层层点选，`cd 目录; pwd; ls -1p` 列子文件夹）。
 
+**在 Hermes 自己的 Python 环境里跑脚本**（移会话、删项目、接管屏幕、屏幕画面桥都要 import Hermes 的代码）：
+新的源码安装里 `hermes` 启动器是“自带的 Python + `-I` + 引导代码（`hermes_bootstrap`）”，直接用那个 Python 是 import 不到 Hermes 的。
+App 先跑 `hermes --print-runtime-command`，拿到 Hermes 启动自己的那条命令（`[python, "-I", "-c", 引导代码]`），把引导代码最后的
+`runpy.run_module("hermes_cli.main")` 换成运行 App 的脚本；旧的安装方式（venv / pip）没有这个参数，就顺着启动脚本找 venv 里的 Python。
+脚本先写进临时文件，读完就删，stdin/stdout 留给脚本。
+
+**删除 / 重命名项目**：`hermes_cli.projects_db.delete_project` / `update_project`（桌面版的 `projects.delete` / `projects.update` 调的也是它们）。
+删除只删项目记录和它的文件夹登记，对话的工作目录不变。
+
 **把会话移进项目**：和桌面版拖动会话一样，改的是会话的工作目录。桌面版调用的是
 `SessionDB().update_session_cwd(id, cwd, branch, repo_root, replace_git_meta=True)`；App 经 SSH 找到 `hermes` 命令所用的 Python
 （顺着启动脚本找 venv 里的 python），用 `HERMES_HOME` 跑同一个函数；导入不了 Hermes 的代码时退回直接改 `state.db` 的

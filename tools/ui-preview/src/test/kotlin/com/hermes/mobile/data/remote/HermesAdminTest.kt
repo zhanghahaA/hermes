@@ -212,6 +212,22 @@ class HermesAdminTest {
     }
 
     @Test
+    fun foldersCanBeCreated() = runBlocking<Unit> {
+        val home = kotlin.io.path.createTempDirectory("hermes-home5").toFile()
+        val root = kotlin.io.path.createTempDirectory("work2").toFile().canonicalFile
+        val admin = HermesAdmin(LocalShell(home, fakeHermesBin(java.io.File(home, "calls.txt"))), null)
+        val made = admin.makeFolder(root.path, "new project")
+        assertEquals(root.path + "/new project", made)
+        assertTrue(java.io.File(made).isDirectory)
+        assertEquals(listOf("new project"), admin.listFolders(root.path).second)
+        assertTrue(runCatching { admin.makeFolder(root.path, "new project") }.exceptionOrNull() is AdminException, "同名的不能再建")
+        for (bad in listOf("", "  ", "..", "a/b")) {
+            assertTrue(runCatching { admin.makeFolder(root.path, bad) }.exceptionOrNull() is AdminException, "「$bad」不该能建")
+        }
+        assertTrue(runCatching { admin.makeFolder(root.path + "/nope", "x") }.exceptionOrNull() is AdminException, "上级文件夹不存在")
+    }
+
+    @Test
     fun movingASessionChangesItsWorkingFolder() = runBlocking<Unit> {
         val home = kotlin.io.path.createTempDirectory("hermes-home4").toFile()
         val site = kotlin.io.path.createTempDirectory("site").toFile()
@@ -245,5 +261,51 @@ class HermesAdminTest {
         assertTrue(runCatching { admin.moveSession("api_2", site.path) }.exceptionOrNull()?.message?.contains("找不到") == true)
         assertTrue(runCatching { admin.moveSession("x; rm -rf /", site.path) }.exceptionOrNull() is AdminException, "奇怪的 id 不进 shell")
         assertTrue(runCatching { admin.moveSession("api_1", site.path + "/nope") }.exceptionOrNull() is AdminException)
+    }
+
+    /**
+     * 新的源码安装：hermes 启动器支持 --print-runtime-command（自带 Python + -I + 引导代码）。
+     * 用测试机上真的 Hermes 源码（_launchers.py）模拟这种启动器，脚本要在 Hermes 的引导环境里跑。
+     */
+    @Test
+    fun scriptsRunInsideHermesOwnRuntime() {
+        val root = java.io.File("/home/user/ref/hermes-head")
+        val venvPython = java.io.File("/home/user/ref/hvenv/bin/python")
+        if (!root.resolve("hermes_cli/_launchers.py").exists() || !venvPython.exists()) {
+            println("跳过：这台机器上没有 Hermes 源码")
+            return
+        }
+        val home = kotlin.io.path.createTempDirectory("hermes-home6").toFile()
+        val bin = kotlin.io.path.createTempDirectory("new-launcher").toFile()
+        java.io.File(bin, "hermes").apply {
+            writeText(
+                "#!/bin/sh\n" +
+                    "if [ \"${'$'}1\" = \"--print-runtime-command\" ]; then exec ${venvPython.path} ${root.path}/hermes_cli/_launchers.py --print-runtime-command; fi\n" +
+                    "echo 'hermes: unexpected call' >&2; exit 2\n",
+            )
+            setExecutable(true)
+        }
+        val admin = HermesAdmin(LocalShell(home, "${bin.path}:/usr/bin:/bin"), null)
+        val script = """
+            import sys
+            import tools.bot_desktop.lease
+            print("ISOLATED", sys.flags.isolated, "BOOT", "hermes_bootstrap" in sys.modules, "ARGS", sys.argv[1:])
+        """.trimIndent()
+        val (code, out) = LocalShell(home, "${bin.path}:/usr/bin:/bin").exec(admin.hermesPython(home.path, script, listOf("a b", "c'd")), 60)
+        assertEquals(0, code, out)
+        assertTrue("ISOLATED 1 BOOT True ARGS ['a b', \"c'd\"]" in out, out)
+        assertTrue(home.parentFile.listFiles()!!.none { it.name.startsWith("hermes-mobile.") && it.lastModified() > System.currentTimeMillis() - 60_000 }, "临时脚本读完就删")
+    }
+
+    /** 旧的安装方式（hermes 是 venv 里的脚本，不认 --print-runtime-command）照样能跑。 */
+    @Test
+    fun scriptsFallBackToOldLaunchers() {
+        val home = kotlin.io.path.createTempDirectory("hermes-home7").toFile()
+        val log = java.io.File(home, "calls.txt")
+        val shell = LocalShell(home, fakeHermesBin(log))
+        val admin = HermesAdmin(shell, null)
+        val (code, out) = shell.exec(admin.hermesPython(home.path, "import sys\nprint('RAN', sys.argv[1:])", listOf("x")), 60)
+        assertEquals(0, code, out)
+        assertTrue("RAN ['x']" in out, out)
     }
 }

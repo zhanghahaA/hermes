@@ -321,14 +321,31 @@ class FakeHermesRepository(
     override fun moveToProject(sessionId: String, project: com.hermes.mobile.data.model.ProjectInfo?) {
         _groups.update { g -> if (project == null) g.copy(of = g.of - sessionId) else g.copy(of = g.of + (sessionId to project.name)) }
     }
-    private val fakeAdmin = FakeAdmin { name, folder ->
-        _groups.update { g ->
-            g.copy(
-                groups = listOf(name) + g.groups,
-                projects = g.projects + com.hermes.mobile.data.model.ProjectInfo("p${g.projects.size + 1}", name, folder),
-            )
-        }
-    }
+    private val fakeAdmin = FakeAdmin(
+        onProjectCreated = { name, folder ->
+            _groups.update { g ->
+                g.copy(
+                    groups = listOf(name) + g.groups,
+                    projects = g.projects + com.hermes.mobile.data.model.ProjectInfo("p${g.projects.size + 1}", name, folder),
+                )
+            }
+        },
+        onProjectEdited = { id, newName ->
+            _groups.update { g ->
+                val old = g.projects.firstOrNull { it.id == id } ?: return@update g
+                if (newName == null) {
+                    // 删除：项目里的对话回到“默认”（演示数据没有按文件夹分组）
+                    g.copy(groups = g.groups - old.name, of = g.of.filterValues { it != old.name }, projects = g.projects - old)
+                } else {
+                    g.copy(
+                        groups = g.groups.map { if (it == old.name) newName else it },
+                        of = g.of.mapValues { (_, v) -> if (v == old.name) newName else v },
+                        projects = g.projects.map { if (it.id == id) it.copy(name = newName) else it },
+                    )
+                }
+            }
+        },
+    )
     override fun admin(): com.hermes.mobile.data.remote.AdminApi = fakeAdmin
     override suspend fun gatewayStatus() = FakeAdmin.status
     override val toolsetsBusy: StateFlow<Set<String>> = MutableStateFlow(emptySet())

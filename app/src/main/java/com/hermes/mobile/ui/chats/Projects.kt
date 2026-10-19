@@ -148,6 +148,12 @@ fun NewProjectDialog(admin: AdminApi, onDismiss: () -> Unit, onCreated: (String,
     var folders by remember { mutableStateOf<List<String>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
+    // 正在起名的新文件夹（null 表示没在新建）
+    var newFolder by remember { mutableStateOf<String?>(null) }
+    var makingFolder by remember { mutableStateOf(false) }
+    // Hermes 的数据目录：项目存在这里，电脑版要读同一个目录才看得到
+    var home by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(admin) { home = runCatching { admin.hermesHome() }.getOrNull() }
     val scope = rememberCoroutineScope()
 
     // path 为 null 时从家目录开始；服务器返回的是规整后的绝对路径
@@ -209,6 +215,47 @@ fun NewProjectDialog(admin: AdminApi, onDismiss: () -> Unit, onCreated: (String,
                                             }
                                         }
                                     }
+                                    if (current != null) {
+                                        item(key = "new-folder") {
+                                            val draft = newFolder
+                                            if (draft == null) {
+                                                FolderRow(Icons.Rounded.CreateNewFolder, "新建文件夹") { newFolder = "" }
+                                            } else {
+                                                Row(
+                                                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                ) {
+                                                    OutlinedTextField(
+                                                        value = draft,
+                                                        onValueChange = { newFolder = it },
+                                                        placeholder = { Text("新文件夹名") },
+                                                        singleLine = true,
+                                                        enabled = !makingFolder,
+                                                        modifier = Modifier.weight(1f),
+                                                    )
+                                                    TextButton(
+                                                        enabled = draft.isNotBlank() && !makingFolder,
+                                                        onClick = {
+                                                            makingFolder = true
+                                                            error = null
+                                                            scope.launch {
+                                                                try {
+                                                                    val made = admin.makeFolder(current, draft)
+                                                                    if (name.isBlank()) name = draft.trim()
+                                                                    newFolder = null
+                                                                    request = made
+                                                                } catch (e: AdminException) {
+                                                                    error = e.message
+                                                                } finally {
+                                                                    makingFolder = false
+                                                                }
+                                                            }
+                                                        },
+                                                    ) { Text("建") }
+                                                }
+                                            }
+                                        }
+                                    }
                                     items(list, key = { it }) { child ->
                                         FolderRow(Icons.Rounded.Folder, child) {
                                             request = (current ?: "").trimEnd('/') + "/" + child
@@ -230,6 +277,13 @@ fun NewProjectDialog(admin: AdminApi, onDismiss: () -> Unit, onCreated: (String,
                     }
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                home?.let {
+                    Text(
+                        "项目会存进这台 Hermes 的 $it。电脑版 Hermes 连的是同一台、同一个 Profile 才看得到。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = {
