@@ -44,3 +44,21 @@ data class GatewayStatus(
     data class Check(val name: String, val ok: Boolean, val detail: String?)
     data class Platform(val name: String, val state: String, val error: String?)
 }
+
+/**
+ * 会话分组（和 Hermes 桌面版一样）：会话的工作目录属于某个项目就归到项目名下，
+ * 否则按工作目录（git 仓库根目录优先）的文件夹名分组，都没有的归到 [DefaultGroup]。
+ */
+@kotlinx.serialization.Serializable
+data class SessionGrouping(
+    /** 显示顺序：项目在前（包括还没有会话的项目），然后是文件夹，最后是“默认”。 */
+    val groups: List<String> = emptyList(),
+    /** 会话 id → 组名。不在这里的会话属于 [DefaultGroup]。 */
+    val of: Map<String, String> = emptyMap(),
+) {
+    fun groupOf(sessionId: String): String = of[sessionId] ?: DefaultGroup
+
+    companion object {
+        const val DefaultGroup = "默认"
+    }
+}

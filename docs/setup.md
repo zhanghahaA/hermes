@@ -149,6 +149,12 @@ platform_toolsets:
 除了 Gateway 状态，其它都要连接配了 SSH。本机 Termux：在 Termux 里 `pkg install openssh`、`passwd` 设密码、运行 `sshd`（端口 8022），
 然后在连接设置里填 SSH 用户名（`whoami` 的结果）和密码。SSH 登录后要能直接运行 `hermes` 命令。
 
+## 会话分组
+
+如果你在 Hermes 桌面版里用了项目（比如“downloads”），聊天列表上方会出现分组标签，可以按分组查看；
+看“全部分组”时，每个会话标题旁边会标出它属于哪个分组。分组要经 SSH 读取（服务器上要有 python3），
+读到之后会存在手机上，下次打开直接显示。
+
 ## 后台和通知
 
 等 Hermes 回复时，App 会在通知栏显示“Hermes 正在回复…”，这样切到后台、锁屏也不会断。

@@ -17,6 +17,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import java.io.File
 import com.hermes.mobile.data.model.GatewayStatus
+import com.hermes.mobile.data.model.SessionGrouping
 import java.io.IOException
 import java.util.Base64
 import com.hermes.mobile.data.model.AppFeature
@@ -172,6 +173,7 @@ class RemoteHermesRepository(
         // 先显示上次存下的列表，连上之后再换成服务器的
         sessionsFresh = false
         _sessions.value = cache?.sessions(id).orEmpty()
+        _sessionGroups.value = cache?.groups(id) ?: SessionGrouping()
         chats.value = emptyMap()
         connectJob = scope.launch {
             try {
@@ -553,6 +555,7 @@ class RemoteHermesRepository(
             }
             sessionsFresh = true
             saveSessionsToCache()
+            scope.launch { loadGroups() }
         } catch (e: HermesError) {
             _connectionState.value = ConnectionState.Failed(e.message ?: "读取会话失败")
         }
@@ -1794,6 +1797,25 @@ class RemoteHermesRepository(
         val before = _jobs.value
         _jobs.update { list -> list.filterNot { it.id == id } }
         jobCall("删除任务失败", before) { deleteJob(id) }
+    }
+
+    // ---- 分组 ----
+
+    private val _sessionGroups = MutableStateFlow(SessionGrouping())
+    override val sessionGroups: StateFlow<SessionGrouping> = _sessionGroups.asStateFlow()
+
+    /** 经 SSH 读 Hermes 的项目和每个会话的工作目录；没有 SSH 或读不了就保持原样（不打扰）。 */
+    private suspend fun loadGroups() {
+        val admin = admin() ?: return
+        val connection = connectedId ?: return
+        try {
+            val grouping = admin.sessionGroups()
+            _sessionGroups.value = grouping
+            cache?.let { c -> withContext(Dispatchers.IO) { c.saveGroups(connection, grouping) } }
+        } catch (e: AdminException) {
+            // 分组只是锦上添花，失败不弹提示；诊断信息里能看到
+            synchronized(recentErrors) { recentErrors.addLast("${java.time.Instant.ofEpochMilli(clock())} 读分组失败：${e.message}") }
+        }
     }
 
     // ---- 诊断 ----

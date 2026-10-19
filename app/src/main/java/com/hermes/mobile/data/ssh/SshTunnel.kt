@@ -133,10 +133,14 @@ class SshTunnel(
         return try {
             once()
         } catch (e: IOException) {
+            // 服务器拒绝开命令通道（比如不允许执行命令）不代表连接坏了：别重连，免得打断同时在跑的传输
+            if (connectionAlive()) throw e
             reset()
             once()
         }
     }
+
+    private fun connectionAlive(): Boolean = synchronized(this) { client?.let { it.isConnected && it.isAuthenticated } == true }
 
     override fun readFile(path: String): ByteArray? {
         fun once(): ByteArray? = session().newSFTPClient().use { sftp ->

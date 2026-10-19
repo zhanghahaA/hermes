@@ -114,4 +114,67 @@ class HermesAdminTest {
         val e = assertFailsWith<AdminException> { HermesAdmin(shell, null).memory() }
         assertTrue("找不到 hermes" in e.message!!, e.message)
     }
+    /** 在本机用真的 bash + python3 跑分组脚本（模拟 SSH 那头）。 */
+    private class LocalShell(private val home: java.io.File) : RemoteShell {
+        override fun exec(command: String, timeoutSeconds: Long): Pair<Int, String> {
+            if ("config path" in command) return 0 to "${home.path}/config.yaml\n"
+            val p = ProcessBuilder("bash", "-c", command).redirectErrorStream(true).start()
+            val out = p.inputStream.readBytes().toString(Charsets.UTF_8)
+            return p.waitFor() to out
+        }
+        override fun readFile(path: String): ByteArray? = java.io.File(path).takeIf { it.exists() }?.readBytes()
+        override fun writeFile(path: String, bytes: ByteArray) = java.io.File(path).writeBytes(bytes)
+    }
+
+    private fun sql(db: java.io.File, statements: String) {
+        // 中文经 stdin 按 UTF-8 传（测试 JVM 的命令行参数编码不一定是 UTF-8）
+        val pb = ProcessBuilder("python3", "-c", "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.executescript(sys.stdin.buffer.read().decode('utf-8')); c.commit()", db.path)
+            .redirectErrorStream(true)
+        val p = pb.start()
+        p.outputStream.use { it.write(statements.toByteArray(Charsets.UTF_8)) }
+        assertEquals(0, p.waitFor(), p.inputStream.readBytes().toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun sessionsAreGroupedByProjectThenFolder() = runBlocking<Unit> {
+        val home = kotlin.io.path.createTempDirectory("hermes-home").toFile()
+        sql(
+            java.io.File(home, "projects.db"),
+            """
+            create table projects (id text primary key, slug text, name text, primary_path text, created_at integer, archived integer default 0);
+            create table project_folders (project_id text, path text, label text, is_primary integer, added_at integer);
+            insert into projects values ('p1', 'downloads', 'downloads', '/home/u/Downloads', 1, 0);
+            insert into projects values ('p2', 'site', '网站', '/home/u/site', 2, 0);
+            insert into projects values ('p3', 'old', '旧项目', '/home/u/old', 3, 1);
+            insert into project_folders values ('p1', '/home/u/Downloads', null, 1, 1);
+            insert into project_folders values ('p2', '/home/u/site', null, 1, 1);
+            insert into project_folders values ('p2', '/home/u/Downloads/site-assets', null, 0, 1);
+            insert into project_folders values ('p3', '/home/u/old', null, 1, 1);
+            """.trimIndent(),
+        )
+        sql(
+            java.io.File(home, "state.db"),
+            """
+            create table sessions (id text primary key, cwd text, git_repo_root text, title text);
+            insert into sessions values ('a', '/home/u/Downloads', null, 'x');
+            insert into sessions values ('b', '/home/u/Downloads/site-assets/img', null, 'x');
+            insert into sessions values ('c', '/home/u/code/app/src', '/home/u/code/app', 'x');
+            insert into sessions values ('d', null, null, 'x');
+            insert into sessions values ('e', '/home/u/old/x', null, 'x');
+            """.trimIndent(),
+        )
+        val grouping = HermesAdmin(LocalShell(home), null).sessionGroups()
+        assertEquals("downloads", grouping.groupOf("a"))
+        assertEquals("网站", grouping.groupOf("b"), "嵌套时最里面的项目优先")
+        assertEquals("app", grouping.groupOf("c"), "不属于项目的按 git 仓库文件夹名")
+        assertEquals("默认", grouping.groupOf("d"), "没有工作目录的是“默认”")
+        assertEquals("x", grouping.groupOf("e"), "归档的项目不算，按文件夹名")
+        assertEquals(listOf("downloads", "网站", "app", "x", "默认"), grouping.groups)
+    }
+
+    @Test
+    fun noProjectsDbStillWorks() = runBlocking<Unit> {
+        val home = kotlin.io.path.createTempDirectory("hermes-home2").toFile()
+        assertEquals(listOf("默认"), HermesAdmin(LocalShell(home), null).sessionGroups().groups, "什么都没有时只有“默认”")
+    }
 }

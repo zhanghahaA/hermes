@@ -291,6 +291,12 @@ class FakeHermesRepository(
     override val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
 
     override val skillsError: StateFlow<String?> = MutableStateFlow(null)
+    override val sessionGroups: StateFlow<com.hermes.mobile.data.model.SessionGrouping> = MutableStateFlow(
+        com.hermes.mobile.data.model.SessionGrouping(
+            groups = listOf("downloads", "家庭网络", "默认"),
+            of = mapOf("s-1" to "家庭网络", "s-3" to "downloads", "s-5" to "downloads"),
+        ),
+    )
     private val fakeAdmin = FakeAdmin()
     override fun admin(): com.hermes.mobile.data.remote.AdminApi = fakeAdmin
     override suspend fun gatewayStatus() = FakeAdmin.status

@@ -2,6 +2,7 @@ package com.hermes.mobile.data.store
 
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.Session
+import com.hermes.mobile.data.model.SessionGrouping
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -37,6 +38,13 @@ class ChatCache(private val dir: File) {
 
     fun saveMessages(connectionId: String, sessionId: String, messages: List<ChatItem.Message>) {
         write(messagesFile(connectionId, sessionId), json.encodeToString(messageList, messages.takeLast(MaxMessages)))
+    }
+
+    fun groups(connectionId: String): SessionGrouping? =
+        read(File(connectionDir(connectionId), "groups.json")) { json.decodeFromString(SessionGrouping.serializer(), it) }
+
+    fun saveGroups(connectionId: String, grouping: SessionGrouping) {
+        write(File(connectionDir(connectionId), "groups.json"), json.encodeToString(SessionGrouping.serializer(), grouping))
     }
 
     fun removeSession(connectionId: String, sessionId: String) {

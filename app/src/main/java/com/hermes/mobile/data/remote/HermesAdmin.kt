@@ -3,6 +3,7 @@ package com.hermes.mobile.data.remote
 import com.hermes.mobile.data.model.McpServer
 import com.hermes.mobile.data.model.MemoryBook
 import com.hermes.mobile.data.model.MemoryTarget
+import com.hermes.mobile.data.model.SessionGrouping
 import com.hermes.mobile.data.ssh.RemoteShell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -31,6 +32,8 @@ interface AdminApi {
     /** 先在临时目录里让 Hermes 读一遍，格式没问题才替换（原文件备份为 config.yaml.mobile-backup）。 */
     suspend fun saveConfig(text: String)
     suspend fun logs(lines: Int = 200): String
+    /** 会话分组（项目 / 工作目录）。 */
+    suspend fun sessionGroups(): SessionGrouping = SessionGrouping()
 }
 
 /**
@@ -189,6 +192,29 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
         run("cp -f ${q("$dir/config.yaml")} ${q("$dir/config.yaml.mobile-backup")} 2>/dev/null; mv -f ${q(candidate)} ${q("$dir/config.yaml")}")
     }
 
+    override suspend fun sessionGroups(): SessionGrouping {
+        val dir = home()
+        val script = "python3 - ${q(dir)} <<'HERMES_MOBILE_PY'\n$GroupsScript\nHERMES_MOBILE_PY"
+        val out = run(script, timeoutSeconds = 60)
+        if ("command not found" in out) throw AdminException("服务器上没有 python3，读不了项目分组")
+        val json = runCatching { HermesJson.parseToJsonElement(out.substring(out.indexOf('{')).trim()) as JsonObject }.getOrNull()
+            ?: throw AdminException("读项目分组失败：${out.lines().lastOrNull { it.isNotBlank() }?.take(200)}")
+        val projects = (json["projects"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let { p -> (p["id"] as? JsonPrimitive)?.contentOrNull to (p["name"] as? JsonPrimitive)?.contentOrNull } }
+            .filter { it.first != null && !it.second.isNullOrBlank() }
+            .associate { it.first!! to it.second!! }
+        val sessions = (json["sessions"] as? JsonObject).orEmpty()
+        val folderNames = mutableSetOf<String>()
+        val of = sessions.mapNotNull { (id, value) ->
+            val v = value as? JsonObject ?: return@mapNotNull null
+            val project = (v["project"] as? JsonPrimitive)?.contentOrNull?.let(projects::get)
+            val folder = (v["folder"] as? JsonPrimitive)?.contentOrNull?.trimEnd('/', '\\')?.substringAfterLast('/')?.substringAfterLast('\\')
+            val group = project ?: folder?.takeIf { it.isNotBlank() }?.also { folderNames += it } ?: return@mapNotNull null
+            id to group
+        }.toMap()
+        val groups = projects.values.distinct() + (folderNames - projects.values.toSet()).sorted() + SessionGrouping.DefaultGroup
+        return SessionGrouping(groups.distinct(), of)
+    }
+
     override suspend fun logs(lines: Int): String =
         run("$hermes logs -n ${lines.coerceIn(10, 2000)}", timeoutSeconds = 60).trimEnd()
 
@@ -198,6 +224,51 @@ class HermesAdmin(private val shell: RemoteShell, profile: String?) : AdminApi {
     }
 
     private companion object {
+        /**
+         * 只读地查 Hermes 的两个库：projects.db（项目和它们的文件夹）、state.db（每个会话的工作目录）。
+         * 匹配规则和 Hermes 一样：文件夹等于或包含工作目录的项目里，取路径最长的那个。
+         */
+        val GroupsScript = """
+import json, os, sqlite3, sys
+home = sys.argv[1]
+def open_db(name):
+    path = os.path.join(home, name)
+    if not os.path.exists(path):
+        return None
+    try:
+        return sqlite3.connect("file:" + path + "?mode=ro", uri=True)
+    except Exception:
+        return sqlite3.connect(path)
+out = {"projects": [], "sessions": {}}
+folders = []
+db = open_db("projects.db")
+if db is not None:
+    try:
+        for pid, name in db.execute("select id, name from projects where archived = 0 order by created_at"):
+            out["projects"].append({"id": pid, "name": name})
+        folders = list(db.execute("select pf.project_id, pf.path from project_folders pf join projects p on p.id = pf.project_id where p.archived = 0"))
+    except Exception:
+        pass
+def owner(path):
+    best, found = -1, None
+    for pid, folder in folders:
+        stem = folder.rstrip("/\\")
+        if path == folder or path.startswith(stem + "/") or path.startswith(stem + "\\"):
+            if len(folder) > best:
+                best, found = len(folder), pid
+    return found
+db = open_db("state.db")
+if db is not None:
+    cols = [r[1] for r in db.execute("pragma table_info(sessions)")]
+    root = "git_repo_root" if "git_repo_root" in cols else "NULL"
+    if "cwd" in cols:
+        for sid, cwd, repo in db.execute("select id, cwd, " + root + " from sessions where coalesce(cwd, '') != '' or coalesce(" + root + ", '') != ''"):
+            cwd = (cwd or "").strip()
+            repo = (repo or "").strip()
+            out["sessions"][sid] = {"project": owner(cwd) or (owner(repo) if repo else None), "folder": repo or cwd}
+print(json.dumps(out))
+""".trimIndent()
+
         val McpName = Regex("[A-Za-z0-9_-]+")
         val Ansi = Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]")
 

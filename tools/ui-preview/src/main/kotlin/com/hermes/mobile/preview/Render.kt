@@ -1,6 +1,10 @@
 package com.hermes.mobile.preview
 
 import androidx.compose.foundation.background
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import com.kyant.backdrop.backdrops.layerBackdrop
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -145,6 +149,7 @@ private val scenes = listOf(
     Scene("18-settings-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
+    Scene("29-glass-test") { _, _ -> GlassTest() },
     Scene("23-predictive-back") { repo, _ -> PredictiveBackStill(repo, progress = 0.4f) },
     Scene("23b-system-back-left") { repo, _ -> PredictiveBackStill(repo, progress = 0f, systemBack = 0.8f) },
     Scene("23c-system-back-right") { repo, _ -> PredictiveBackStill(repo, progress = 0f, systemBack = 0.8f, fromRight = true) },
@@ -270,5 +275,33 @@ fun main(args: Array<String>) {
         println("rendered ${scene.name}")
         composeScene.close()
         scope.cancel()
+    }
+}
+
+/** 液态玻璃对比用：彩色内容上放 Tab 栏和输入栏，看通透程度。 */
+@Composable
+private fun GlassTest() {
+    val backdrop = com.kyant.backdrop.backdrops.rememberLayerBackdrop()
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .layerBackdrop(backdrop),
+        ) {
+            val colors = listOf(Color(0xFFE53935), Color(0xFFFFB300), Color(0xFF43A047), Color(0xFF1E88E5), Color(0xFF8E24AA))
+            repeat(14) { i ->
+                Row(Modifier.fillMaxWidth().height(64.dp).background(colors[i % colors.size].copy(alpha = 0.85f)), verticalAlignment = Alignment.CenterVertically) {
+                    Text("第 ${i + 1} 行  Hermes 液态玻璃 ABC 123", color = Color.White, fontSize = 20.sp, modifier = Modifier.padding(start = 24.dp))
+                }
+            }
+        }
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            com.hermes.mobile.ui.chat.ChatInputBar(
+                backdrop = backdrop, text = "", onTextChange = {}, attachments = emptyList(), onRemoveAttachment = {}, onAttach = {},
+                mode = com.hermes.mobile.ui.chat.SendButtonMode.Send, onSend = {}, onStop = {}, enterToSend = false, quote = null, onClearQuote = {},
+                focusRequester = remember { androidx.compose.ui.focus.FocusRequester() },
+            )
+            com.hermes.mobile.ui.main.FloatingTabBar(backdrop, MainTab.entries, MainTab.Chats, {}, mapOf(MainTab.Chats to 2), null)
+        }
     }
 }

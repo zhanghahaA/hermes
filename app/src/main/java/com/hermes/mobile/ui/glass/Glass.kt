@@ -74,10 +74,11 @@ fun rememberGlassStyle(strength: GlassStrength = GlassStrength.Regular): GlassSt
     val dark = surface.luminance() < 0.5f
     return remember(surface, strength) {
         val base = if (dark) Color(0xFF1E1E24) else Color.White
+        // 通透为主：底色很淡，主要靠折射、高光和轻微模糊让玻璃“显形”
         val alpha = when (strength) {
-            GlassStrength.Clear -> if (dark) 0.28f else 0.32f
-            GlassStrength.Regular -> if (dark) 0.42f else 0.5f
-            GlassStrength.Frosted -> if (dark) 0.62f else 0.7f
+            GlassStrength.Clear -> if (dark) 0.08f else 0.06f
+            GlassStrength.Regular -> if (dark) 0.24f else 0.2f
+            GlassStrength.Frosted -> if (dark) 0.5f else 0.42f
         }
         GlassStyle(
             tint = base.copy(alpha = alpha),
@@ -102,16 +103,16 @@ fun Modifier.liquidGlass(
     backdrop: Backdrop,
     shape: Shape,
     style: GlassStyle,
-    blurRadius: Dp = 6.dp,
+    blurRadius: Dp = 1.5.dp,
     refraction: Boolean = true,
     scale: () -> Float = { 1f },
 ): Modifier = drawBackdrop(
     backdrop = backdrop,
     shape = { shape },
     effects = {
-        vibrancy()
-        blur(blurRadius.toPx())
-        if (refraction) lens(refractionHeight = 16.dp.toPx(), refractionAmount = 32.dp.toPx(), depthEffect = true)
+        // 通透：不增强饱和度、几乎不模糊，只在边缘一圈折射，中间透过去的内容清清楚楚
+        if (blurRadius > 0.dp) blur(blurRadius.toPx())
+        if (refraction) lens(refractionHeight = 12.dp.toPx(), refractionAmount = 28.dp.toPx(), depthEffect = true)
     },
     highlight = { style.rimHighlight },
     shadow = { style.shadow },
@@ -129,7 +130,7 @@ fun Modifier.frostedBar(backdrop: Backdrop, style: GlassStyle): Modifier = drawB
     shape = { RectangleShape },
     effects = {
         vibrancy()
-        blur(28.dp.toPx())
+        blur(16.dp.toPx())
     },
     highlight = null,
     shadow = null,

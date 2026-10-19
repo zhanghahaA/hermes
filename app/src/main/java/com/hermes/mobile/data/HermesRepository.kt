@@ -109,6 +109,10 @@ interface HermesRepository {
     /** 给“导出诊断信息”用的一段文字：连接、服务器能力、最近的错误。不含 Key、密码、私钥。 */
     fun diagnosticsReport(): String = "（演示数据）"
 
+    /** 会话分组（项目 / 工作目录），要 SSH 才读得到；读不到时只有空分组。 */
+    val sessionGroups: StateFlow<com.hermes.mobile.data.model.SessionGrouping>
+        get() = kotlinx.coroutines.flow.MutableStateFlow(com.hermes.mobile.data.model.SessionGrouping())
+
     // 管理
     /** 经 SSH 的管理功能（记忆、MCP、配置文件、日志）。连接没配 SSH 时为 null。 */
     fun admin(): com.hermes.mobile.data.remote.AdminApi? = null

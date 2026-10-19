@@ -1,5 +1,9 @@
 package com.hermes.mobile.ui.chats
 
+import androidx.compose.material.icons.rounded.FolderOpen
+
+import com.hermes.mobile.data.model.SessionGrouping
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -105,6 +109,11 @@ fun ChatsScreen(
 
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(ChatFilter.All) }
+    val grouping by repository.sessionGroups.collectAsState()
+    // 选中的分组；null 是全部。分组没了（换了连接）就回到全部
+    var group by rememberSaveable { mutableStateOf<String?>(null) }
+    val showGroups = grouping.groups.any { it != SessionGrouping.DefaultGroup }
+    if (group != null && group !in grouping.groups) group = null
     var refreshing by remember { mutableStateOf(false) }
     var showSwitcher by remember { mutableStateOf(false) }
     var actionTarget by remember { mutableStateOf<Session?>(null) }
@@ -125,6 +134,7 @@ fun ChatsScreen(
     val visible = sessions
         .filter { it.id !in pendingDelete }
         .filter { query.isBlank() || it.title.contains(query, true) || it.preview.contains(query, true) }
+        .filter { group == null || grouping.groupOf(it.id) == group }
         .filter {
             when (filter) {
                 ChatFilter.All -> true
@@ -215,6 +225,16 @@ fun ChatsScreen(
                 item(key = "search") {
                     SearchField(query, onQueryChange = { query = it })
                 }
+                if (showGroups) {
+                    item(key = "groups") {
+                        GroupChips(
+                            groups = grouping.groups,
+                            counts = sessions.groupingBy { grouping.groupOf(it.id) }.eachCount(),
+                            selected = group,
+                            onSelect = { group = it },
+                        )
+                    }
+                }
                 item(key = "filters") {
                     Row(
                         Modifier
@@ -264,7 +284,14 @@ fun ChatsScreen(
                         ),
                         modifier = Modifier.animateItem(),
                     ) {
-                        SessionRow(session, onClick = { onOpenChat(session.id) }, onLongPress = { actionTarget = session }, draft = drafts[session.id])
+                        SessionRow(
+                            session,
+                            onClick = { onOpenChat(session.id) },
+                            onLongPress = { actionTarget = session },
+                            draft = drafts[session.id],
+                            // 看全部时，标出不在“默认”里的会话属于哪个分组
+                            group = grouping.groupOf(session.id).takeIf { showGroups && group == null && it != SessionGrouping.DefaultGroup },
+                        )
                     }
                 }
             }
@@ -365,7 +392,7 @@ private fun OfflineBanner(reason: String, onRetry: () -> Unit) {
 }
 
 @Composable
-fun SessionRow(session: Session, onClick: () -> Unit, onLongPress: () -> Unit, draft: String? = null) {
+fun SessionRow(session: Session, onClick: () -> Unit, onLongPress: () -> Unit, draft: String? = null, group: String? = null) {
     val haptics = LocalHapticFeedback.current
     Row(
         modifier = Modifier
@@ -392,6 +419,14 @@ fun SessionRow(session: Session, onClick: () -> Unit, onLongPress: () -> Unit, d
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
+                if (group != null) {
+                    Spacer(Modifier.width(6.dp))
+                    TagLabel(
+                        group,
+                        container = MaterialTheme.colorScheme.secondaryContainer,
+                        content = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
                 if (session.external) {
                     Spacer(Modifier.width(6.dp))
                     TagLabel(if (session.readOnly) "${session.source.label} · 只读" else session.source.label)
@@ -459,4 +494,26 @@ private fun SessionActionsSheet(
             SheetAction("删除", Icons.Rounded.Delete, onDelete, destructive = true),
         ),
     )
+}
+
+/** 分组（Hermes 的项目 / 工作目录）：“全部”加每个分组，带会话数。 */
+@Composable
+private fun GroupChips(groups: List<String>, counts: Map<String, Int>, selected: String?, onSelect: (String?) -> Unit) {
+    Row(
+        Modifier
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.FolderOpen, contentDescription = "分组", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        FilterChip(selected = selected == null, onClick = { onSelect(null) }, label = { Text("全部分组") })
+        groups.forEach { name ->
+            FilterChip(
+                selected = selected == name,
+                onClick = { onSelect(if (selected == name) null else name) },
+                label = { Text("$name · ${counts[name] ?: 0}") },
+            )
+        }
+    }
 }

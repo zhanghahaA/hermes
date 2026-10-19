@@ -247,6 +247,13 @@ Gateway 状态走 API：`GET /health/detailed` 有 `readiness.checks`（数据�
 图片编码：长边不超过 2048；只有真有透明像素才用 PNG（Android 几乎把所有 PNG 都标成有透明通道，截图存 PNG 会很大），
 单张超过 3.5 MB 就降质量再缩小。
 
+## 会话分组（项目）
+
+API 的会话列表里没有项目信息。Hermes 桌面版的分组来自两处：`<HERMES_HOME>/projects.db`（项目和它们的文件夹）
+和 `state.db` 里每个会话的工作目录（`cwd`、`git_repo_root`）。App 经 SSH 用 `python3` 只读地查这两个库：
+工作目录落在某个项目的文件夹里（取路径最长的）就归到项目名下，否则按工作目录（git 仓库根优先）的文件夹名，
+都没有的归到“默认”。从 App 新建的会话没有工作目录（API 不能指定），都在“默认”里。
+
 ## 客户端说明（instructions）
 
 `/v1/runs` 的 `instructions` 字段是只对这一轮生效的补充系统提示（Hermes 里叫 ephemeral system prompt，追加在系统提示后面，不存进聊天记录）。
