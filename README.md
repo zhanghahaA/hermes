@@ -14,6 +14,7 @@ Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to
 - **Attachments**: photos, camera, files. PDFs are sent as page images, text files are inlined, other files are uploaded over SSH. Original photos are also saved on the server so the agent can work with the files.
 - **Models** (lock a model per chat or set the default for new chats), **scheduled jobs** (create / edit / pause / run now), **skills and toolsets**.
 - **Admin over SSH**: memory, MCP servers, `config.yaml` (validated before saving), logs. Gateway status works without SSH.
+- **Bots**: every Hermes profile is a bot, as in Hermes Desktop. List them, switch the chat to any bot (its own API key, its own "Bot Chat"), and create / edit (name, avatar, description, personality, model) / delete bots. Changes to the server config are made only when you tap a button that explains them first.
 - **Bot screen**: watch the bot's desktop on the server (Hermes Bot Desktop) and take over / hand back control, just like Hermes Desktop. The viewer is noVNC bundled in the app; the picture goes over your SSH connection, no extra ports.
 - **Offline cache**: the session list and recent messages are kept on the phone, so they show up instantly and stay readable when Hermes is unreachable.
 - **Version-tolerant**: on connect the app probes what the server supports (`/v1/capabilities`, falling back to probing endpoints on older versions) and hides what is not available, instead of comparing version numbers.

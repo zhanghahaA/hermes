@@ -167,6 +167,18 @@ platform_toolsets:
 在聊天列表里左滑一个对话，点“归档”，它就从列表里收起来（Hermes 桌面版里也是归档状态），可以马上点“撤销”。
 归档的对话在“已归档”筛选里，左滑可以取消归档或删除。
 
+## Bot
+
+Hermes 的每个 Profile 就是一个 bot（电脑版 Hermes 里叫 Bot）：有自己的名字、头像、性格（SOUL.md）、模型、对话、记忆和定时任务。
+底栏的「Bot」页列出那台电脑上所有的 bot（需要这个连接配了 SSH）。
+
+- **和它聊**：点一个 bot，App 换成和它聊，并打开它的固定对话「Bot Chat」（电脑版也是这个对话）。聊天列表顶部会显示正在用哪个 bot，列表里只有这个 bot 的对话。
+- **开通手机访问**：第一次点某个 bot 时，App 会先说明要改什么，你点「开通」才做：给这个 bot 生成它自己的 `API_SERVER_KEY`（写进它的 `.env`，已有就用原来的），
+  需要时打开 `gateway.multiplex_profiles` 并重启一次 gateway（只有第一次需要；重启时正在进行的回复会中断）。
+- **新建**：Bot 页右下角的「+」。填名字（中文也行，会自动生成一个英文 ID，比如「小助手」→ `u5c0f-u52a9-u624b`）、它负责什么、性格（可以不填，自动写一份），选颜色或照片当头像。
+  新 bot 和电脑版新建的一样：从默认 bot 复制模型、API Key 和技能，不复制 Telegram 等聊天平台的 bot token。
+- **编辑 / 删除**：长按 bot 或点右边的「⋮」。可以改名字、头像、描述、性格和模型。删除会从电脑上删掉这个 bot 的所有对话、记忆和技能，不能恢复；默认 bot 不能删。
+
 ## Bot 屏幕（看 bot 的桌面、接管）
 
 Hermes 跑在 Linux 主机（服务器、云主机）上时，可以给每个 bot 开一块虚拟桌面，bot 的 `computer_use` 和浏览器在上面操作，
@@ -186,6 +198,6 @@ Hermes 跑在 Linux 主机（服务器、云主机）上时，可以给每个 bo
 
 ## 多个 Profile
 
-如果你用 Hermes 的多 Profile，在连接里填 Profile 名字，并在那台机器的 `config.yaml` 里开启 `gateway.multiplex_profiles`。
+一般直接用「Bot」页切换就行（见上面的 Bot）。也可以给某个 Profile 单独建一个连接：在连接里填 Profile 名字，并在那台机器的 `config.yaml` 里开启 `gateway.multiplex_profiles`。
 每个 Profile 要在自己的 `~/.hermes/profiles/<名字>/.env` 里设置单独的 `API_SERVER_KEY`，App 里填的也是这个 Profile 的 Key。
 想同时用几个 Profile，就为每个 Profile 建一个连接，在聊天列表顶部切换。

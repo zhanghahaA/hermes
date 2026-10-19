@@ -12,6 +12,7 @@
 - **发图片、拍照、发文件**（PDF 转图片、文本文件附内容、其它文件经 SSH 上传；照片原文件也会传到服务器）；
 - **模型切换**（每个对话单独锁定，或设新对话默认模型）、**定时任务**（新建 / 编辑 / 暂停 / 立即运行）、**技能和工具集**；
 - **管理**（经 SSH）：记忆、MCP 服务器、config.yaml（保存前检查格式）、日志；Gateway 运行状态；
+- **Bot**：Hermes 的每个 Profile 就是一个 bot（和桌面版一样）：列出所有 bot、换成和某个 bot 聊（它自己的 Key 和「Bot Chat」）、新建 / 编辑（名字、头像、描述、性格、模型）/ 删除；要改服务器配置时先说明、你点了才改；
 - **Bot 屏幕**：经 SSH 看 bot 在服务器桌面上的操作，需要时接管、交还（和 Hermes 桌面版一样）；
 - **本地缓存**：会话列表和聊天记录在手机上留一份，打开就显示，连不上时也能翻看。
 
@@ -24,6 +25,7 @@
 | 聊天列表 | `ui/chats/ChatsScreen.kt` | 大标题顶栏、连接状态胶囊、搜索、筛选、分组和项目、左滑置顶 / 归档 / 删除（可撤销）、长按菜单、下拉刷新 |
 | 聊天 | `ui/chat/ChatScreen.kt` | 消息气泡（连续消息自动分组）、Markdown（CommonMark + 表格、删除线、任务列表，中文标点旁的加粗也能识别）和代码块、“正在输入”、审批/追问卡片、发图片、发送/停止按钮、回到最新 |
 | 模型切换 | `ui/chat/ModelPickerSheet.kt` | 按 Provider 分组的底部面板 |
+| Bot | `ui/bots/BotsScreen.kt`、`ui/bots/BotEditorScreen.kt`、`data/remote/HermesAdmin.kt` | bot 列表、切换、开通手机访问、新建 / 编辑 / 删除（调 Hermes 桌面版用的同一套 Profile 方法） |
 | Bot 屏幕 | `ui/admin/BotScreen.kt`、`platform/ScreenWebView.kt` | 经 SSH 看 bot 的桌面、接管 / 交还，打包进 App 的 noVNC（`tools/novnc/build.sh` 生成） |
 | 定时任务 | `ui/jobs/` | 任务卡片（开关、立即运行、上次结果）、新建/编辑（频率、星期、时间、cron、结果发送到） |
 | 能力 | `ui/capabilities/` | 默认模型、技能、工具集，以及需要 SSH 的“更多”功能入口 |

@@ -301,3 +301,19 @@ Hermes 在 Linux 主机上给每个 Profile 开一个 TigerVNC（Xvnc）+ Xfce �
   直接接 socket 绕过了 dashboard 那层按 lease 过滤输入的网关，所以 App 自己保证没接管时不发输入（noVNC `viewOnly`）；Hermes 文档也说明了 lease 是工具层的约束，同一系统用户本来就能直接连 socket。
 - 查看器：noVNC 1.7.0（电脑版也是这个版本），用 `tools/novnc/build.sh` 打包成一个 ES 模块内联进 `assets/screen/screen.html`（有顶层 await，WebView 的 file:// 加载不了外部模块）。
   noVNC 支持把“像 WebSocket 的对象”当通道，页面里的 `NativeChannel` 把字节 base64 后交给 `HermesScreen.send`，App 收到的字节用 `hm.recv` 送回页面。页面不联网（`blockNetworkLoads`）。
+
+## Bot（Profile）
+
+电脑版的 Bot 就是 Profile，固定对话是标题恰好为 `Bot Chat` 的会话。App 经 SSH 用 Hermes 自己的 Python 读写：
+
+- 列表：`hermes_cli.profiles.list_profiles()` + `profile.yaml`（`display_name`、`description`、`ui_meta["hermes-bots"]` 里的 `title` / `color`）
+  + `assets/avatar.*` + 各自 `state.db` 里的 `Bot Chat` 和最近的会话。显示名的顺序和电脑版一样：`title` → `display_name` → 默认 bot 叫 Hermes → id。
+- 聊天：同一个 gateway 的 `/p/<bot>/...`，用 bot 自己 `.env` 里的 `API_SERVER_KEY`（主 key 在别的 Profile 上是 401）。key 是每次请求现读的，
+  只有第一次打开 `gateway.multiplex_profiles` 要重启 gateway。没装成系统服务时 `hermes gateway restart` 会在当前进程前台跑，所以 App 用 `setsid nohup … &` 脱离 SSH 会话。
+- 新建 / 编辑：`import tui_gateway.server` 后调它的 `_methods["profiles.create" | "profiles.describe" | "profiles.configure" | "profiles.set_asset"]`，
+  就是电脑版 Bot 用的 JSON-RPC 方法（新建默认 `clone_from: "default"`、`share_auth: true`，和电脑版一样）。这个模块一 import 就把 `sys.stdout` 换成 stderr，
+  脚本先 `dup` 一份真正的 stdout 再输出结果。`ui_meta["hermes-bots"]` 是整个替换的，App 先读出原来的再合并。
+  `profiles.configure` 改模型失败时只回 `false`，App 再直接调 `_write_profile_model` 拿 Hermes 给的原因。贵的模型会回 `confirm_required`，用户确认后带 `confirm_expensive_model` 重发。
+- 管理 bot 的脚本把 `HERMES_HOME` 设成 `get_default_hermes_root()`：当前用的可能是某个 bot 的目录，而新建要从主目录复制设置。
+- 删除：`hermes_cli.profiles.delete_profile(name, yes=True)`（先停它的 gateway、写墓碑再删目录；直接 `rm -rf` 会被正在跑的 gateway 重新建出来）。
+
