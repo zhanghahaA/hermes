@@ -90,4 +90,54 @@ class MarkdownTest {
         val gfm = "| a | b |\n|---|---|\n| 1 | 2 |"
         assertEquals(1, parseMarkdown(gfm).all().filterIsInstance<org.commonmark.ext.gfm.tables.TableBlock>().count())
     }
+
+    private fun names(md: String) = parseMarkdown(md).all().map { it::class.simpleName }.toList()
+
+    @Test
+    fun mathBecomesReadable() {
+        assertEquals("a² + b² = c²", latexToText("a^2 + b^2 = c^2"))
+        assertEquals("c = √(a²+b²)", latexToText("c = \\sqrt{a^2+b^2}"))
+        assertEquals("E = mc² × 1/2", latexToText("E = mc^2 \\times \\frac{1}{2}"))
+        assertEquals("x ≤ 3, α → ∞", latexToText("x \\le 3, \\alpha \\to \\infty"))
+        assertEquals("(n+1)/2", latexToText("\\frac{n+1}{2}"))
+        assertEquals("30°", latexToText("30^\\circ"))
+        // 行内公式：没有反斜杠、$ 也不见了
+        val inline = literal("勾股定理：\$a^2 + b^2 = c^2\$，所以 \\(c = \\sqrt{a^2+b^2}\\)。")
+        assertTrue("a² + b² = c²" in inline && "√(a²+b²)" in inline && '\\' !in inline && '$' !in inline, inline)
+        // 价钱不是公式
+        assertEquals("价格是 \$5 到 \$10 之间。", literal("价格是 \$5 到 \$10 之间。"))
+        // 整块公式变成“公式”代码块
+        val block = parseMarkdown("看：\n\n\$\$\nE = mc^2\n\$\$\n\n完")
+        val code = block.all().filterIsInstance<org.commonmark.node.FencedCodeBlock>().single()
+        assertEquals("公式", code.info)
+        assertEquals("E = mc²", code.literal.trim())
+        // 代码里的 $ 不动
+        assertEquals("`\$x^2\$`", chatFixes("`\$x^2\$`"))
+    }
+
+    @Test
+    fun htmlTagsAreNotShownRaw() {
+        assertFalse("<" in literal("第一行<br>第二行 <b>加粗</b> <sup>1</sup>"))
+        assertEquals("展开看详情\n里面的内容", htmlBlockText("<details><summary>展开看详情</summary>里面的内容</details>"))
+    }
+
+    @Test
+    fun commonModelQuirks() {
+        // 标题少空格
+        assertTrue("Heading" in names("###三步搞定"))
+        assertTrue("Heading" !in names("#话题"), "单个 # 可能是话题标签")
+        // 有序列表下缩进两格的子项算嵌套
+        val nested = parseMarkdown("1. 准备\n  - 子项一\n  - 子项二\n2. 下一步")
+        val ordered = nested.all().filterIsInstance<org.commonmark.node.OrderedList>().single()
+        assertEquals(2, ordered.all().filterIsInstance<org.commonmark.node.ListItem>().count { it.parent === ordered })
+        assertTrue(ordered.all().any { it is org.commonmark.node.BulletList })
+        // 单星号斜体挨着中文标点
+        assertTrue("Emphasis" in names("*注意：*别删错"))
+        assertFalse('*' in literal("*注意：*别删错"))
+        // 乘号不当斜体
+        assertEquals("2 * 3 * 4", literal("2 * 3 * 4"))
+        // 脚注内容不丢
+        val foot = literal("脚注示例[^1]。\n\n[^1]: 这是脚注。")
+        assertTrue("这是脚注" in foot && "[1]" in foot, foot)
+    }
 }

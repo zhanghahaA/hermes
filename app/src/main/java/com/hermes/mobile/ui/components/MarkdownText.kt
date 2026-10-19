@@ -48,6 +48,8 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.text.style.BaselineShift
 import com.hermes.mobile.ui.theme.CodeTextStyle
 import com.hermes.mobile.ui.theme.LocalHermesColors
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
@@ -125,7 +127,7 @@ private val parser: Parser = Parser.builder()
     )
     .build()
 
-internal fun parseMarkdown(text: String): Node = parser.parse(cjkFriendly(looseTables(text)))
+internal fun parseMarkdown(text: String): Node = parser.parse(cjkFriendly(looseTables(chatFixes(text))))
 
 private fun Node.children(): Sequence<Node> = generateSequence(firstChild) { it.next }
 
@@ -142,9 +144,10 @@ private fun Block(node: Node, ctx: MdContext, depth: Int) {
             inlineText(node, ctx),
             color = ctx.color,
             style = when (node.level) {
-                1 -> MaterialTheme.typography.titleLarge
-                2 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
-                else -> MaterialTheme.typography.titleMedium
+                1 -> MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+                2 -> MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                3 -> MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = ctx.body.fontSize * 1.1f)
+                else -> ctx.body.copy(fontWeight = FontWeight.Bold)
             },
         )
         is BulletList -> ListBlock(node, ctx, depth) { _ -> listOf("•", "◦", "▪")[depth.coerceAtMost(2)] }
@@ -166,7 +169,7 @@ private fun Block(node: Node, ctx: MdContext, depth: Int) {
         is FencedCodeBlock -> CodeBlock(node.literal.trimEnd('\n'), node.info?.trim()?.substringBefore(' ')?.ifEmpty { null }, ctx.color, ctx.onCopyCode)
         is IndentedCodeBlock -> CodeBlock(node.literal.trimEnd('\n'), null, ctx.color, ctx.onCopyCode)
         is ThematicBreak -> HorizontalDivider(Modifier.padding(vertical = 4.dp), color = ctx.color.copy(alpha = 0.2f))
-        is HtmlBlock -> Text(node.literal.trimEnd('\n'), color = ctx.color, style = ctx.body)
+        is HtmlBlock -> htmlBlockText(node.literal).takeIf { it.isNotBlank() }?.let { Text(it, color = ctx.color, style = ctx.body) }
         is TableBlock -> Table(node, ctx)
         else -> Blocks(node, ctx, depth)
     }
@@ -267,6 +270,29 @@ private fun Table(table: TableBlock, ctx: MdContext) {
 private val bareUrl = Regex("""https?://[^\s<>()\[\]{}"'，。；：！？、）】」』]+""")
 
 private fun inlineText(parent: Node, ctx: MdContext): AnnotatedString = buildAnnotatedString {
+    // 行内 HTML 标签（<b>、<br>、<sup>……）：认得的按样式显示，其它的不显示标签本身
+    val openTags = ArrayList<String>()
+    fun html(tag: String) {
+        val m = htmlTag.matchEntire(tag.trim()) ?: return
+        val closing = m.groupValues[1] == "/"
+        val name = m.groupValues[2].lowercase()
+        if (name == "br") {
+            append('\n')
+            return
+        }
+        val style = htmlInlineStyle(name, ctx) ?: return
+        if (closing) {
+            val at = openTags.lastIndexOf(name)
+            if (at >= 0) {
+                // 先关掉后开的，再关自己
+                repeat(openTags.size - at) { pop() }
+                openTags.subList(at, openTags.size).clear()
+            }
+        } else if (!m.groupValues[3].endsWith("/")) {
+            pushStyle(style)
+            openTags += name
+        }
+    }
     fun walk(node: Node) {
         when (node) {
             is TextNode -> {
@@ -296,13 +322,38 @@ private fun inlineText(parent: Node, ctx: MdContext): AnnotatedString = buildAnn
                 if (node.firstChild == null) append(node.destination)
             }
             is SoftLineBreak, is HardLineBreak -> append('\n')
-            is HtmlInline -> append(node.literal)
+            is HtmlInline -> html(node.literal)
             is TaskListItemMarker -> Unit
             else -> node.children().forEach(::walk)
         }
     }
     parent.children().forEach(::walk)
+    repeat(openTags.size) { pop() }
 }
+
+private val htmlTag = Regex("""<(/?)([A-Za-z][A-Za-z0-9]*)([^>]*)>""")
+
+private fun htmlInlineStyle(name: String, ctx: MdContext): SpanStyle? = when (name) {
+    "b", "strong" -> SpanStyle(fontWeight = FontWeight.Bold)
+    "i", "em", "cite", "var" -> SpanStyle(fontStyle = FontStyle.Italic)
+    "u", "ins" -> SpanStyle(textDecoration = TextDecoration.Underline)
+    "s", "del", "strike" -> SpanStyle(textDecoration = TextDecoration.LineThrough)
+    "code", "kbd", "samp", "tt" -> SpanStyle(fontFamily = FontFamily.Monospace, background = ctx.codeBackground)
+    "sup" -> SpanStyle(baselineShift = BaselineShift.Superscript, fontSize = 0.75.em)
+    "sub" -> SpanStyle(baselineShift = BaselineShift.Subscript, fontSize = 0.75.em)
+    "mark" -> SpanStyle(background = ctx.link.copy(alpha = 0.2f))
+    "small" -> SpanStyle(fontSize = 0.85.em)
+    "span", "font", "a", "abbr", "summary", "p", "div" -> SpanStyle()
+    else -> null
+}
+
+/** 整块的 HTML（比如 <details>）：去掉标签，留下文字；<summary> 和 <br> 换行。 */
+internal fun htmlBlockText(html: String): String = html
+    .replace(Regex("""<!--.*?-->""", RegexOption.DOT_MATCHES_ALL), "")
+    .replace(Regex("""<br\s*/?>|</(summary|p|div|li|tr|h[1-6])>""", RegexOption.IGNORE_CASE), "\n")
+    .replace(Regex("""<[^>]+>"""), "")
+    .replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&")
+    .lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
 
 @Composable
 private fun CodeBlock(code: String, language: String?, color: Color, onCopy: ((String) -> Unit)?) {
@@ -425,7 +476,7 @@ private const val CjkSpacer = ' '
  * 代码块和行内代码里的内容不动。
  */
 internal fun cjkFriendly(source: String): String {
-    if (!source.contains("**")) return source
+    if (!source.contains('*')) return source
     val out = StringBuilder(source.length + 16)
     var inFence = false
     val paragraph = mutableListOf<String>()
@@ -463,8 +514,8 @@ private fun isPunct(c: Char): Boolean = when (Character.getType(c).toByte()) {
 }
 
 private fun fixParagraph(text: String): String {
-    // 找出行内代码以外的 `**`（正好两个星号）
-    val runs = mutableListOf<Int>()
+    // 找出行内代码以外的星号串（* / ** / ***），两边都是空白的（比如乘号、列表符号）不算
+    val runs = mutableListOf<Pair<Int, Int>>()
     var i = 0
     while (i < text.length) {
         val c = text[i]
@@ -476,7 +527,10 @@ private fun fixParagraph(text: String): String {
         }
         if (c == '*') {
             val len = text.drop(i).takeWhile { it == '*' }.length
-            if (len == 2) runs += i
+            val prev = text.getOrNull(i - 1)
+            val next = text.getOrNull(i + len)
+            val spacedBothSides = (prev == null || prev.isWhitespace()) && (next == null || next.isWhitespace())
+            if (len <= 3 && !spacedBothSides) runs += i to len
             i += len
             continue
         }
@@ -484,25 +538,29 @@ private fun fixParagraph(text: String): String {
     }
     if (runs.size < 2) return text
     val before = mutableSetOf<Int>()
-    val after = mutableSetOf<Int>()
-    for (k in 0 until runs.size - runs.size % 2) {
-        val at = runs[k]
-        val prev = text.getOrNull(at - 1)
-        val next = text.getOrNull(at + 2)
-        if (k % 2 == 0) {
-            // 开头：后面是标点、前面是文字 → 在前面垫一个空白
-            if (next != null && isPunct(next) && prev != null && !prev.isWhitespace() && !isPunct(prev)) before += at
-        } else {
-            // 收尾：前面是标点、后面是文字 → 在后面垫一个空白
-            if (prev != null && isPunct(prev) && next != null && !next.isWhitespace() && !isPunct(next)) after += at
+    val afterEnd = mutableSetOf<Int>()
+    // 同样长度的星号串按顺序两两配对
+    for (len in 1..3) {
+        val same = runs.filter { it.second == len }.map { it.first }
+        for (k in 0 until same.size - same.size % 2) {
+            val at = same[k]
+            val prev = text.getOrNull(at - 1)
+            val next = text.getOrNull(at + len)
+            if (k % 2 == 0) {
+                // 开头：后面是标点、前面是文字 → 在前面垫一个空白
+                if (next != null && isPunct(next) && prev != null && !prev.isWhitespace() && !isPunct(prev)) before += at
+            } else {
+                // 收尾：前面是标点、后面是文字 → 在后面垫一个空白
+                if (prev != null && isPunct(prev) && next != null && !next.isWhitespace() && !isPunct(next)) afterEnd += at + len - 1
+            }
         }
     }
-    if (before.isEmpty() && after.isEmpty()) return text
+    if (before.isEmpty() && afterEnd.isEmpty()) return text
     val sb = StringBuilder()
     for ((index, ch) in text.withIndex()) {
         if (index in before) sb.append(CjkSpacer)
         sb.append(ch)
-        if (index - 1 in after) sb.append(CjkSpacer)
+        if (index in afterEnd) sb.append(CjkSpacer)
     }
     return sb.toString()
 }

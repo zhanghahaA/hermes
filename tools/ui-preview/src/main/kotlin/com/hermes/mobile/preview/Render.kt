@@ -64,6 +64,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.jetbrains.skia.EncodedImageFormat
 import java.io.File
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.material.icons.rounded.Archive
@@ -178,6 +180,13 @@ private val scenes = listOf(
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(12.dp)) {
             Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
                 com.hermes.mobile.ui.components.MarkdownText(WeatherSample, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+            }
+        }
+    },
+    Scene("33c-markdown-stress") { _, _ ->
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(12.dp).verticalScroll(rememberScrollState())) {
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                com.hermes.mobile.ui.components.MarkdownText(StressSample, Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
             }
         }
     },
@@ -409,4 +418,31 @@ private val WeatherSample = """
 这几处不太一致的地方，我得如实说一下，不糊弄你：
 
 10/20 的小雨，官方报了，但 open-meteo 给 0 mm、降水概率 4%，met.no 也是 0 mm。
+""".trimIndent()
+
+private val StressSample = """
+###三步搞定
+勾股定理：${'$'}a^2 + b^2 = c^2${'$'}，所以 \(c = \sqrt{a^2+b^2}\)。
+
+${'$'}${'$'}
+E = mc^2 \times \frac{1}{2}
+${'$'}${'$'}
+
+价格是 ${'$'}5 到 ${'$'}10 之间。
+
+1. **准备**：先备份
+  - 子项一（两格缩进）
+  - 子项二
+2. *注意：*别删错
+
+| 项目 | 说明 |
+|---|---|
+| A | 第一行<br>第二行 |
+| B | <b>加粗</b> 和 <code>code</code> |
+
+<details><summary>展开看详情</summary>里面的内容</details>
+
+脚注示例[^1]。
+
+[^1]: 这是脚注。
 """.trimIndent()
