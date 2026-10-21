@@ -14,6 +14,7 @@ android {
         targetSdk = 37
         versionCode = 26
         versionName = "0.11.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -73,4 +74,6 @@ dependencies {
     implementation(libs.commonmark.tasklist)
     implementation(libs.compose.ui.tooling.preview)
     debugImplementation(libs.compose.ui.tooling)
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }

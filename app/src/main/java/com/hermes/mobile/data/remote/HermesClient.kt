@@ -1,11 +1,20 @@
 package com.hermes.mobile.data.remote
 
+import com.hermes.mobile.data.ConnectionTrace
+import com.hermes.mobile.data.ConnectionTrace.Event
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.job
 import kotlinx.serialization.json.put
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.json.JsonElement
@@ -21,22 +30,25 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.EventListener
+import okhttp3.Connection
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
-import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** 调用 Hermes 时可能出现的错误，已经翻译成用户能看懂的说法。 */
-sealed class HermesError(message: String) : Exception(message) {
-    class Unreachable(detail: String) : HermesError(detail)
-    class Timeout : HermesError("连接超时，确认地址、端口和网络（例如 Tailscale 是否已连上）")
-    class Tls(detail: String) : HermesError("HTTPS 证书有问题：$detail")
+sealed class HermesError(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    class Unreachable(detail: String, cause: Throwable? = null) : HermesError(detail, cause)
+    class Timeout(cause: Throwable? = null) : HermesError("连接超时，确认地址、端口和网络（例如 Tailscale 是否已连上）", cause)
+    class Tls(detail: String, cause: Throwable? = null) : HermesError("HTTPS 证书有问题：$detail", cause)
     class NotHermes(detail: String = "这个地址有服务在运行，但不是 Hermes API Server") : HermesError(detail)
-    class Unauthorized : HermesError("API Key 不对，或者服务器没有配置 API_SERVER_KEY")
+    class Unauthorized(val status: Int = 401) : HermesError("API Key 不对，或者服务器没有配置 API_SERVER_KEY")
     class NotSupported(val what: String) : HermesError("这台 Hermes 的版本不支持$what")
     class Conflict(val code: String?, detail: String) : HermesError(detail)
     class Server(val status: Int, val code: String?, detail: String, val retryAfterSeconds: Long? = null) : HermesError(detail)
@@ -54,6 +66,7 @@ class HermesClient(
     private val apiKey: String?,
     private val profile: String? = null,
     http: OkHttpClient = SharedHttp,
+    private val diagnostics: ConnectionTrace? = null,
 ) {
     private val base: HttpUrl = baseUrl.trim().trimEnd('/').toHttpUrlOrNull()
         ?: throw HermesError.BadUrl("地址格式不对：$baseUrl")
@@ -62,11 +75,43 @@ class HermesClient(
     /** 事件流用的客户端：服务器每 10 秒发一次心跳，30 秒没有任何数据就认为连接已死。 */
     private val streamHttp: OkHttpClient = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
 
-    internal suspend fun health(): HealthDto =
+    internal suspend fun health(): HealthDto = try {
         get("/health", HealthDto.serializer(), auth = false, profileScoped = false).also {
             // 随便一个返回 JSON 的服务也能解析成功（字段全是可选的），至少要有 status 或 platform 才算 Hermes
             if (it.status == null && it.platform == null) throw HermesError.NotHermes()
+            diagnostics?.record(Event.HealthParsed)
         }
+    } catch (e: HermesError) {
+        diagnostics?.record(Event.HealthFailed, error = e.cause ?: e)
+        throw e
+    }
+
+    /** 只给 SSH 的 IPv4 本地入口使用；保留原客户端配置，但绝不让系统 HTTP 代理接管它。 */
+    internal fun throughSshTunnel(trace: ConnectionTrace): HermesClient {
+        require(base.host == "127.0.0.1" && base.scheme == "http")
+        val tunnelHttp = http.newBuilder()
+            .proxy(Proxy.NO_PROXY)
+            .eventListenerFactory { call ->
+                if (call.request().method != "GET" || call.request().url.encodedPath != "/health") EventListener.NONE
+                else object : EventListener() {
+                    override fun callStart(call: Call) = trace.record(Event.HealthStart, localPort = base.port, proxy = Proxy.Type.DIRECT)
+                    override fun connectStart(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy) =
+                        trace.record(Event.HealthConnectStart, proxy = proxy.type())
+                    override fun connectFailed(call: Call, inetSocketAddress: InetSocketAddress, proxy: Proxy, protocol: okhttp3.Protocol?, ioe: IOException) =
+                        trace.record(Event.HealthConnectFailed, error = ioe, proxy = proxy.type())
+                    override fun connectionAcquired(call: Call, connection: Connection) =
+                        trace.record(Event.HealthConnected, proxy = connection.route().proxy.type())
+                    override fun requestHeadersStart(call: Call) = trace.record(Event.HealthHeadersStart)
+                    override fun requestHeadersEnd(call: Call, request: Request) = trace.record(Event.HealthHeadersSent)
+                    override fun responseHeadersStart(call: Call) = trace.record(Event.HealthResponseStart)
+                    override fun responseHeadersEnd(call: Call, response: Response) = trace.record(Event.HealthResponse, status = response.code)
+                    override fun responseBodyEnd(call: Call, byteCount: Long) = trace.record(Event.HealthBodyFinished, bytes = byteCount)
+                    override fun callEnd(call: Call) = trace.record(Event.HealthCallFinished)
+                    override fun callFailed(call: Call, ioe: IOException) = trace.record(Event.HealthFailed, error = ioe)
+                }
+            }.build()
+        return HermesClient(base.toString(), apiKey, profile, tunnelHttp, trace)
+    }
 
     internal suspend fun capabilities(): CapabilitiesDto = get("/v1/capabilities", CapabilitiesDto.serializer())
 
@@ -151,14 +196,15 @@ class HermesClient(
             .get()
             .build()
         val response = execute(request, streamHttp)
-        response.use { r ->
-            val source = r.body.source()
+        response.consume {
+            val source = response.body.source()
             try {
                 readSse(source) { emit(it) }
             } catch (e: SocketTimeoutException) {
-                throw HermesError.Timeout()
+                throw HermesError.Timeout(e)
             } catch (e: IOException) {
-                throw HermesError.Unreachable(e.message ?: "连接断开")
+                currentCoroutineContext().ensureActive()
+                throw HermesError.Unreachable(e.message ?: "连接断开", e)
             }
         }
     }.flowOn(Dispatchers.IO)
@@ -234,9 +280,15 @@ class HermesClient(
         return decode(execute(request(path).method(method, requestBody).build()), strategy)
     }
 
-    private suspend fun <T> decode(response: Response, strategy: DeserializationStrategy<T>): T = withContext(Dispatchers.Default) {
-        response.use {
-            val text = it.body.string()
+    private suspend fun <T> decode(response: Response, strategy: DeserializationStrategy<T>): T = response.consume {
+        val text = try {
+            withContext(Dispatchers.IO) { response.body.string() }
+        } catch (e: IOException) {
+            currentCoroutineContext().ensureActive()
+            throw if (e is SocketTimeoutException) HermesError.Timeout(e)
+                else HermesError.Unreachable("读取 HTTP 响应失败", e)
+        }
+        withContext(Dispatchers.Default) {
             try {
                 HermesJson.decodeFromString(strategy, text)
             } catch (e: Exception) {
@@ -249,15 +301,15 @@ class HermesClient(
         val response = try {
             client.newCall(request).await()
         } catch (e: SocketTimeoutException) {
-            throw HermesError.Timeout()
+            throw HermesError.Timeout(e)
         } catch (e: UnknownHostException) {
-            throw HermesError.Unreachable("找不到这个地址（${request.url.host}），检查拼写或网络")
+            throw HermesError.Unreachable("找不到这个地址（${request.url.host}），检查拼写或网络", e)
         } catch (e: ConnectException) {
-            throw HermesError.Unreachable("连不上 ${request.url.host}:${request.url.port}，确认 Hermes gateway 在运行、端口正确")
+            throw HermesError.Unreachable("连不上 ${request.url.host}:${request.url.port}，确认 Hermes gateway 在运行、端口正确", e)
         } catch (e: SSLException) {
-            throw HermesError.Tls(e.message ?: "握手失败")
+            throw HermesError.Tls(e.message ?: "握手失败", e)
         } catch (e: IOException) {
-            throw HermesError.Unreachable(e.message ?: "网络错误")
+            throw HermesError.Unreachable(e.message ?: "网络错误", e)
         }
         if (response.isSuccessful) return response
         val (code, message) = response.use { r ->
@@ -273,7 +325,7 @@ class HermesClient(
         }
         // 端口上跑的是 hermes serve / hermes dashboard（桌面版和网页版的后端），不是 App 要连的 API Server
         throw when (response.code) {
-            401, 403 -> HermesError.Unauthorized()
+            401, 403 -> HermesError.Unauthorized(response.code)
             404, 405 -> HermesError.NotSupported("这个功能")
             409 -> HermesError.Conflict(code, message)
             else -> HermesError.Server(response.code, code, message, response.header("Retry-After")?.trim()?.toLongOrNull())
@@ -308,10 +360,30 @@ class HermesClient(
 
 private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
     enqueue(object : Callback {
-        override fun onResponse(call: Call, response: Response) = cont.resume(response)
+        override fun onResponse(call: Call, response: Response) {
+            // 仅在内存的响应对象上关联 Call，不增加 HTTP Header，也不改变发送的请求。
+            val owned = response.newBuilder().request(response.request.newBuilder()
+                .tag(ResponseCall::class.java, ResponseCall(call)).build()).build()
+            cont.resume(owned) { _, resource, _ -> call.cancel(); resource.close() }
+        }
         override fun onFailure(call: Call, e: IOException) {
             if (!cont.isCancelled) cont.resumeWithException(e)
         }
     })
     cont.invokeOnCancellation { runCatching { cancel() } }
+}
+
+private class ResponseCall(val call: Call)
+
+/** 用线程安全的 Call.cancel 解除阻塞，正文始终只由消费线程关闭，避免并发关闭 source。 */
+private suspend fun <T> Response.consume(block: suspend () -> T): T = use {
+    coroutineScope {
+        val owner = currentCoroutineContext().job
+        val closeOnCancellation = launch(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() } finally {
+                if (!owner.isActive) request.tag(ResponseCall::class.java)?.call?.cancel()
+            }
+        }
+        try { block() } finally { closeOnCancellation.cancel() }
+    }
 }

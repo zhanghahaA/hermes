@@ -1,5 +1,7 @@
 package com.hermes.mobile.data.ssh
 
+import com.hermes.mobile.data.ConnectionTrace
+import com.hermes.mobile.data.ConnectionTrace.Event
 import net.schmizz.keepalive.KeepAliveProvider
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
@@ -17,6 +19,9 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.PublicKey
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 
 /** SSH 登录方式。 */
@@ -47,10 +52,19 @@ class SshTunnel(
     private val pinnedHostKey: String?,
     private val onHostKey: (String) -> Unit = {},
     private val connectTimeoutMs: Int = 10_000,
+    private val diagnostics: ConnectionTrace? = null,
 ) : Closeable, RemoteShell {
 
-    private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+    // HTTP 入口始终使用 IPv4 字面地址，监听地址必须与它完全一致。
+    private val server = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     val localPort: Int get() = server.localPort
+    val localBaseUrl: String get() = "http://127.0.0.1:$localPort"
+    val localBindAddress: InetAddress get() = server.inetAddress
+    internal val activeConnectionCount: Int get() = localSockets.size
+    private val localSockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val channels = ConcurrentHashMap.newKeySet<net.schmizz.sshj.connection.channel.direct.DirectConnection>()
+    private val connectionSerial = AtomicLong()
+    private val closeOnce = AtomicBoolean()
 
     @Volatile private var client: SSHClient? = null
     @Volatile private var closed = false
@@ -60,18 +74,33 @@ class SshTunnel(
     val hostKey: String? get() = acceptedHostKey
 
     init {
+        diagnostics?.record(Event.ListenerBound, localPort = localPort, remotePort = remotePort)
         thread(name = "ssh-tunnel-accept", isDaemon = true) { acceptLoop() }
     }
 
     /** 立刻建立 SSH 连接并登录（不等第一个请求），出错时抛 [SshException]，用来尽早给出明确的错误。 */
     fun connect() {
-        session()
+        try { session() } catch (e: IOException) {
+            diagnostics?.record(Event.SshFailed, error = e)
+            throw e
+        }
     }
 
     /** 丢掉当前 SSH 连接（例如网络切换后它多半已经死了），下一个请求会重新连。 */
     fun reset() {
+        diagnostics?.record(Event.SessionReset)
         val old = synchronized(this) { client.also { client = null } }
         runCatching { old?.disconnect() }
+    }
+
+    private fun resetIfCurrent(expected: SSHClient) {
+        val old = synchronized(this) {
+            if (client === expected) client.also { client = null } else null
+        }
+        if (old != null) {
+            diagnostics?.record(Event.SessionReset)
+            runCatching { old.disconnect() }
+        }
     }
 
     /**
@@ -211,19 +240,25 @@ class SshTunnel(
      * 试着开一条到 Hermes 端口的转发通道，返回失败原因（给人看的话），成功返回 null。
      * 用来区分“服务器禁止端口转发”和“那个端口上没有服务”。
      */
-    fun probeForward(): String? = try {
-        session().newDirectConnection("127.0.0.1", remotePort).close()
-        null
-    } catch (e: net.schmizz.sshj.connection.channel.OpenFailException) {
-        when (e.reason) {
+    fun probeForward(): String? {
+        diagnostics?.record(Event.ProbeStart)
+        return try {
+            open(0).close()
+            diagnostics?.record(Event.ProbePassed)
+            null
+        } catch (e: net.schmizz.sshj.connection.channel.OpenFailException) {
+            diagnostics?.record(Event.ProbeFailed, error = e)
+            when (e.reason) {
             net.schmizz.sshj.connection.channel.OpenFailException.Reason.ADMINISTRATIVELY_PROHIBITED ->
                 "SSH 服务器不允许端口转发：在它的 sshd_config 里加上 AllowTcpForwarding local（或 yes）并重载 sshd"
             net.schmizz.sshj.connection.channel.OpenFailException.Reason.CONNECT_FAILED ->
                 "SSH 已登录，但服务器上 127.0.0.1:$remotePort 没有服务在监听：确认 Hermes gateway 在运行、API Server 已开启、端口正确"
-            else -> "SSH 转发失败：${e.message}"
+            else -> "SSH 转发失败（${e.reason}）"
+            }
+        } catch (e: IOException) {
+            diagnostics?.record(Event.ProbeFailed, error = e)
+            "SSH 转发失败（${e.javaClass.simpleName}）"
         }
-    } catch (e: IOException) {
-        "SSH 转发失败：${e.message}"
     }
 
     private fun asciiName(name: String): String {
@@ -237,9 +272,13 @@ class SshTunnel(
         name.replace(Regex("""[/\\\u0000-\u001f]"""), "_").trimStart('.', ' ').ifEmpty { "file" }.take(120)
 
     override fun close() {
+        if (!closeOnce.compareAndSet(false, true)) return
         closed = true
         runCatching { server.close() }
+        localSockets.forEach { runCatching { it.close() } }
         reset()
+        channels.forEach { runCatching { it.close() } }
+        diagnostics?.record(Event.TunnelClosed)
     }
 
     @Synchronized
@@ -248,6 +287,7 @@ class SshTunnel(
         runCatching { client?.disconnect() }
         client = null
         if (closed) throw SshException("隧道已关闭", SshException.Stage.Connect)
+        diagnostics?.record(Event.SshConnectStart)
 
         val config = DefaultConfig().apply { keepAliveProvider = KeepAliveProvider.KEEP_ALIVE }
         val ssh = SSHClient(config)
@@ -319,7 +359,12 @@ class SshTunnel(
             throw SshException("SSH 登录失败：${e.message}", SshException.Stage.Login)
         }
         ssh.connection.keepAlive.keepAliveInterval = 15
+        if (closed) {
+            runCatching { ssh.disconnect() }
+            throw SshException("隧道已关闭", SshException.Stage.Connect)
+        }
         client = ssh
+        diagnostics?.record(Event.SshAuthenticated)
         return ssh
     }
 
@@ -330,47 +375,123 @@ class SshTunnel(
             } catch (e: IOException) {
                 if (closed) return else continue
             }
-            thread(name = "ssh-tunnel-conn", isDaemon = true) { forward(socket) }
-        }
-    }
-
-    /** 给一个本地连接开 SSH 通道并双向搬运数据。通道开不起来（连接刚断）就重连一次再试。 */
-    private fun forward(socket: Socket) {
-        val channel = try {
-            open()
-        } catch (e: Exception) {
-            reset()
-            try {
-                open()
-            } catch (e: Exception) {
+            localSockets += socket
+            if (closed) {
+                localSockets -= socket
                 runCatching { socket.close() }
                 return
             }
+            val id = connectionSerial.incrementAndGet()
+            diagnostics?.record(Event.LocalAccepted, connection = id)
+            thread(name = "ssh-tunnel-conn", isDaemon = true) { forward(socket, id) }
         }
-        socket.tcpNoDelay = true
-        val up = thread(name = "ssh-tunnel-up", isDaemon = true) {
-            pump(socket.getInputStream(), channel.outputStream)
-            runCatching { channel.outputStream.close() }
-        }
-        pump(channel.inputStream, socket.getOutputStream())
-        runCatching { socket.shutdownOutput() }
-        up.join(2_000)
-        runCatching { channel.close() }
-        runCatching { socket.close() }
     }
 
-    private fun open() = session().newDirectConnection("127.0.0.1", remotePort)
-
-    private fun pump(input: InputStream, output: OutputStream) {
-        val buffer = ByteArray(16 * 1024)
-        try {
-            while (true) {
-                val n = input.read(buffer)
-                if (n < 0) break
-                output.write(buffer, 0, n)
-                output.flush()
-            }
-        } catch (_: IOException) {
+    /** 单条通道失败不重置活着的 SSH 会话；两边分别半关闭，全部结束后再释放。 */
+    private fun forward(socket: Socket, id: Long) {
+        val channel = try {
+            open(id)
+        } catch (e: Exception) {
+            diagnostics?.record(Event.ChannelFailed, connection = id, error = e)
+            localSockets -= socket
+            runCatching { socket.close() }
+            diagnostics?.record(Event.LocalClosed, connection = id)
+            return
         }
+        channels += channel
+        val finished = AtomicBoolean()
+        fun closeConnection() {
+            if (finished.compareAndSet(false, true)) {
+                runCatching { socket.close() }
+                runCatching { channel.close() }
+            }
+        }
+        try {
+            if (closed) return
+            socket.tcpNoDelay = true
+            val up = thread(name = "ssh-tunnel-up", isDaemon = true) {
+                val end = pump({ socket.getInputStream() }, { channel.outputStream }, id, up = true)
+                if (end == ConnectionTrace.End.Eof) {
+                    try {
+                        // sshj ChannelOutputStream.close() 发送 SSH EOF，不关闭反向通道。
+                        channel.outputStream.close()
+                        diagnostics?.record(Event.UpHalfClosed, connection = id)
+                    } catch (e: IOException) {
+                        diagnostics?.record(Event.HalfCloseFailed, connection = id, error = e)
+                        closeConnection()
+                    }
+                } else closeConnection()
+            }
+            val end = pump({ channel.inputStream }, { socket.getOutputStream() }, id, up = false)
+            if (end == ConnectionTrace.End.Eof) {
+                try {
+                    socket.shutdownOutput()
+                    diagnostics?.record(Event.DownHalfClosed, connection = id)
+                } catch (e: IOException) {
+                    diagnostics?.record(Event.HalfCloseFailed, connection = id, error = e)
+                    closeConnection()
+                }
+            } else closeConnection()
+            // 不能固定等两秒就截断仍在上传的数据；close/reset 会解除两边阻塞。
+            up.join()
+        } catch (e: Exception) {
+            if (e is InterruptedException) Thread.currentThread().interrupt()
+            diagnostics?.record(Event.LocalClosed, connection = id, error = e)
+        } finally {
+            closeConnection()
+            channels -= channel
+            localSockets -= socket
+            diagnostics?.record(Event.LocalClosed, connection = id)
+        }
+    }
+
+    private fun open(id: Long): net.schmizz.sshj.connection.channel.direct.DirectConnection {
+        fun once(ssh: SSHClient): net.schmizz.sshj.connection.channel.direct.DirectConnection {
+            diagnostics?.record(Event.ChannelOpening, connection = id)
+            return try {
+                ssh.newDirectConnection("127.0.0.1", remotePort).also {
+                    diagnostics?.record(Event.ChannelOpened, connection = id)
+                }
+            } catch (e: IOException) {
+                val failure = when ((e as? net.schmizz.sshj.connection.channel.OpenFailException)?.reason) {
+                    net.schmizz.sshj.connection.channel.OpenFailException.Reason.ADMINISTRATIVELY_PROHIBITED -> ConnectionTrace.ForwardFailure.Denied
+                    net.schmizz.sshj.connection.channel.OpenFailException.Reason.CONNECT_FAILED -> ConnectionTrace.ForwardFailure.RemoteConnect
+                    else -> if (!ssh.isConnected || !ssh.isAuthenticated) ConnectionTrace.ForwardFailure.SessionLost else ConnectionTrace.ForwardFailure.Other
+                }
+                diagnostics?.record(Event.ChannelFailed, connection = id, error = e, failure = failure)
+                throw e
+            }
+        }
+        val ssh = session()
+        return try { once(ssh) } catch (e: IOException) {
+            if (closed || (ssh.isConnected && ssh.isAuthenticated)) throw e
+            resetIfCurrent(ssh)
+            once(session())
+        }
+    }
+
+    private fun pump(input: () -> InputStream, output: () -> OutputStream, id: Long, up: Boolean): ConnectionTrace.End {
+        val buffer = ByteArray(16 * 1024)
+        var bytes = 0L
+        var end = ConnectionTrace.End.Eof
+        var failure: IOException? = null
+        try {
+            val source = input()
+            val sink = output()
+            while (true) {
+                val n = source.read(buffer)
+                if (n < 0) break
+                sink.write(buffer, 0, n)
+                sink.flush()
+                if (bytes == 0L && n > 0) diagnostics?.record(if (up) Event.UpFirstBytes else Event.DownFirstBytes, connection = id, bytes = n.toLong())
+                bytes += n
+            }
+        } catch (e: IOException) {
+            end = if (closed) ConnectionTrace.End.Closed else ConnectionTrace.End.Error
+            failure = e
+        } finally {
+            diagnostics?.record(if (up) Event.UpFinished else Event.DownFinished, connection = id, bytes = bytes, end = end, error = failure)
+        }
+        return end
     }
 }

@@ -72,3 +72,11 @@ tasks.named<JavaExec>("run") {
     args(layout.projectDirectory.dir("screenshots").asFile.absolutePath)
     systemProperty("java.awt.headless", "true")
 }
+
+// 仅本机假 SSH/API，供 adb reverse 后在 Android 上运行真实网络栈自检。
+tasks.register<JavaExec>("androidSshFixture") {
+    dependsOn("testClasses")
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.hermes.mobile.data.ssh.AndroidSshFixture")
+    args(providers.gradleProperty("androidSshFixtureDir").getOrElse("build/android-ssh-fixture"))
+}

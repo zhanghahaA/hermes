@@ -1,6 +1,8 @@
 package com.hermes.mobile.data.remote
 
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.ConnectionDiagnostics
+import com.hermes.mobile.data.ConnectionTrace
 import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.Draft
 import com.hermes.mobile.data.model.FileRef
@@ -47,6 +49,7 @@ import com.hermes.mobile.data.ssh.SshException
 import com.hermes.mobile.data.ssh.SshKeys
 import com.hermes.mobile.data.ssh.SshTunnel
 import com.hermes.mobile.data.store.ChatCache
+import com.hermes.mobile.data.store.DiagnosticRedactor
 import com.hermes.mobile.data.store.LocalStore
 import com.hermes.mobile.data.store.SecretBox
 import com.hermes.mobile.data.store.StoredRun
@@ -55,6 +58,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
@@ -109,6 +113,7 @@ class RemoteHermesRepository(
     private val jobPollMillis: Long = 5_000,
     /** 断线重连的等待时间（毫秒），第 n 次失败等多久。测试里调短。 */
     private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
+    private val connectionDiagnostics: ConnectionDiagnostics = ConnectionDiagnostics(),
 ) : HermesRepository {
     private val cache = cacheDir?.let(::ChatCache)
 
@@ -340,13 +345,19 @@ class RemoteHermesRepository(
         val key = apiKey?.takeIf { it.isNotBlank() } ?: keyOf(profile.id)
         val ssh = profile.type == ConnectionType.Ssh
         val fileSsh = hasFileSsh(profile)
+        val trace = if (ssh) connectionDiagnostics.begin(ConnectionDiagnostics.Use.Test) else null
+        val testSecret = if (ssh || fileSsh) sshSecret?.takeIf { it.isNotEmpty() } ?: sshSecretOf(profile.id) else null
+        val privateValues = listOfNotNull(profile.host.takeIf { it.isNotBlank() }, key, testSecret)
         val titles = (if (ssh) listOf("SSH 连接", "SSH 登录") else emptyList()) + listOf("网络可达", "识别 Hermes", "API Key 鉴权", "能力探测") +
             (if (fileSsh) listOf("文件互通（SSH）") else emptyList())
         var steps = titles.map { ConnectionTestStep(it, TestStepStatus.Pending) }
         suspend fun mark(i: Int, status: TestStepStatus, detail: String? = null) {
+            val safeDetail = if (status == TestStepStatus.Failed && detail != null) {
+                DiagnosticRedactor.redact(detail, privateValues).take(600) + (trace?.let { "（诊断 ${it.id}）" } ?: "")
+            } else detail
             steps = steps.mapIndexed { index, step ->
                 when {
-                    index == i -> step.copy(status = status, detail = detail)
+                    index == i -> step.copy(status = status, detail = safeDetail)
                     // 某一步失败后，后面的步骤标成跳过
                     status == TestStepStatus.Failed && index > i -> step.copy(status = TestStepStatus.Skipped)
                     else -> step
@@ -362,7 +373,7 @@ class RemoteHermesRepository(
         try {
             val client = if (ssh) {
                 mark(0, TestStepStatus.Running)
-                val secret = sshSecret?.takeIf { it.isNotEmpty() } ?: sshSecretOf(profile.id)
+                val secret = testSecret
                 val auth = sshAuthOf(profile, secret)
                 if (profile.host.isBlank() || profile.sshUser.isNullOrBlank()) {
                     mark(0, TestStepStatus.Failed, "还没填 SSH 主机或用户名")
@@ -376,7 +387,7 @@ class RemoteHermesRepository(
                 var seen: String? = null
                 val t = try {
                     withContext(Dispatchers.IO) {
-                        SshTunnel(profile.host.trim(), profile.sshPort, profile.sshUser.trim(), auth, profile.port, pinned, { seen = it })
+                        SshTunnel(profile.host.trim(), profile.sshPort, profile.sshUser.trim(), auth, profile.port, pinned, { seen = it }, diagnostics = trace)
                             .also { testTunnel = it }
                             .also { it.connect() }
                     }
@@ -397,7 +408,7 @@ class RemoteHermesRepository(
                     mark(2, TestStepStatus.Failed, reason)
                     return@flow
                 }
-                clientFactory("http://127.0.0.1:${t.localPort}", key, profile.profile)
+                clientFactory(t.localBaseUrl, key, profile.profile).throughSshTunnel(checkNotNull(trace))
             } else {
                 try {
                     clientFor(profile, key)
@@ -419,8 +430,17 @@ class RemoteHermesRepository(
                 mark(base, TestStepStatus.Passed, "${clock() - started} ms")
                 mark(base + 1, TestStepStatus.Failed, "没有 /health 接口：不是 Hermes，或者版本太旧还没有 API Server")
                 return@flow
+            } catch (e: HermesError.Unauthorized) {
+                mark(base, TestStepStatus.Passed, "HTTP ${e.status} · ${clock() - started} ms")
+                mark(base + 1, TestStepStatus.Skipped, "接口要求鉴权，暂时无法识别")
+                mark(base + 2, TestStepStatus.Failed, "健康检查返回 HTTP ${e.status}：检查 API Key 和服务器的接口鉴权配置")
+                return@flow
+            } catch (e: HermesError.Server) {
+                mark(base, TestStepStatus.Passed, "HTTP ${e.status} · ${clock() - started} ms")
+                mark(base + 1, TestStepStatus.Failed, "服务器已收到请求，健康检查返回 HTTP ${e.status}")
+                return@flow
             } catch (e: HermesError) {
-                mark(base, TestStepStatus.Failed, if (ssh) "SSH 已登录，但服务器上 127.0.0.1:${profile.port} 没有响应：确认 Hermes gateway 在运行、API Server 已开启、端口正确" else e.message)
+                mark(base, TestStepStatus.Failed, if (trace != null) sshHealthFailure(e, trace) else e.message)
                 return@flow
             }
             mark(base, TestStepStatus.Passed, "${clock() - started} ms")
@@ -472,9 +492,39 @@ class RemoteHermesRepository(
                     }
                 }
             }
+        } catch (e: CancellationException) {
+            trace?.record(ConnectionTrace.Event.TestCancelled, error = e)
+            throw e
         } finally {
-            testTunnel?.let { t -> withContext(Dispatchers.IO) { t.close() } }
+            testTunnel?.let { t -> withContext(NonCancellable + Dispatchers.IO) { t.close() } }
         }
+    }
+
+    private fun sshHealthFailure(error: HermesError, trace: ConnectionTrace): String {
+        val causes = generateSequence(error.cause) { it.cause }.take(8).toList()
+        val cause = causes.lastOrNull()
+        val reason = when (trace.forwardFailure) {
+            ConnectionTrace.ForwardFailure.Denied -> "SSH 已登录，但服务器拒绝了转发通道"
+            ConnectionTrace.ForwardFailure.RemoteConnect -> "SSH 已登录，但转发通道无法连接服务器上的 Hermes 端口"
+            ConnectionTrace.ForwardFailure.SessionLost -> "SSH 会话已断开，未能完成健康检查，请重新连接"
+            ConnectionTrace.ForwardFailure.Other -> "SSH 转发通道建立失败，健康检查未完成"
+            null -> when {
+                error is HermesError.Timeout -> "SSH 已登录，隧道内 HTTP 健康检查超时"
+                error is HermesError.Tls -> "SSH 已登录，但隧道内 HTTP/TLS 协议检查失败"
+                causes.any { it is java.net.ConnectException } -> "手机本地隧道入口连接失败，请重新建立 SSH 连接"
+                causes.any { it.message?.contains("CLEARTEXT", ignoreCase = true) == true } -> "Android 的明文 HTTP 策略拦截了本地健康检查"
+                causes.any { it is java.io.EOFException } -> "隧道内 HTTP 响应提前结束"
+                causes.any { it is java.net.ProtocolException } -> "隧道内 HTTP 响应协议不正确"
+                else -> "SSH 已登录，但隧道内 HTTP 请求中断"
+            }
+        }
+        val phase = when (trace.httpPhase) {
+            ConnectionTrace.Event.HealthStart, ConnectionTrace.Event.HealthConnectStart -> "连接手机本地入口"
+            ConnectionTrace.Event.HealthConnected, ConnectionTrace.Event.HealthHeadersStart -> "发送 HTTP 请求"
+            ConnectionTrace.Event.HealthHeadersSent, ConnectionTrace.Event.HealthResponseStart -> "等待 HTTP 响应"
+            else -> "读取健康检查响应"
+        }
+        return "$reason（阶段：$phase；异常：${cause?.javaClass?.simpleName ?: error.javaClass.simpleName}）"
     }
 
     private fun hostKeyDetail(pinned: String?, seen: String?): String = when {
@@ -497,9 +547,12 @@ class RemoteHermesRepository(
         }
         val auth = sshAuthOf(profile, sshSecret) ?: throw HermesError.Ssh("这个 SSH 连接还没有保存私钥或密码")
         val user = profile.sshUser?.trim()?.takeIf { it.isNotEmpty() } ?: throw HermesError.Ssh("这个 SSH 连接还没填用户名")
+        val trace = connectionDiagnostics.begin(ConnectionDiagnostics.Use.Connection)
+        var openingTunnel: SshTunnel? = null
         val t = try {
             withContext(Dispatchers.IO) {
-                SshTunnel(profile.host.trim(), profile.sshPort, user, auth, profile.port, profile.sshHostKey, onHostKey).also {
+                SshTunnel(profile.host.trim(), profile.sshPort, user, auth, profile.port, profile.sshHostKey, onHostKey, diagnostics = trace).also {
+                    openingTunnel = it
                     try {
                         it.connect()
                     } catch (e: SshException) {
@@ -508,11 +561,15 @@ class RemoteHermesRepository(
                     }
                 }
             }
+        } catch (e: CancellationException) {
+            trace.record(ConnectionTrace.Event.TestCancelled, error = e)
+            withContext(NonCancellable + Dispatchers.IO) { openingTunnel?.close() }
+            throw e
         } catch (e: SshException) {
             throw HermesError.Ssh(e.message ?: "SSH 连接失败", hostKeyChanged = e.stage == SshException.Stage.HostKey)
         }
         tunnel = t
-        return clientFactory("http://127.0.0.1:${t.localPort}", key, profile.profile)
+        return clientFactory(t.localBaseUrl, key, profile.profile).throughSshTunnel(trace)
     }
 
     /** 本机 Termux / 直连也可以配一个 SSH（只用来传文件：显示 Hermes 生成的图片、发任意文件）。 */
@@ -2020,7 +2077,7 @@ class RemoteHermesRepository(
         _errors.tryEmit("出了点问题（App 没有退出）：$text")
     }
 
-    override fun diagnosticsReport(): String = buildString {
+    override fun diagnosticsReport(): String = DiagnosticRedactor.redact(buildString {
         val profile = _connections.value.firstOrNull { it.id == _activeConnectionId.value }
         val caps = capabilities
         appendLine("连接：${profile?.type ?: "无"}" + (profile?.let { " · 端口 ${it.port}" + (if (!it.sshUser.isNullOrBlank()) " · SSH 端口 ${it.sshPort}" else "") + (it.profile?.let { p -> " · Profile $p" } ?: "") } ?: ""))
@@ -2040,7 +2097,14 @@ class RemoteHermesRepository(
             appendLine("闪退记录：")
             appendLine(it)
         }
-    }
+    }, buildList {
+        _connections.value.forEach { profile ->
+            if (profile.host.isNotBlank()) add(profile.host.trim())
+        }
+        state.value.keys.values.forEach { encrypted ->
+            runCatching { secrets.decrypt(encrypted) }.getOrNull()?.takeIf { it.isNotEmpty() }?.let(::add)
+        }
+    }) + "\n" + connectionDiagnostics.report()
 
     // ---- 管理 ----
 

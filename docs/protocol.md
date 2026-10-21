@@ -220,6 +220,16 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 - 没有列出 Profile 的接口。名字不对（或没开 `gateway.multiplex_profiles`）时返回 404 `{"error":"Unknown or unconfigured profile"}`，App 会直接说明。
 - 单 Profile 的 gateway 上，`/p/default/` 只在它本来就跑在默认 Profile 时可用。
 
+## SSH 隧道与连接诊断
+
+- 本地监听和 HTTP URL 一律使用 IPv4 `127.0.0.1`；SSH 目标仍是服务器自己的 `127.0.0.1:<API 端口>`，不需要把 API 暴露到公网。
+- 仅 SSH 隧道客户端显式设置 `Proxy.NO_PROXY`，REST 和 SSE 都直达本地入口；直连、HTTPS、本机 Termux 的代理配置保持原行为。主机指纹、认证和 SFTP 不变。
+- `probeForward()` 只开关一条 direct-tcpip 通道，不发送 HTTP。真正的网络检查必须由 OkHttp 发送 `GET /health` 并读取响应。收到 401/403/404/5xx 或不符合预期的 JSON，不能再统一提示远端端口没有监听。
+- 单条通道被拒绝时，只有 SSH 会话确实失效才重连，避免打断同会话中的聊天；旧会话的失败不能清掉已建立的新会话。转发双向分别处理 EOF，去掉固定两秒后截断仍在上传的行为；关闭隧道时主动关闭已接受的 socket 和通道。
+- `ConnectionDiagnostics` 仅在内存保留最近 4 次 SSH 测试 / 正式连接，每次最多 180 个事件；构造参数 `enabled=false` 可关闭记录。记录匿名 id、相对耗时、回环端口、HTTP 状态、代理类型、上下行首批 / 总字节、结束类型和异常类名，绝不记录真实主机、凭据、Header、正文、聊天、文件名或异常 message。设置中「导出诊断信息」包含这些事件。
+- 看不到 `LocalAccepted`：请求尚未进入本地转发器；有通道但无 `UpFirstBytes`：尚未转发请求字节；有上行无下行：检查远端响应和 SSH 通道；有 `HTTP=200` 后失败：检查读取 / JSON 解析阶段。不要把仅有 TCP 握手当成健康检查已到达。
+- HTTP 收到响应头后的正文读取和 SSE 也响应协程取消，释放响应并解除阻塞；正文超时保留原始异常类别。Android 实机自检步骤见 [ssh-tests.md](ssh-tests.md)。JVM 测试通过不能代替 Android / 用户网络验证。
+
 ## 管理功能（阶段 5，经 SSH）
 
 API 管不到的都经 SSH 做，尽量用 `hermes` 自己的命令（`-p <profile>` 跟连接设置走）：
