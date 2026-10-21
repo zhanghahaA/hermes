@@ -284,6 +284,10 @@ App 先跑 `hermes --print-runtime-command`，拿到 Hermes 启动自己的那�
 带上 `X-Hermes-Workspace` 请求头（Hermes 还没合并，见 PR #78923，合并后就生效），并在 `instructions` 里告诉模型这个对话的工作文件夹。
 Hermes 的 API 运行目前不读会话的 `cwd`（issue #29531），说明里的文件夹就是让模型知道该在哪里干活。
 
+**中文 / Unicode 目录**：OkHttp 的普通请求头只接受可打印 ASCII。`X-Hermes-Workspace` 仅在目录非空且全部为可打印 ASCII 时保留；中文、重音字符、emoji、换行等路径不放进该兼容头，完整路径仍通过 UTF-8 JSON 的 `instructions` 传递。不要擅自 URL 编码或用不安全 Header API 绕过校验：服务端没有约定的解码逻辑，会造成目录变化。该修复覆盖项目中新会话的首条消息和已有会话续聊，不要求改名或修改服务器。
+
+发送准备阶段的 `IllegalArgumentException` 要转为消息发送失败并恢复空闲，提示中不包含原异常 message（可能带路径或凭据）。失败消息仍保留原附件供重试，但不会阻塞后续消息等待 60 秒。测试见 `WorkspaceChatTest`，使用本机假 API 和真实 OkHttp；不等同于真实 Hermes 工作目录执行验证。
+
 ## 归档
 
 `PATCH /api/sessions/{id}` 带 `{"archived": true}`。Hermes 的会话列表不返回归档的会话（也没有参数能列出来），

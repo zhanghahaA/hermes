@@ -158,8 +158,12 @@ class HermesClient(
         }
         val request = request("/v1/runs")
             .header("Idempotency-Key", idempotencyKey)
-            // 这一轮的工作目录：Hermes 还没合并按请求指定目录的功能（issue #29531），现在会忽略；合并后自动生效
-            .apply { if (workspace != null) header("X-Hermes-Workspace", workspace) }
+            // 仅保留合法 ASCII 路径的兼容头；中文等完整目录由 JSON instructions 传递。
+            // 不擅自 URL 编码：服务器没有约定对该头解码，编码后可能被当成另一个目录。
+            .apply {
+                workspace?.takeIf { path -> path.isNotEmpty() && path.all { it in ' '..'~' } }
+                    ?.let { header("X-Hermes-Workspace", it) }
+            }
             .post(body.toString().toRequestBody(JsonMedia))
             .build()
         return decode(execute(request), RunAcceptedDto.serializer())

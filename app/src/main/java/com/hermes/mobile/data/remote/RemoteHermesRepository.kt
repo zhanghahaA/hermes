@@ -1071,7 +1071,7 @@ class RemoteHermesRepository(
         )
         val running = runs[key]
         // 上一条刚发出、还没拿到这一轮的 id：等它开始，再按插话处理（不要并行开第二轮）
-        val starting = running == null && outbox.values.any { resolve(it.uiId) == key }
+        val starting = running == null && hasStartingMessage(key)
         updateChat(key) { it.copy(local = it.local + LocalEntry(message, it.messageCount), phase = if (running != null && it.phase == RunPhase.AwaitingInput) it.phase else RunPhase.Working, streaming = running?.let { _ -> it.streaming }) }
         outbox[localId] = Outgoing(sessionId, text.trim(), attachments, quote)
         runScope.launch {
@@ -1080,11 +1080,20 @@ class RemoteHermesRepository(
         }
     }
 
+    /** 失败消息保留附件供重试，但不能被后续发送误认成尚在提交的上一条。 */
+    private fun hasStartingMessage(key: String, exceptLocalId: String? = null): Boolean {
+        val resolved = resolve(key)
+        val sending = chats.value[resolved]?.local.orEmpty().mapNotNull { entry ->
+            (entry.item as? ChatItem.Message)?.takeIf { it.status == DeliveryStatus.Sending }?.id
+        }.toSet()
+        return outbox.any { (id, out) -> id != exceptLocalId && id in sending && resolve(out.uiId) == resolved }
+    }
+
     /** 等同一个对话里先发的那条消息变成正在进行的一轮；它发送失败或已经结束就返回 null。 */
     private suspend fun awaitStartedRun(key: String, localId: String): ActiveRun? = withTimeoutOrNull(60_000) {
         while (true) {
-            runs[key]?.let { return@withTimeoutOrNull it }
-            if (outbox.none { (id, out) -> id != localId && resolve(out.uiId) == key }) return@withTimeoutOrNull runs[key]
+            runs[resolve(key)]?.let { return@withTimeoutOrNull it }
+            if (!hasStartingMessage(key, localId)) return@withTimeoutOrNull runs[resolve(key)]
             delay(50)
         }
         @Suppress("UNREACHABLE_CODE")
@@ -1159,11 +1168,18 @@ class RemoteHermesRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: HermesError) {
-            val key = resolve(uiId)
-            setLocalStatus(key, localId, DeliveryStatus.Failed)
-            updateChat(key) { it.copy(phase = RunPhase.Idle) }
-            _errors.tryEmit(sendErrorText(key, e))
+            failSubmission(uiId, localId, e)
+        } catch (e: IllegalArgumentException) {
+            // 参数校验错误发生在请求发出前，也必须结束“正在输入”；异常消息可能含目录或凭据。
+            failSubmission(uiId, localId, HermesError.BadUrl("消息参数格式不正确（IllegalArgumentException），请重试或导出诊断信息"))
         }
+    }
+
+    private fun failSubmission(uiId: String, localId: String, error: HermesError) {
+        val key = resolve(uiId)
+        setLocalStatus(key, localId, DeliveryStatus.Failed)
+        updateChat(key) { it.copy(phase = RunPhase.Idle) }
+        _errors.tryEmit(sendErrorText(key, error))
     }
 
     /**

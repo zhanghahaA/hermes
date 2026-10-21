@@ -5,8 +5,9 @@
 
 ## 现状
 
+- 0.11.6 / code 32：修复电脑创建的中文项目不能新建 / 继续对话。原因是把 Unicode 目录直接放进 `X-Hermes-Workspace` 被 OkHttp 拒绝；中文目录保留在 JSON `instructions`，仅合法 ASCII 目录保留兼容请求头，不修改目录、不要求改名。发送准备参数异常也会恢复空闲，失败消息不再阻塞下一条发送。新增 `WorkspaceChatTest` 覆盖真实 HTTP、项目草稿、旧会话、非 ASCII 路径与异常恢复；编码环境仍无手机，设备效果需复测。 本次标准套件报告 175 项、0 失败，实际执行 159 项通过，另 16 项真实 IT 无环境未执行；App 与 Android 自检 APK 构建成功。
 - SSH 隧道修复：用户已反馈本轮改动可行。修复仅 SSH 本地入口使用 IPv4 与直连代理、单通道拒绝误重置整个 SSH 会话、HTTP 错误被覆盖成网络不可达；补全双向半关闭、正文 / SSE 取消、匿名阶段和字节诊断。设置里「导出诊断信息」可查看安全记录。设备自检已加入，但编码环境没有 adb 设备，尚未在设备上执行。SSH 修复提交时主线为 0.11.0 / code 26；用户随后授权创建 Release，发布准备版本为 0.11.5 / code 31，保证可覆盖 code 30 的测试包。此前 0.11.4 测试 APK 来自会话工作区。本次提交范围为 SSH 修复、配套隐私诊断、测试与文档，详见 [docs/ssh-fix-report.md](docs/ssh-fix-report.md)。 本次独立提交验证：标准套件 170 项报告、0 失败，实际执行 154 项通过，另 16 项真实 IT 因缺少环境直接返回；App 与 Android 自检 APK 构建成功。
-- 当前发布准备版本 **0.11.5**（`app/build.gradle.kts`：`versionCode = 31`），包含 SSH 修复，用户已授权创建 GitHub Release。发布结果以 GitHub Release 实际存在并附上 APK 为准。
+- 当前发布准备版本 **0.11.6**（`app/build.gradle.kts`：`versionCode = 32`），包含 SSH 与中文项目修复，用户已授权创建 GitHub Release。0.11.5 的代码和标签已推送，但发布 API 被云环境网络策略拦截（CONNECT 403），Release 尚未创建；已保存仅开放 `api.github.com` / `uploads.github.com` 的配置草稿，需要用户在环境设置保存并发布后再继续。发布结果以 GitHub Release 实际存在并附上 APK 为准。
 - 最近几版做的：Bot（列表、切换、开通手机访问、新建 / 编辑 / 删除）、群聊（0.11.0）；闪退日志、审批后闪退修复（0.10.5）；Bot 屏幕接管时不误触返回（0.10.4）；
   项目的新建文件夹 / 改名 / 删除（0.10.3）；Markdown 渲染（0.10.x）；Bot 屏幕（0.10.0）。
 - GitHub 仓库 `zhanghahaA/hermes`（私有）。之前的会话里推 tag、建 Release 没有权限，Release 都是用户手动建的（见「发布」）。
