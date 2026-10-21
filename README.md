@@ -19,6 +19,15 @@ Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to
 - **Offline cache**: the session list and recent messages are kept on the phone, so they show up instantly and stay readable when Hermes is unreachable.
 - **Version-tolerant**: on connect the app probes what the server supports (`/v1/capabilities`, falling back to probing endpoints on older versions) and hides what is not available, instead of comparing version numbers.
 
+## Roadmap
+
+Planned (not started yet; details, risks and how each item will be verified are in [docs/roadmap.md](docs/roadmap.md), in Chinese):
+
+- **0.12** Termux integration: one-tap install of a local Hermes on the phone (official Termux APT package), auto-configured connection, keep-alive guidance.
+- **0.13** Optional extensions, off by default: smart home via the official Home Assistant plugin; phone control over ADB wireless debugging.
+- **0.14** A local Chromium (Termux X11) on the phone that Hermes can drive, viewable and take-over-able in the app.
+- **0.15** Reading phone notifications (opt-in, per-app allowlist, sensitive content masked) and long-term memory so Hermes gets to know you.
+
 See [docs/setup.md](docs/setup.md) for how to connect the phone to Hermes (in Chinese) and [docs/protocol.md](docs/protocol.md) for the API details and version notes.
 
 ## Requirements

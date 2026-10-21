@@ -120,6 +120,11 @@ gradle test                        # 单元 + 界面 + 集成测试（没设 HER
 - 文件在手机的 App 私有目录 `files/crash-log.txt`（debug 包可以 `adb shell run-as com.hermes.mobile cat files/crash-log.txt`）。
 - 0.10.5 之前的版本没有记录。
 
+## 接下来的计划
+
+用户定的方向（2026-10）：集成 Termux 一键安装本地 Hermes，然后做可选扩展（智能家居、ADB 操作手机、本地 Chromium、读取通知）和“越用越懂你”。
+版本拆分、做法、风险、验证方式见 [docs/roadmap.md](docs/roadmap.md)。都还没开始。
+
 ## 没做完 / 待确认
 
 - **手机上建的项目电脑版看不到**：还没定位。最可能是电脑版连的不是同一个 Hermes 或不是同一个 Profile；等用户在电脑上跑 `hermes project list` 和 `hermes config path` 对一下。
