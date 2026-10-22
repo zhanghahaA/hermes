@@ -47,6 +47,7 @@ import com.hermes.mobile.data.ssh.SshException
 import com.hermes.mobile.data.ssh.SshKeys
 import com.hermes.mobile.data.ssh.SshTunnel
 import com.hermes.mobile.data.store.ChatCache
+import com.hermes.mobile.data.store.DiagnosticRedactor
 import com.hermes.mobile.data.store.LocalStore
 import com.hermes.mobile.data.store.SecretBox
 import com.hermes.mobile.data.store.StoredRun
@@ -78,6 +79,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.put
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.sync.Mutex
 
 /**
  * 连接真实 Hermes 的仓库。
@@ -137,12 +140,16 @@ class RemoteHermesRepository(
     override val features: StateFlow<Set<AppFeature>> = _features.asStateFlow()
 
     /** 当前连接的客户端和能力；切换连接时整体替换。 */
-    private var client: HermesClient? = null
+    @Volatile private var client: HermesClient? = null
     private var capabilities: ServerCapabilities? = null
     private var connectedId: String? = null
     private var connectJob: Job? = null
+    private val connectionGeneration = AtomicLong()
 
-    /** 当前连接上所有“等回复”的协程。切换连接时整体取消。 */
+    /** 请求回来时仍属于当前连接，才允许更新界面和缓存。 */
+    private fun isCurrent(c: HermesClient): Boolean = client === c
+
+    /** 当前连接的聊天、操作和后台读取。切换连接时整体取消，不能串到下一个连接。 */
     private var runScope = newRunScope()
 
     private fun newRunScope() = CoroutineScope(scope.coroutineContext + SupervisorJob(scope.coroutineContext[Job]))
@@ -188,6 +195,9 @@ class RemoteHermesRepository(
     }
 
     private fun connect(id: String) {
+        val profile = _connections.value.firstOrNull { it.id == id } ?: return
+        val previousConnection = connectedId
+        val generation = connectionGeneration.incrementAndGet()
         connectJob?.cancel()
         runScope.cancel()
         runScope = newRunScope()
@@ -196,7 +206,30 @@ class RemoteHermesRepository(
         outbox.clear()
         _activeRuns.value = emptySet()
         closeTunnel()
-        val profile = _connections.value.firstOrNull { it.id == id } ?: return
+        // 连接完成前不保留旧客户端，避免界面操作发往上一台服务器或上一个 Bot。
+        client = null
+        capabilities = null
+        connectedId = null
+        _features.value = emptySet()
+        _jobs.value = emptyList()
+        pendingJobOperations.clear()
+        jobLocks.clear()
+        _models.value = emptyList()
+        serverDefaultModel = null
+        _defaultModelId.value = ""
+        _skills.value = emptyList()
+        _skillsError.value = null
+        _toolsets.value = emptyList()
+        _toolsetsBusy.value = emptySet()
+        _botsError.value = null
+        _roomsError.value = null
+        aliases.value = emptyMap()
+        draftSessions.value = emptyMap()
+        pendingModels.clear()
+        pendingProjects.clear()
+        createdAt.clear()
+        archivingNow.clear()
+        steered.clear()
         _connectionState.value = ConnectionState.Connecting
         // 先显示上次存下的列表，连上之后再换成服务器的
         sessionsFresh = false
@@ -205,20 +238,22 @@ class RemoteHermesRepository(
         _sessionGroups.value = cache?.groups(scope0) ?: SessionGrouping()
         _archivedLocal.value = cache?.archived(scope0).orEmpty()
         _activeBot.value = botOf(id) ?: baseBot(profile)
-        if (_bots.value == null) _bots.value = cache?.bots(id)
+        if (previousConnection != id || _bots.value == null) _bots.value = cache?.bots(id)
         // 群聊跟着连接（同一台电脑）走：换了别的连接就清空，切 bot 不用
         if (roomsConnection != id) {
             _rooms.value = null
             roomsConnection = id
         }
         chats.value = emptyMap()
-        connectJob = scope.launch {
+        val connectionScope = runScope
+        connectJob = connectionScope.launch {
             try {
                 val started = clock()
                 val newClient = openClient(effectiveProfile(profile), effectiveKey(profile), sshSecretOf(id)) { fingerprint -> pinHostKey(id, fingerprint) }
                 val health = newClient.health()
                 if (health.platform != null && health.platform != "hermes-agent") throw HermesError.NotHermes()
                 val caps = newClient.probeCapabilities(health.version)
+                if (connectionGeneration.get() != generation) return@launch
                 client = newClient
                 capabilities = caps
                 connectedId = id
@@ -229,11 +264,12 @@ class RemoteHermesRepository(
                 )
                 loadSessions()
                 resumeStoredRuns(scopeOf(id))
-                scope.launch { refreshBots() }
-                scope.launch { loadModels() }
-                scope.launch { loadJobs() }
-                scope.launch { refreshCapabilities() }
+                connectionScope.launch { refreshBots() }
+                connectionScope.launch { loadModels() }
+                connectionScope.launch { loadJobs() }
+                connectionScope.launch { refreshCapabilities() }
             } catch (e: HermesError) {
+                if (connectionGeneration.get() != generation) return@launch
                 client = null
                 capabilities = null
                 connectedId = null
@@ -324,12 +360,21 @@ class RemoteHermesRepository(
             _activeConnectionId.value = next
             persist { it.copy(activeConnectionId = next) }
             if (next != null) connect(next) else {
+                connectionGeneration.incrementAndGet()
                 connectJob?.cancel()
                 runScope.cancel()
                 closeTunnel()
                 client = null
                 connectedId = null
                 _sessions.value = emptyList()
+                _jobs.value = emptyList()
+                _models.value = emptyList()
+                _skills.value = emptyList()
+                _toolsets.value = emptyList()
+                _bots.value = null
+                _rooms.value = null
+                _features.value = emptySet()
+                capabilities = null
                 _activeRuns.value = emptySet()
                 _connectionState.value = ConnectionState.Disconnected
             }
@@ -584,6 +629,7 @@ class RemoteHermesRepository(
             val fetched = c.sessions(limit = 100).data
                 .filter { it.visibleInList() }
                 .map { it.toSession(started) }
+            if (!isCurrent(c)) return
             _sessions.update { current ->
                 val before = current.associateBy { it.id }
                 // 列表请求发出之后才在本机新建/分叉的会话，这次结果里还没有，不能被冲掉
@@ -605,8 +651,9 @@ class RemoteHermesRepository(
             _sessions.update { list -> list.filterNot { it.id in archivingNow } }
             sessionsFresh = true
             saveSessionsToCache()
-            scope.launch { loadGroups() }
+            runScope.launch { loadGroups() }
         } catch (e: HermesError) {
+            if (!isCurrent(c)) return
             _connectionState.value = ConnectionState.Failed(e.message ?: "读取会话失败")
         }
     }
@@ -625,12 +672,15 @@ class RemoteHermesRepository(
 
     /** 先在本地改（界面立刻变），再发给服务器；失败就改回去并提示。 */
     private fun optimistic(id: String, transform: (Session) -> Session, call: suspend HermesClient.() -> Unit) {
+        val c = client ?: return
         val before = _sessions.value
         updateSession(id, transform)
-        scope.launch {
+        runScope.launch {
             try {
-                client?.call() ?: throw HermesError.Unreachable("未连接")
+                if (!isCurrent(c)) return@launch
+                c.call()
             } catch (e: HermesError) {
+                if (!isCurrent(c)) return@launch
                 _sessions.value = before
                 _errors.tryEmit(e.message ?: "操作失败")
             }
@@ -658,6 +708,7 @@ class RemoteHermesRepository(
             draftSessions.update { it - real }
             return
         }
+        val c = client ?: return
         scopeId?.let { c -> cache?.removeSession(c, real) }
         val before = _sessions.value
         val archivedBefore = _archivedLocal.value
@@ -666,11 +717,14 @@ class RemoteHermesRepository(
         _archivedLocal.update { list -> list.filterNot { it.id == real } }
         _sessionGroups.update { g -> g.copy(archived = g.archived.filterNot { it.id == real }) }
         if (archivedBefore.size != _archivedLocal.value.size) saveArchived()
-        scope.launch {
+        runScope.launch {
             try {
-                client?.deleteSession(real) ?: throw HermesError.Unreachable("未连接")
+                if (!isCurrent(c)) return@launch
+                c.deleteSession(real)
+                if (!isCurrent(c)) return@launch
                 chats.update { it - real }
             } catch (e: HermesError) {
+                if (!isCurrent(c)) return@launch
                 _sessions.value = before
                 if (archivedBefore.size != _archivedLocal.value.size) {
                     _archivedLocal.value = archivedBefore
@@ -792,12 +846,12 @@ class RemoteHermesRepository(
         chatOf(sessionId).map { it?.display().orEmpty() }.onStart {
             val key = resolve(sessionId).takeUnless { it.startsWith(DraftPrefix) } ?: return@onStart
             // 先显示本机存的记录，同时去服务器拉最新的
-            val connection = _activeConnectionId.value
+            val connection = _activeConnectionId.value?.let(::scopeOf)
             if (cache != null && connection != null && chats.value[key] == null) {
                 val cached = withContext(Dispatchers.IO) { cache.messages(connection, key) }
-                if (!cached.isNullOrEmpty()) chats.update { m -> if (m[key] == null) m + (key to ChatState(server = cached)) else m }
+                if (_activeConnectionId.value?.let(::scopeOf) == connection && !cached.isNullOrEmpty()) chats.update { m -> if (m[key] == null) m + (key to ChatState(server = cached)) else m }
             }
-            scope.launch { loadMessages(key) }
+            runScope.launch { loadMessages(key) }
         }
 
     override fun runPhase(sessionId: String): Flow<RunPhase> = chatOf(sessionId).map { it?.phase ?: RunPhase.Idle }
@@ -815,11 +869,13 @@ class RemoteHermesRepository(
             val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now, ::cachedImage) }
                 .linkQuotes()
                 .withSentImages(sessionId)
+            if (!isCurrent(c)) return
             val running = runs.containsKey(sessionId)
             updateChat(sessionId) { st -> st.copy(server = items, local = st.local.reconcile(items, running), loaded = true) }
             val connection = scopeId
             if (cache != null && connection != null) withContext(Dispatchers.IO) { cache.saveMessages(connection, sessionId, items) }
         } catch (e: HermesError) {
+            if (!isCurrent(c)) return
             _errors.tryEmit(e.message ?: "读取聊天记录失败")
         }
     }
@@ -1414,7 +1470,7 @@ class RemoteHermesRepository(
             updateChat(run.sessionId) { st -> st.copy(local = st.local.filterNot { it.item.id in steeredIds }) }
             sendMessage(run.sessionId, pendingSteer, emptyList())
         }
-        scope.launch { reconcileAfterRun(run.sessionId, text) }
+        runScope.launch { reconcileAfterRun(run.sessionId, text) }
     }
 
     private fun end(run: ActiveRun, error: String?) {
@@ -1426,7 +1482,7 @@ class RemoteHermesRepository(
             _errors.tryEmit("Hermes 出错了：$error")
             notify(run.sessionId, ChatNotice.Kind.Failed, error)
         }
-        scope.launch { reconcileAfterRun(run.sessionId, expectedReply = null) }
+        runScope.launch { reconcileAfterRun(run.sessionId, expectedReply = null) }
     }
 
     /**
@@ -1435,7 +1491,7 @@ class RemoteHermesRepository(
      */
     private fun refreshTitleSoon(sessionId: String) {
         if (capabilities?.endpoints?.contains("session") == false) return
-        scope.launch {
+        runScope.launch {
             var last: String? = null
             for (wait in longArrayOf(0, 3_000, 10_000)) {
                 delay(wait)
@@ -1579,6 +1635,7 @@ class RemoteHermesRepository(
                     )
                 }
             }
+            if (!isCurrent(c)) return
             _models.value = options
             serverDefaultModel = options.firstOrNull { it.note == "Hermes 默认" }?.id
             _defaultModelId.value = appDefaultModel()?.id ?: serverDefaultModel.orEmpty()
@@ -1657,11 +1714,15 @@ class RemoteHermesRepository(
         if (capabilities?.endpoints?.contains("skills") != true) return
         _features.update { it + AppFeature.Skills }
         try {
-            _skills.value = c.skills().data.map { Skill(it.name, it.description.orEmpty(), it.category.orEmpty()) }
+            val fetched = c.skills().data
+            if (!isCurrent(c)) return
+            _skills.value = fetched.map { Skill(it.name, it.description.orEmpty(), it.category.orEmpty()) }
             _skillsError.value = null
         } catch (e: HermesError.Server) {
             // 某些 Hermes 版本这个接口自己会报错（500）。有 SSH 就直接读技能目录
+            if (!isCurrent(c)) return
             val fromDisk = skillsOverSsh()
+            if (!isCurrent(c)) return
             if (fromDisk != null) {
                 _skills.value = fromDisk
                 _skillsError.value = null
@@ -1669,7 +1730,7 @@ class RemoteHermesRepository(
             }
             _skillsError.value = "Hermes 读取技能列表时出错（${e.message}）。这是 Hermes 那边的问题，聊天时技能照常可用；升级 Hermes 后再试。"
         } catch (e: HermesError) {
-            if (_skills.value.isEmpty()) _skillsError.value = "读不到技能列表：${e.message}"
+            if (isCurrent(c) && _skills.value.isEmpty()) _skillsError.value = "读不到技能列表：${e.message}"
         }
     }
 
@@ -1696,7 +1757,9 @@ class RemoteHermesRepository(
         val c = client ?: return
         if (capabilities?.endpoints?.contains("toolsets") != true) return
         try {
-            _toolsets.value = c.toolsets().data.map {
+            val fetched = c.toolsets().data
+            if (!isCurrent(c)) return
+            _toolsets.value = fetched.map {
                 Toolset(it.name, it.label?.takeIf { l -> l.isNotBlank() } ?: it.name, it.description.orEmpty(), it.tools, it.enabled == true, it.configured != false)
             }
             _features.update { it + AppFeature.Toolsets }
@@ -1728,12 +1791,13 @@ class RemoteHermesRepository(
         val toolset = _toolsets.value.firstOrNull { it.name == name } ?: return
         if (name in _toolsetsBusy.value) return
         val enable = !toolset.enabled
+        val flag = profileFlag()
         _toolsetsBusy.update { it + name }
-        scope.launch {
+        runScope.launch {
             try {
                 val safe = name.replace(Regex("[^A-Za-z0-9_.:-]"), "")
                 val (code, output) = withContext(Dispatchers.IO) {
-                    t.exec("hermes${profileFlag()} tools ${if (enable) "enable" else "disable"} $safe --platform api_server")
+                    t.exec("hermes$flag tools ${if (enable) "enable" else "disable"} $safe --platform api_server")
                 }
                 if (code != 0) {
                     val hint = if (code == 127 || "command not found" in output) "服务器上找不到 hermes 命令" else output.lines().lastOrNull { it.isNotBlank() }?.take(200) ?: "退出码 $code"
@@ -1743,7 +1807,7 @@ class RemoteHermesRepository(
             } catch (e: IOException) {
                 _errors.tryEmit("SSH 执行失败：${e.message}")
             } finally {
-                _toolsetsBusy.update { it - name }
+                if (tunnel === t) _toolsetsBusy.update { it - name }
             }
         }
     }
@@ -1751,18 +1815,25 @@ class RemoteHermesRepository(
 
     private val _jobs = MutableStateFlow<List<CronJob>>(emptyList())
     override val jobs: StateFlow<List<CronJob>> = _jobs.asStateFlow()
+    private val jobLocks = ConcurrentHashMap<String, Mutex>()
+    private val jobOperationSerial = AtomicLong()
+    private val pendingJobOperations = ConcurrentHashMap<String, Long>()
 
     /** 读任务列表；能读到就说明这台 Hermes 支持定时任务接口（它不在能力清单里，只能试）。 */
     private suspend fun loadJobs() {
         val c = client ?: return
+        val revision = jobOperationSerial.get()
+        if (pendingJobOperations.isNotEmpty()) return
         try {
+            val fetched = c.jobs().jobs
+            if (!isCurrent(c) || revision != jobOperationSerial.get() || pendingJobOperations.isNotEmpty()) return
             val running = _jobs.value.filter { it.runningNow }.map { it.id }.toSet()
-            _jobs.value = c.jobs().jobs.map { it.toCronJob(clock()).copy(runningNow = it.id in running) }
+            _jobs.value = fetched.map { it.toCronJob(clock()).copy(runningNow = it.id in running) }
             _features.update { it + AppFeature.Jobs }
         } catch (e: HermesError.NotSupported) {
-            _features.update { it - AppFeature.Jobs }
+            if (isCurrent(c)) _features.update { it - AppFeature.Jobs }
         } catch (e: HermesError.Server) {
-            if (e.status == 501) _features.update { it - AppFeature.Jobs }
+            if (isCurrent(c) && e.status == 501) _features.update { it - AppFeature.Jobs }
         } catch (e: HermesError) {
             // 网络问题：保留旧列表
         }
@@ -1776,21 +1847,39 @@ class RemoteHermesRepository(
         _jobs.update { list -> if (list.any { it.id == job.id }) list.map { if (it.id == job.id) job.copy(runningNow = it.runningNow) else it } else list + job }
     }
 
-    private fun jobCall(what: String, rollback: List<CronJob>? = null, call: suspend HermesClient.() -> Unit) {
-        scope.launch {
+    /** 同一任务按顺序提交；只采纳最新一次操作的响应，回滚也只影响这个任务。 */
+    private fun jobCall(id: String, what: String, rollback: (() -> Unit)? = null, call: suspend HermesClient.() -> JobDto?) {
+        val c = client ?: return run { _errors.tryEmit("$what：还没连上 Hermes") }
+        val revision = jobOperationSerial.incrementAndGet()
+        pendingJobOperations[id] = revision
+        val lock = jobLocks.getOrPut(id) { Mutex() }
+        runScope.launch {
             try {
-                client?.call() ?: throw HermesError.Unreachable("未连接")
-            } catch (e: HermesError) {
-                rollback?.let { _jobs.value = it }
-                _errors.tryEmit("$what：${e.message}")
+                lock.withLock {
+                    if (!isCurrent(c)) return@withLock
+                    try {
+                        val response = c.call()
+                        if (isCurrent(c) && pendingJobOperations[id] == revision) replaceJob(response)
+                    } catch (e: HermesError) {
+                        if (isCurrent(c) && pendingJobOperations[id] == revision) {
+                            rollback?.invoke()
+                            _errors.tryEmit("$what：${e.message}")
+                        }
+                    }
+                }
+            } finally {
+                pendingJobOperations.remove(id, revision)
             }
         }
     }
 
     override fun setJobEnabled(id: String, enabled: Boolean) {
-        val before = _jobs.value
+        if (client == null) return
+        val before = _jobs.value.firstOrNull { it.id == id } ?: return
         _jobs.update { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
-        jobCall(if (enabled) "恢复任务失败" else "暂停任务失败", before) { replaceJob(jobAction(id, if (enabled) "resume" else "pause")) }
+        jobCall(id, if (enabled) "恢复任务失败" else "暂停任务失败", rollback = {
+            _jobs.update { list -> list.map { if (it.id == id) it.copy(enabled = before.enabled) else it } }
+        }) { jobAction(id, if (enabled) "resume" else "pause") }
     }
 
     /**
@@ -1798,10 +1887,12 @@ class RemoteHermesRepository(
      * 所以这里等它的“上次运行时间”变了，再刷新会话列表、发通知。
      */
     override fun runJobNow(id: String) {
+        val c = client ?: return
         val job = _jobs.value.firstOrNull { it.id == id } ?: return
+        if (job.runningNow) return
         _jobs.update { list -> list.map { if (it.id == id) it.copy(runningNow = true) else it } }
-        scope.launch {
-            val c = client ?: return@launch
+        runScope.launch {
+            if (!isCurrent(c)) return@launch
             try {
                 val before = c.job(id)?.last_run_at
                 c.jobAction(id, "run")
@@ -1815,8 +1906,10 @@ class RemoteHermesRepository(
                         break
                     }
                 }
+                if (!isCurrent(c)) return@launch
                 _jobs.update { list -> list.map { if (it.id == id) it.copy(runningNow = false) else it } }
-                replaceJob(done)
+                // 轮询响应可能早于用户刚保存的修改，重新读取列表，不用旧对象覆盖配置。
+                loadJobs()
                 loadSessions()
                 if (done != null) {
                     val run = _sessions.value.filter { it.source.id == "cron" && it.title.startsWith(job.name + " · ") }.maxByOrNull { it.updatedAt }
@@ -1835,6 +1928,7 @@ class RemoteHermesRepository(
                     )
                 }
             } catch (e: HermesError) {
+                if (!isCurrent(c)) return@launch
                 _jobs.update { list -> list.map { if (it.id == id) it.copy(runningNow = false) else it } }
                 _errors.tryEmit("运行「${job.name}」失败：${e.message}")
             }
@@ -1849,15 +1943,18 @@ class RemoteHermesRepository(
             put("deliver", job.deliver)
         }
         val exists = _jobs.value.any { it.id == job.id }
-        jobCall(if (exists) "保存任务失败" else "新建任务失败") {
-            replaceJob(if (exists) updateJob(job.id, fields) else createJob(fields))
+        jobCall(job.id, if (exists) "保存任务失败" else "新建任务失败") {
+            if (exists) updateJob(job.id, fields) else createJob(fields)
         }
     }
 
     override fun deleteJob(id: String) {
-        val before = _jobs.value
+        if (client == null) return
+        val before = _jobs.value.firstOrNull { it.id == id } ?: return
         _jobs.update { list -> list.filterNot { it.id == id } }
-        jobCall("删除任务失败", before) { deleteJob(id) }
+        jobCall(id, "删除任务失败", rollback = {
+            _jobs.update { list -> if (list.any { it.id == id }) list else list + before }
+        }) { deleteJob(id); null }
     }
 
     // ---- 分组 ----
@@ -1869,11 +1966,14 @@ class RemoteHermesRepository(
     private suspend fun loadGroups() {
         val admin = admin() ?: return
         val connection = scopeId ?: return
+        val generation = connectionGeneration.get()
         try {
             val grouping = admin.sessionGroups()
+            if (connectionGeneration.get() != generation) return
             _sessionGroups.value = grouping
             cache?.let { c -> withContext(Dispatchers.IO) { c.saveGroups(connection, grouping) } }
         } catch (e: AdminException) {
+            if (connectionGeneration.get() != generation) return
             // 分组只是锦上添花，失败不弹提示；诊断信息里能看到
             synchronized(recentErrors) { recentErrors.addLast("${java.time.Instant.ofEpochMilli(clock())} 读分组失败：${e.message}") }
         }
@@ -1893,7 +1993,7 @@ class RemoteHermesRepository(
         val project = pendingProjects.remove(draftId) ?: return
         val path = project.path ?: return
         markMoved(sessionId, project.name, path)
-        scope.launch { moveOnServer(sessionId, path) }
+        runScope.launch { moveOnServer(sessionId, path) }
     }
 
     override fun moveToProject(sessionId: String, project: ProjectInfo?) {
@@ -1906,7 +2006,7 @@ class RemoteHermesRepository(
         if (project?.path != null) markMoved(id, project.name, project.path) else {
             _sessionGroups.update { g -> g.copy(of = g.of - id, folders = g.folders - id) }
         }
-        scope.launch {
+        runScope.launch {
             if (!moveOnServer(id, project?.path)) _sessionGroups.value = before
         }
     }
@@ -1967,11 +2067,13 @@ class RemoteHermesRepository(
             _archivedLocal.update { list -> listOf(session.copy(running = false, unread = 0)) + list.filterNot { it.id == real } }
             saveArchived()
             archivingNow += real
-            scope.launch {
+            runScope.launch {
                 try {
                     c.patchSession(real, HermesClient.patch { put("archived", true) })
+                    if (!isCurrent(c)) return@launch
                     archivingNow -= real
                 } catch (e: HermesError) {
+                    if (!isCurrent(c)) return@launch
                     archivingNow -= real
                     _archivedLocal.update { list -> list.filterNot { it.id == real } }
                     _sessions.update { list -> if (list.any { it.id == real }) list else listOf(session) + list }
@@ -1984,11 +2086,13 @@ class RemoteHermesRepository(
             _archivedLocal.update { list -> list.filterNot { it.id == real } }
             _sessionGroups.update { g -> g.copy(archived = g.archived.filterNot { it.id == real }) }
             saveArchived()
-            scope.launch {
+            runScope.launch {
                 try {
                     c.patchSession(real, HermesClient.patch { put("archived", false) })
+                    if (!isCurrent(c)) return@launch
                     loadSessions()
                 } catch (e: HermesError) {
+                    if (!isCurrent(c)) return@launch
                     if (local != null) _archivedLocal.update { list -> listOf(local) + list }
                     saveArchived()
                     _errors.tryEmit("取消归档失败：${e.message}")
@@ -2006,7 +2110,7 @@ class RemoteHermesRepository(
         scope.launch {
             _errors.collect { message ->
                 synchronized(recentErrors) {
-                    recentErrors.addLast("${java.time.Instant.ofEpochMilli(clock())} $message")
+                    recentErrors.addLast("${java.time.Instant.ofEpochMilli(clock())} ${redactDiagnostics(message)}")
                     while (recentErrors.size > 40) recentErrors.removeFirst()
                 }
             }
@@ -2015,12 +2119,15 @@ class RemoteHermesRepository(
 
     /** 后台里没接住的异常（App 不退出）：提示一句，记进诊断信息。 */
     fun reportUnexpected(error: Throwable) {
-        val text = "${error.javaClass.simpleName}: ${error.message ?: ""}".take(300)
+        val text = redactDiagnostics("${error.javaClass.simpleName}: ${error.message ?: ""}").take(300)
         synchronized(recentErrors) { recentErrors.addLast("${java.time.Instant.ofEpochMilli(clock())} 未处理的异常 $text") }
         _errors.tryEmit("出了点问题（App 没有退出）：$text")
     }
 
-    override fun diagnosticsReport(): String = buildString {
+    /** 崩溃落盘前也用同一出口脱敏，避免凭据更新后旧日志留下明文。 */
+    fun redactDiagnostics(text: String): String = DiagnosticRedactor.redact(text, diagnosticPrivateValues())
+
+    override fun diagnosticsReport(): String = redactDiagnostics(buildString {
         val profile = _connections.value.firstOrNull { it.id == _activeConnectionId.value }
         val caps = capabilities
         appendLine("连接：${profile?.type ?: "无"}" + (profile?.let { " · 端口 ${it.port}" + (if (!it.sshUser.isNullOrBlank()) " · SSH 端口 ${it.sshPort}" else "") + (it.profile?.let { p -> " · Profile $p" } ?: "") } ?: ""))
@@ -2039,6 +2146,15 @@ class RemoteHermesRepository(
             appendLine()
             appendLine("闪退记录：")
             appendLine(it)
+        }
+    })
+
+    private fun diagnosticPrivateValues(): List<String> = buildList {
+        _connections.value.forEach { profile ->
+            if (profile.host.isNotBlank()) add(profile.host.trim())
+        }
+        state.value.keys.values.forEach { encrypted ->
+            runCatching { secrets.decrypt(encrypted) }.getOrNull()?.takeIf { it.isNotEmpty() }?.let(::add)
         }
     }
 
@@ -2064,16 +2180,19 @@ class RemoteHermesRepository(
 
     override suspend fun refreshBots() {
         val connection = connectedId ?: return
+        val generation = connectionGeneration.get()
         val admin = admin() ?: run {
             _botsError.value = "看 bot 要经 SSH 读 Hermes 的 Profile，给这个连接配上 SSH 后再试"
             return
         }
         try {
             val roster = admin.bots()
+            if (connectionGeneration.get() != generation) return
             _bots.value = roster
             _botsError.value = null
             cache?.let { c -> withContext(Dispatchers.IO) { c.saveBots(connection, roster) } }
         } catch (e: AdminException) {
+            if (connectionGeneration.get() != generation) return
             _botsError.value = e.message
         }
     }
@@ -2220,14 +2339,18 @@ class RemoteHermesRepository(
     }
 
     override suspend fun refreshRooms() {
+        val generation = connectionGeneration.get()
         val api = roomApi() ?: run {
             _roomsError.value = "群聊要经 SSH 连 Hermes gateway，给这个连接配上 SSH 后再试"
             return
         }
         try {
-            _rooms.value = api.rooms()
+            val fetched = api.rooms()
+            if (connectionGeneration.get() != generation) return
+            _rooms.value = fetched
             _roomsError.value = null
         } catch (e: AdminException) {
+            if (connectionGeneration.get() != generation) return
             _roomsError.value = e.message
         }
     }

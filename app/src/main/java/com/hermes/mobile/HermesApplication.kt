@@ -12,6 +12,7 @@ import com.hermes.mobile.platform.KeystoreSecretBox
 import com.hermes.mobile.platform.ReplyNotifier
 import com.hermes.mobile.platform.RunService
 import com.hermes.mobile.data.store.CrashLog
+import com.hermes.mobile.data.store.DiagnosticRedactor
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -27,13 +28,13 @@ import java.security.Security
 class HermesApplication : Application() {
     /** 后台里没接住的异常：记下来、提示一句，不让整个 App 崩掉。 */
     private val unexpected = CoroutineExceptionHandler { _, error ->
-        CrashLog.record(error, fatal = false, version = appVersionName())
+        CrashLog.record(error, fatal = false, version = appVersionName(), redact = ::redactCrash)
         repository.reportUnexpected(error)
     }
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + unexpected)
 
-    val repository: RemoteHermesRepository by lazy {
+    private val repositoryState = lazy {
         RemoteHermesRepository(
             scope = appScope,
             store = FileLocalStore(this),
@@ -44,13 +45,19 @@ class HermesApplication : Application() {
         )
     }
 
+    val repository: RemoteHermesRepository by repositoryState
+
+    /** 冷启动过早出错时，不为了记录异常而再次初始化仓库。 */
+    private fun redactCrash(text: String): String =
+        if (repositoryState.isInitialized()) repository.redactDiagnostics(text) else DiagnosticRedactor.redact(text)
+
     override fun onCreate() {
         super.onCreate()
         // 闪退时把出错的地方记下来，下次打开给用户看
         CrashLog.file = java.io.File(filesDir, "crash-log.txt")
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            CrashLog.record(error, fatal = true, thread = thread.name, version = appVersionName())
+            CrashLog.record(error, fatal = true, thread = thread.name, version = appVersionName(), redact = ::redactCrash)
             previous?.uncaughtException(thread, error)
         }
         // Android 自带的 BouncyCastle（名字也叫 "BC"）是阉割版，没有 Ed25519 等 SSH 要用的算法：换成打包进来的完整版

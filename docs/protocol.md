@@ -185,6 +185,7 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 - `/api/jobs` **不在 `/v1/capabilities` 里**，只能试：`GET /api/jobs?include_disabled=true` 能读到就显示“任务”页，404/501 就隐藏。
 - `POST /api/jobs` `{name, prompt, schedule, deliver}` 新建；`PATCH /api/jobs/{id}` 修改；`DELETE` 删除；
   `POST /api/jobs/{id}/pause|resume|run`。返回 `{"job": {...}}`，出错时是 `{"error": "..."}`（App 原样显示）。
+- App 对同一个任务的修改按顺序提交，只采纳最新操作的返回值；修改期间不拿列表请求覆盖本地状态。连接 / Bot 切换时取消旧操作，旧响应不能更新新连接的界面或缓存。
 - `schedule` 是一个字符串：cron 表达式（`0 8 * * 1-5`）、间隔（`every 30m`、`every 2h`）、或 ISO 时间（只跑一次）。
   读回来是 `{kind: cron|interval|once, expr, minutes, run_at, display}`。App 把常见写法换成“每天/每周几/间隔/一次”的选择器，
   其它写法放在“自定义”里原样保留。

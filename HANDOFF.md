@@ -5,7 +5,8 @@
 
 ## 现状
 
-- 当前版本 **0.11.0**（`app/build.gradle.kts`：`versionCode = 26`），代码都在 `main` 上，测试全过。
+- 当前工作区版本 **0.11.1**（`app/build.gradle.kts`：`versionCode = 27`）。本轮修复已完成常规测试和调试 APK 构建，尚未创建 GitHub Release；真实 Hermes / OpenSSH 集成环境未配置，相关 IT 没有实际执行。
+- 0.11.1：切换连接 / Bot 时清理旧客户端、取消关联操作，拒绝旧响应；定时任务按任务串行提交，防止旧响应和失败回滚覆盖后续修改；诊断导出及崩溃落盘前统一脱敏；归档测试等待异步状态传播。
 - 最近几版做的：Bot（列表、切换、开通手机访问、新建 / 编辑 / 删除）、群聊（0.11.0）；闪退日志、审批后闪退修复（0.10.5）；Bot 屏幕接管时不误触返回（0.10.4）；
   项目的新建文件夹 / 改名 / 删除（0.10.3）；Markdown 渲染（0.10.x）；Bot 屏幕（0.10.0）。
 - GitHub 仓库 `zhanghahaA/hermes`（私有）。之前的会话里推 tag、建 Release 没有权限，Release 都是用户手动建的（见「发布」）。
@@ -83,6 +84,7 @@ gradle test                        # 单元 + 界面 + 集成测试（没设 HER
 
 - 改了界面就渲染相关场景看一眼截图（`tools/ui-preview/screenshots/`，不进仓库）。Linux 上要装 CJK 字体（`fonts-noto-cjk`）。
 - 测试 JVM 的默认编码不是 UTF-8：**测试里的中文文件名和命令行参数会坏**，这类测试用 ASCII（源码里的中文字符串没问题）。
+- `RepositoryRobustnessTest` 和 `DiagnosticRedactorTest` 覆盖连接隔离、任务响应顺序、局部回滚、诊断隐私。0.11.1 本轮标准套件报告 163 项，其中实际执行的常规测试 147 项全部通过；另 16 项真实 IT 在缺少环境配置时直接返回，不能按真实集成通过来报告。
 - 杀 gradle 进程别用 `pkill -f gradle`（会匹配到自己的 shell），用 `pgrep -f "[G]radle..."`。
 
 ### 集成测试环境（`tools/it-env`）
