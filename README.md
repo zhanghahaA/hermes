@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.16.0-dev.** Keeps streamed replies visible across tool calls, adds optional thinking/work progress, and lets you drag the glass Dock indicator to select a tab on release. See [the 0.16 guide](docs/0.16.md). Includes the 0.15 notification assistant; Android permission, scheduling, and vivo background behavior still need device validation. Other roadmap features and long-term memory are not included.
+**Current release candidate: 0.12.0 (Android versionCode 36).** Consolidates the previously developed 0.15/0.16 dev features: the notification assistant, continuous streamed replies, optional thinking/work progress, and the draggable glass Dock. All existing features are retained; this is a release-number consolidation, not a rollback. See [the 0.12 guide](docs/0.12.md). Android permissions, scheduling, and vivo background behavior still need device validation. Termux deployment and service management move to 0.13; no Release has been published by this change.
 
 English | [中文](README.zh-CN.md)
 
@@ -23,12 +23,13 @@ Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to
 
 ## Roadmap
 
-Planned (not started yet; details, risks and how each item will be verified are in [docs/roadmap.md](docs/roadmap.md), in Chinese):
+Release numbering follows delivery order. Historical 0.15/0.16 dev names remain in development records; they are consolidated into 0.12. Details and validation requirements are in [docs/roadmap.md](docs/roadmap.md), in Chinese.
 
-- **0.12** Termux integration: one-tap install of a local Hermes on the phone (official Termux APT package), auto-configured connection, keep-alive guidance.
-- **0.13** Optional extensions, off by default: smart home via the official Home Assistant plugin; phone control over ADB wireless debugging.
-- **0.14** A local Chromium (Termux X11) on the phone that Hermes can drive, viewable and take-over-able in the app.
-- **0.15** Reading phone notifications (opt-in, per-app allowlist, sensitive content masked) and long-term memory so Hermes gets to know you.
+- **0.12** Consolidate the existing notification assistant, streaming/work progress, and draggable Dock.
+- **0.13** External Termux deployment, local Hermes, Python services and reverse proxies, per-connection privacy settings, and basic Chromium + external Termux:X11 setup. Keep the runtime backend replaceable for a future single-app integration. Runtime code is an unintegrated draft in a separate worktree, not part of 0.12.
+- **0.14** Optional extensions: Home Assistant and phone control over ADB wireless debugging.
+- **0.15** Hermes-driven local browser automation and user take-over, building on 0.13's browser setup.
+- **Later** Optional subscriptions, external-service synchronization, rewarded deployment credits, and long-term memory; providers and service interfaces remain undecided.
 
 See [docs/setup.md](docs/setup.md) for how to connect the phone to Hermes (in Chinese) and [docs/protocol.md](docs/protocol.md) for the API details and version notes.
 
