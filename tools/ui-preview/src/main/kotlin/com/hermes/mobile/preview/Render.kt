@@ -95,6 +95,9 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("51-runtime-missing") { _, _ -> RuntimePreview(false) },
+    Scene("51b-runtime-ready") { _, _ -> RuntimePreview(true) },
+    Scene("51c-runtime-dark", dark = true) { _, _ -> RuntimePreview(true) },
     Scene("41-streaming-keeps-text") { repo, _ -> StreamingPreview(repo, process = false) },
     Scene("41b-work-process") { repo, _ -> StreamingPreview(repo, process = true) },
     Scene("41c-work-process-dark", dark = true) { repo, _ -> StreamingPreview(repo, process = true) },
@@ -439,6 +442,30 @@ fun main(args: Array<String>) {
         composeScene.close()
         scope.cancel()
     }
+}
+
+/** 独立假后端，只展示运行中心布局，不执行 Android 命令。 */
+@Composable
+private fun RuntimePreview(ready: Boolean) {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val manager = remember {
+        com.hermes.mobile.data.local.LocalRuntimeManager(scope, object : com.hermes.mobile.data.local.LocalRuntimeBackend {
+            override val name = "Termux（演示环境）"
+            override val externalApps = true
+            override val hermesInstallWarning = com.hermes.mobile.data.local.TermuxRuntimeBackend.PackageWarning
+            override val initializationCommand = com.hermes.mobile.data.local.TermuxRuntimeBackend.EnableExternalApps
+            override fun environment() = com.hermes.mobile.data.local.RuntimeEnvironment(
+                installed = ready, compatible = ready, permission = ready, arm64 = true,
+                freeBytes = 4L * 1024 * 1024 * 1024, viewerInstalled = ready, version = if (ready) "0.118.3" else "",
+            )
+            override suspend fun execute(request: com.hermes.mobile.data.local.RuntimeRequest, progress: (String) -> Unit) =
+                com.hermes.mobile.data.local.RuntimeResponse(com.hermes.mobile.data.local.RuntimeSnapshot(toolsReady = true))
+        }, object : com.hermes.mobile.data.local.LocalConnectionAccess {
+            override fun save(apiKey: String) = Unit
+            override suspend fun verifyAndActivate() = Unit
+        })
+    }
+    com.hermes.mobile.ui.settings.LocalRuntimeScreen(manager, {})
 }
 
 /** 液态玻璃对比用：彩色内容上放 Tab 栏和输入栏，看通透程度。 */

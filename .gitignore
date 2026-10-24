@@ -10,3 +10,4 @@ captures/
 .cxx/
 tools/ui-preview/screenshots/
 *.apk
+__pycache__/

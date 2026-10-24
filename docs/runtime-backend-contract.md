@@ -1,6 +1,6 @@
 # 0.13 运行环境接口约定
 
-状态：后续实现约定，0.12 不包含本机运行功能。当前未接入、未验证的实现草稿在独立工作区 `/workspace/hermes-runtime-0.13`，分支 `codex/local-runtime`。
+状态：已接入 0.13.0-dev，0.12 不包含本机运行功能。实现位于独立工作区 `/workspace/hermes-runtime-0.13`，分支 `codex/local-runtime`。Android 真机安装与命令桥仍需验证，见 [0.13 说明](0.13.md)。
 
 用户目前选择外部 Termux + 独立 Termux:X11，并希望以后能够合并。为此将安装、执行和显示行为放在可替换后端，不把外部应用的路径和 Intent 散落到聊天或设置界面。
 

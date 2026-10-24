@@ -7,7 +7,7 @@
 | 版本 | 范围 | 当前状态 |
 |---|---|---|
 | 0.12 | 已有通知助手、持续流式回复、可选思考／工作过程、可拖动玻璃 Dock；既有功能完整保留 | 基于 dev 的 a6dbe47 整理为 0.12.0 / code 36，构建和本地回归通过、设备未验证；见 [0.12 说明](0.12.md) |
-| 0.13 | 独立 Termux、本机 Hermes、Python／反向代理服务、按连接独立隐私档案、Chromium + 独立 Termux:X11 基础部署 | 单独工作区有未接入、未验证草稿；不属于 0.12 |
+| 0.13 | 独立 Termux、本机 Hermes、Python／反向代理服务、按连接独立通知档案、Chromium + 独立 Termux:X11 基础部署 | 已接入开发包 0.13.0-dev / code 37；上游安装为实验功能，真机待验证，见 [说明](0.13.md) |
 | 0.14 | 可选扩展框架、Home Assistant、ADB 无线调试 | 计划 |
 | 0.15 | Hermes 驱动本机浏览器、查看与接管 | 计划 |
 | 后续 | 订阅、外部服务同步、广告部署额度、长期记忆 | 具体服务、平台与接口待确定 |
@@ -31,7 +31,7 @@
 
 业务面向可替换的 LocalRuntimeBackend；固定路径、安装源、命令传输与外部窗口放在外部后端，Android Intent 桥与业务分离。将来可实现内置后端，但本轮不承诺已解决单 APK 的包名路径、打包和 Android 执行限制。保留各第三方许可和应有的源码义务，不擅自确定主项目许可证。
 
-草稿位于独立工作区 /workspace/hermes-runtime-0.13，分支 codex/local-runtime。尚未接入界面、完成 Android 桥或验证，不能当作已交付功能。分层与迁移边界见 [运行环境接口约定](runtime-backend-contract.md)。
+实现位于独立工作区 /workspace/hermes-runtime-0.13，分支 codex/local-runtime，已接入设置入口、业务控制器、Android 桥与结构化运行组件。桌面和 Linux 测试不能替代 Android 安装与设备测试。分层与迁移边界见 [运行环境接口约定](runtime-backend-contract.md)。
 
 ### 环境、安装与连接
 

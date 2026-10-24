@@ -121,7 +121,7 @@ fun rememberNotificationApps(): List<NotificationApp> {
 class HermesNotificationListener : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val app = application as HermesApplication
-        val config = app.notificationAssistant.state.value.config
+        val (config, token) = app.notificationAssistant.captureContext()
         if (!config.enabled || sbn.packageName !in config.packages || !notificationAccessGranted(this)) return
         val notification = sbn.notification
         val extras = notification.extras
@@ -138,7 +138,7 @@ class HermesNotificationListener : NotificationListenerService() {
         )
         app.appScope.launch(Dispatchers.IO) {
             // 不允许通知正文进入全局异常日志。
-            runCatching { app.notificationAssistant.capture(raw) }
+            runCatching { app.notificationAssistant.capture(raw, token) }
         }
     }
 }
