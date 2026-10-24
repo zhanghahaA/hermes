@@ -114,6 +114,7 @@ class RemoteHermesRepository(
     /** 断线重连的等待时间（毫秒），第 n 次失败等多久。测试里调短。 */
     private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
     private val connectionDiagnostics: ConnectionDiagnostics = ConnectionDiagnostics(),
+    override val notificationAssistant: com.hermes.mobile.data.notifications.NotificationAssistant? = null,
 ) : HermesRepository {
     private val cache = cacheDir?.let(::ChatCache)
 
@@ -121,6 +122,13 @@ class RemoteHermesRepository(
     @Volatile private var sessionsFresh = false
 
     private val state = MutableStateFlow(store.load() ?: StoredState())
+    private val notificationSender = NotificationSender({ state.value }, secrets, clientFactory)
+
+    override suspend fun createNotificationSession(target: com.hermes.mobile.data.notifications.NotificationTarget): String =
+        notificationSender.createSession(target)
+
+    suspend fun sendNotificationSummary(batch: com.hermes.mobile.data.notifications.NotificationBatch, checkpoint: (String) -> Unit): String =
+        notificationSender.send(batch, checkpoint)
 
     private fun persist(transform: (StoredState) -> StoredState) {
         state.update(transform)

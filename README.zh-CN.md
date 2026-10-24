@@ -1,5 +1,7 @@
 # Hermes 移动版（Android）
 
+通知助手开发版 **0.15.0-dev.2**：在设置中选择应用、授权读取新通知、绑定固定 Bot 会话，按 15 / 30 / 60 分钟批量总结。默认关闭，记录在手机加密保存；系统授权和 vivo 后台效果尚需真机验证。详见 [通知助手说明](docs/notification-assistant.md)。此版提前开发 0.15 的通知部分，Termux 等其它路线图功能和长期记忆尚未完成。
+
 在手机上像发消息一样使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：只显示最终回复，不显示思考链和工具调用；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 
 [English](README.md) | 中文

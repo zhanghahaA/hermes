@@ -71,6 +71,7 @@ fun MainScreen(
     onEditBot: (String?) -> Unit = {},
     onOpenRoom: (String) -> Unit = {},
     initialTab: MainTab = MainTab.Chats,
+    onOpenNotificationAssistant: () -> Unit = {},
 ) {
     var tabIndex by rememberSaveable { mutableIntStateOf(initialTab.ordinal) }
     val tab = MainTab.entries[tabIndex]
@@ -141,6 +142,7 @@ fun MainScreen(
                             repository = repository,
                             onEditConnection = onEditConnection,
                             onOpenWelcome = onOpenWelcome,
+                            onOpenNotificationAssistant = onOpenNotificationAssistant,
                         )
                     }
                 }

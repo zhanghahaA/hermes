@@ -1,5 +1,7 @@
 # Hermes Mobile (Android)
 
+**0.15.0-dev.2 notification assistant:** opt-in app allowlist, encrypted local notification records, a fixed connection/Bot/session, and periodic summaries. Android permission, scheduling, and vivo background behavior still need device validation. See [the development guide](docs/notification-assistant.md). Other roadmap features and long-term memory are not included.
+
 English | [中文](README.zh-CN.md)
 
 An Android app for chatting with [Hermes Agent](https://github.com/NousResearch/hermes-agent) the way you text a friend. You only see the final replies: no chain of thought, no tool calls. When Hermes needs your approval or asks a follow-up question, a card appears in the chat for you to tap.

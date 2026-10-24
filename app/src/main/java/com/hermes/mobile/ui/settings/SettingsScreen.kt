@@ -73,6 +73,7 @@ fun SettingsScreen(
     repository: HermesRepository,
     onEditConnection: (String?) -> Unit,
     onOpenWelcome: () -> Unit,
+    onOpenNotificationAssistant: () -> Unit = {},
 ) {
     val settings by repository.settings.collectAsState()
     val connections by repository.connections.collectAsState()
@@ -191,6 +192,13 @@ fun SettingsScreen(
             }
 
             SettingsGroup("通知") {
+                SettingsRow(
+                    Icons.Rounded.AutoAwesome, "通知助手 · 开发版",
+                    "选择应用，把通知整理成待办和提醒",
+                    enabled = repository.notificationAssistant != null,
+                    onClick = onOpenNotificationAssistant,
+                )
+                GroupDivider()
                 SwitchRow(
                     Icons.Rounded.Notifications,
                     "回复完成时通知",

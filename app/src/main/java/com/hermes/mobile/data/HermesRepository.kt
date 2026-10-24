@@ -29,6 +29,9 @@ import kotlinx.coroutines.flow.map
  * 之后换成真正走 Hermes API Server 的实现即可，界面代码不用改。
  */
 interface HermesRepository {
+    val notificationAssistant: com.hermes.mobile.data.notifications.NotificationAssistant? get() = null
+    suspend fun createNotificationSession(target: com.hermes.mobile.data.notifications.NotificationTarget): String? = null
+
     // 连接
     val connections: StateFlow<List<ConnectionProfile>>
     val activeConnectionId: StateFlow<String?>

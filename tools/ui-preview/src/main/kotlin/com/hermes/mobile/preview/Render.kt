@@ -85,6 +85,8 @@ private class Scene(
     val waitMs: Long = 0,
     /** 假仓库的回复延迟；截“正在输入”时调大，避免渲染期间回复已经到达。 */
     val replyDelayMs: Long = 1200,
+    /** 动画场景在尚未结束时截帧；普通场景默认等到稳定。 */
+    val frames: Int = 60,
     val content: @Composable (HermesRepository, String?) -> Unit,
 )
 
@@ -156,6 +158,10 @@ private val scenes = listOf(
         SheetOver({ CapabilitiesScreen(repo, initialTab = 1) }) { SkillSheetContent(SampleData.skills[3], onUse = {}) }
     },
     Scene("17-settings") { repo, _ -> mainScreen(repo, MainTab.Settings)() },
+    Scene("40-notification-assistant") { repo, _ -> NotificationPreview(repo) },
+    Scene("40b-notification-assistant-dark", dark = true) { repo, _ -> NotificationPreview(repo) },
+    Scene("40c-notification-enter", frames = 8) { repo, _ -> NotificationTransitionPreview(repo, exiting = false) },
+    Scene("40d-notification-exit", frames = 8) { repo, _ -> NotificationTransitionPreview(repo, exiting = true) },
     Scene("18-settings-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
@@ -229,6 +235,41 @@ private val scenes = listOf(
     Scene("21-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
     Scene("22-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
 )
+
+@Composable
+private fun NotificationPreview(repository: HermesRepository) {
+    val assistant = remember {
+        val store = object : com.hermes.mobile.data.notifications.NotificationStore {
+            private var value: com.hermes.mobile.data.notifications.NotificationState? = null
+            override fun load() = value
+            override fun save(state: com.hermes.mobile.data.notifications.NotificationState) { value = state }
+        }
+        com.hermes.mobile.data.notifications.NotificationAssistant(store, sender = { _, _ -> "需要处理：取件" }).apply {
+            configure(com.hermes.mobile.data.notifications.NotificationConfig(
+                packages = setOf("example.delivery", "example.calendar"),
+                target = com.hermes.mobile.data.notifications.NotificationTarget("example", "default", "fixed", "我的电脑 · 默认 Bot · 通知助手"),
+            ))
+        }
+    }
+    com.hermes.mobile.ui.settings.NotificationAssistantScreen(repository, assistant, onBack = {})
+}
+
+/** 实际驱动全局导航的进入 / 返回动画后截帧，不手动设置页面位移。 */
+@Composable
+private fun NotificationTransitionPreview(repository: HermesRepository, exiting: Boolean) {
+    val navigator = remember {
+        com.hermes.mobile.ui.navigation.Navigator("settings").apply {
+            if (exiting) push(com.hermes.mobile.ui.NotificationAssistantRoute)
+        }
+    }
+    com.hermes.mobile.ui.navigation.SwipeBackHost(navigator) { route ->
+        if (route == "settings") mainScreen(repository, MainTab.Settings)()
+        else NotificationPreview(repository)
+    }
+    androidx.compose.runtime.LaunchedEffect(navigator) {
+        if (exiting) navigator.pop() else navigator.push(com.hermes.mobile.ui.NotificationAssistantRoute)
+    }
+}
 
 /** 聊天列表里左滑展开的一行（置顶 / 归档 / 删除）。 */
 @Composable
@@ -347,7 +388,7 @@ fun main(args: Array<String>) {
         }
         // 多渲染几帧，让进入动画、LaunchedEffect 和 Flow 收集都稳定下来
         var nanos = 0L
-        repeat(60) {
+        repeat(scene.frames) {
             composeScene.render(nanos)
             nanos += 16_666_666L
         }

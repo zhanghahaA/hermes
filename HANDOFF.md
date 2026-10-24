@@ -5,6 +5,11 @@
 
 ## 现状
 
+- dev.2 验证：176 项实际执行测试通过，另 16 项真实 IT 未执行；新增 2 项通知助手导航回归通过，进入 / 返回中间帧已检查，APK 构建和同签名校验通过。安装包为 /workspace/shared/downloads/hermes-mobile-0.15.0-dev.2.apk，验证记录保留于 /workspace/hermes-cloud/releases/0.15.0-dev.2。
+- 0.15.0-dev.2：通知助手改用全局 NotificationAssistantRoute + Navigator / SwipeBackHost，设置入口 push，返回按钮 pop；移除设置页内直接替换内容和通知页自带的 SystemBackHandler。进入、退出、右滑跟手 / 取消统一走全局动画，返回后保留设置页的 Tab 和滚动位置。新增真实入口的动画中间进度与手势回归测试。
+- 0.11.1 已按留档补丁恢复源码并推送标签 v0.11.1（源码提交 90124d35a0317ee309b5fb602d0088699ed74500）。用户决定自行在浏览器发布 Release；发布资料包位于 /workspace/shared/downloads/hermes-0.11.1-release-kit.zip，包含原 APK、校验文件、英文更新说明和填写步骤。
+- 当前工作区开发版 **0.15.0-dev.2 / code 34**：按用户在「设置 hermes」会话确认的范围，提前开发通知助手（授权、白名单、本地加密队列、固定连接 / Bot / 会话、周期批量摘要和到达提醒）。入口在「设置 → 通知助手 · 开发版」，默认关闭。实现细节及限制见 [docs/notification-assistant.md](docs/notification-assistant.md)。Termux、其它扩展和长期记忆未开发；本轮验证结果见该文档末尾。
+- 首个 0.15.0-dev 验证：174 项实际执行测试通过，另 16 项真实 IT 未执行；浅 / 深色截图已检查，App 和 Android 自检 APK 已构建，adb 无设备。开发版尚未推送或创建 Release。Gradle 属性 hermesDebugKeystore 可显式选择原调试签名，当前云环境 env.sh 已指定原文件；证书与既有 d985fcaf…db1dc7 一致。安装包和 ZIP 位于 /workspace/shared/downloads，验证报告与源码补丁保留于 /workspace/hermes-cloud/releases/0.15.0-dev。
 - 0.11.6 / code 32：修复电脑创建的中文项目不能新建 / 继续对话。原因是把 Unicode 目录直接放进 `X-Hermes-Workspace` 被 OkHttp 拒绝；中文目录保留在 JSON `instructions`，仅合法 ASCII 目录保留兼容请求头，不修改目录、不要求改名。发送准备参数异常也会恢复空闲，失败消息不再阻塞下一条发送。新增 `WorkspaceChatTest` 覆盖真实 HTTP、项目草稿、旧会话、非 ASCII 路径与异常恢复；编码环境仍无手机，设备效果需复测。 本次标准套件报告 175 项、0 失败，实际执行 159 项通过，另 16 项真实 IT 无环境未执行；App 与 Android 自检 APK 构建成功。
 - SSH 隧道修复：用户已反馈本轮改动可行。修复仅 SSH 本地入口使用 IPv4 与直连代理、单通道拒绝误重置整个 SSH 会话、HTTP 错误被覆盖成网络不可达；补全双向半关闭、正文 / SSE 取消、匿名阶段和字节诊断。设置里「导出诊断信息」可查看安全记录。设备自检已加入，但编码环境没有 adb 设备，尚未在设备上执行。SSH 修复提交时主线为 0.11.0 / code 26；用户随后授权创建 Release，发布准备版本为 0.11.5 / code 31，保证可覆盖 code 30 的测试包。此前 0.11.4 测试 APK 来自会话工作区。本次提交范围为 SSH 修复、配套隐私诊断、测试与文档，详见 [docs/ssh-fix-report.md](docs/ssh-fix-report.md)。 本次独立提交验证：标准套件 170 项报告、0 失败，实际执行 154 项通过，另 16 项真实 IT 因缺少环境直接返回；App 与 Android 自检 APK 构建成功。
 - 当前发布准备版本 **0.11.6**（`app/build.gradle.kts`：`versionCode = 32`），包含 SSH 与中文项目修复，用户已授权创建 GitHub Release。0.11.5 的代码和标签已推送，但发布 API 被云环境网络策略拦截（CONNECT 403），Release 尚未创建；已保存仅开放 `api.github.com` / `uploads.github.com` 的配置草稿，需要用户在环境设置保存并发布后再继续。发布结果以 GitHub Release 实际存在并附上 APK 为准。

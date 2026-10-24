@@ -12,9 +12,14 @@ android {
         applicationId = "com.hermes.mobile"
         minSdk = 26
         targetSdk = 37
-        versionCode = 32
-        versionName = "0.11.6"
+        versionCode = 34
+        versionName = "0.15.0-dev.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // 云环境明确选择保留下来的调试签名，避免环境恢复后重新生成而无法覆盖旧版。
+    signingConfigs.getByName("debug") {
+        providers.gradleProperty("hermesDebugKeystore").orNull?.let { storeFile = file(it) }
     }
 
     buildTypes {

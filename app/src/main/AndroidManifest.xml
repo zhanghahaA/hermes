@@ -3,10 +3,18 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 等回复期间保持连接：切到后台也能收到回复 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
         android:name=".HermesApplication"
@@ -40,6 +48,19 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <service
+            android:name=".platform.HermesNotificationListener"
+            android:label="Hermes 通知助手"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".platform.NotificationSummaryJob"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <service
             android:name=".platform.RunService"
             android:exported="false"

@@ -33,6 +33,15 @@ class HermesApplication : Application() {
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + unexpected)
 
+    val notificationAssistant by lazy {
+        com.hermes.mobile.data.notifications.NotificationAssistant(
+            store = com.hermes.mobile.platform.NotificationFileStore(this),
+            changed = { com.hermes.mobile.platform.NotificationScheduling.configure(this, it) },
+            completed = { com.hermes.mobile.platform.notifyNotificationSummary(this) },
+            sender = { batch, checkpoint -> repository.sendNotificationSummary(batch, checkpoint) },
+        )
+    }
+
     val repository: RemoteHermesRepository by lazy {
         RemoteHermesRepository(
             scope = appScope,
@@ -41,6 +50,7 @@ class HermesApplication : Application() {
             mediaDir = mediaDirectory(this),
             cacheDir = java.io.File(filesDir, "chat-cache"),
             localFileExporter = { path, name, mime -> AttachmentImporter.exportForTermux(this, path, name, mime) },
+            notificationAssistant = notificationAssistant,
         )
     }
 
@@ -56,6 +66,7 @@ class HermesApplication : Application() {
         // Android 自带的 BouncyCastle（名字也叫 "BC"）是阉割版，没有 Ed25519 等 SSH 要用的算法：换成打包进来的完整版
         Security.removeProvider("BC")
         Security.addProvider(BouncyCastleProvider())
+        com.hermes.mobile.platform.NotificationScheduling.configure(this, notificationAssistant.state.value.config)
         val notifier = ReplyNotifier(this)
         appScope.launch { repository.notices.collect(notifier::show) }
         appScope.launch {

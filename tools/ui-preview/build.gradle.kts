@@ -27,6 +27,7 @@ sourceSets {
                 "com/hermes/mobile/MainActivity.kt",
                 "com/hermes/mobile/HermesApplication.kt",
                 "com/hermes/mobile/platform/RunService.kt",
+                "com/hermes/mobile/platform/NotificationPlatform.kt",
                 "com/hermes/mobile/platform/ReplyNotifier.kt",
                 "com/hermes/mobile/platform/AttachmentImport.kt",
                 "com/hermes/mobile/platform/Platform.kt",
