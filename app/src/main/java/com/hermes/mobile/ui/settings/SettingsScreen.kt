@@ -74,6 +74,7 @@ fun SettingsScreen(
     onEditConnection: (String?) -> Unit,
     onOpenWelcome: () -> Unit,
     onOpenNotificationAssistant: () -> Unit = {},
+    onOpenLocalRuntime: () -> Unit = {},
 ) {
     val settings by repository.settings.collectAsState()
     val connections by repository.connections.collectAsState()
@@ -107,6 +108,9 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             SettingsGroup("连接") {
+                SettingsRow(Icons.Rounded.RocketLaunch, "本机运行与服务", "本机 Hermes、Python 服务、反向代理和 X11 浏览器",
+                    enabled = repository.localRuntime != null, onClick = onOpenLocalRuntime)
+                GroupDivider()
                 connections.forEachIndexed { index, profile ->
                     val active = profile.id == activeId
                     SettingsRow(

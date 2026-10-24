@@ -1,6 +1,6 @@
 # Hermes 移动版（Android）
 
-当前候选版本 **0.12.0 / Android versionCode 36**：将此前 0.15／0.16-dev 的通知助手、持续流式回复、可选“思考与工作过程”和可拖动玻璃 Dock 统一整理到 0.12，功能不回退。使用方法、升级说明与验证范围见 [0.12 说明](docs/0.12.md)。Termux 本机部署及服务管理顺延至 0.13，本轮没有发布 GitHub Release。通知授权、系统调度和 vivo 后台行为仍需真机验证。
+当前开发包 **0.13.0-dev / Android versionCode 37**：在 0.12 已有功能上接入本机运行与服务中心、独立 Termux／Termux:X11、Python 与反向代理管理，以及按连接隔离的通知档案。使用方法和验证边界见 [0.13 说明](docs/0.13.md)。Hermes 官方 Termux 安装包仍在修复，本机部署为实验功能；没有真机验证，也没有发布正式 Release。
 
 在手机上使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：默认像发消息一样收到最终回复，可在设置中开启逐字回复或思考与工作过程；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 

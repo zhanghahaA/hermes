@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current release candidate: 0.12.0 (Android versionCode 36).** Consolidates the previously developed 0.15/0.16 dev features: the notification assistant, continuous streamed replies, optional thinking/work progress, and the draggable glass Dock. All existing features are retained; this is a release-number consolidation, not a rollback. See [the 0.12 guide](docs/0.12.md). Android permissions, scheduling, and vivo background behavior still need device validation. Termux deployment and service management move to 0.13; no Release has been published by this change.
+**Current development build: 0.13.0-dev (Android versionCode 37).** Adds the local runtime/service center with external Termux and Termux:X11, Python services, local reverse proxies, and isolated notification profiles per connection. See [the 0.13 guide](docs/0.13.md). Upstream still marks its Termux package as broken, so Hermes installation is experimental. Android device flows remain unverified; no production Release has been published.
 
 English | [中文](README.zh-CN.md)
 
@@ -26,7 +26,7 @@ Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to
 Release numbering follows delivery order. Historical 0.15/0.16 dev names remain in development records; they are consolidated into 0.12. Details and validation requirements are in [docs/roadmap.md](docs/roadmap.md), in Chinese.
 
 - **0.12** Consolidate the existing notification assistant, streaming/work progress, and draggable Dock.
-- **0.13** External Termux deployment, local Hermes, Python services and reverse proxies, per-connection privacy settings, and basic Chromium + external Termux:X11 setup. Keep the runtime backend replaceable for a future single-app integration. Runtime code is an unintegrated draft in a separate worktree, not part of 0.12.
+- **0.13** Integrated development build: external Termux deployment, local Hermes, Python services and reverse proxies, per-connection notification profiles, and basic Chromium + external Termux:X11 setup. The replaceable runtime backend supports later integration work; real Android deployment remains unverified.
 - **0.14** Optional extensions: Home Assistant and phone control over ADB wireless debugging.
 - **0.15** Hermes-driven local browser automation and user take-over, building on 0.13's browser setup.
 - **Later** Optional subscriptions, external-service synchronization, rewarded deployment credits, and long-term memory; providers and service interfaces remain undecided.

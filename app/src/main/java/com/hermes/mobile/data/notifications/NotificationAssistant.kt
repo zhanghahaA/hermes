@@ -2,6 +2,9 @@ package com.hermes.mobile.data.notifications
 
 import com.hermes.mobile.data.store.DiagnosticRedactor
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
@@ -46,6 +49,19 @@ data class NotificationBatch(
 
 @Serializable
 data class NotificationState(
+    val config: NotificationConfig = NotificationConfig(),
+    val records: List<NotificationRecord> = emptyList(),
+    val batch: NotificationBatch? = null,
+    val lastSummary: String = "",
+    val lastCompletedAt: Long = 0,
+    val status: String = "尚未开启",
+    val profiles: Map<String, NotificationProfile> = emptyMap(),
+    val selectedConnectionId: String? = null,
+    val profilesMigrated: Boolean = false,
+)
+
+@Serializable
+data class NotificationProfile(
     val config: NotificationConfig = NotificationConfig(),
     val records: List<NotificationRecord> = emptyList(),
     val batch: NotificationBatch? = null,
@@ -104,6 +120,38 @@ class NotificationAssistant(
     val state: StateFlow<NotificationState> = mutable
     private val sending = Mutex()
     val busy = MutableStateFlow(false)
+    private var generation = 0L
+    private var sendingJob: Job? = null
+    val captureToken: Long @Synchronized get() = generation
+    @Synchronized fun captureContext(): Pair<NotificationConfig, Long> = state.value.config to generation
+
+    @Synchronized fun forgetConnection(id: String) {
+        if (state.value.selectedConnectionId == id) selectConnection(null)
+        update { it.copy(profiles = it.profiles - id) }
+    }
+
+    /** 旧固定目标只迁移给原连接；新增连接使用关闭的空档案。 */
+    @Synchronized
+    fun selectConnection(id: String?) {
+        val previous = state.value
+        if (previous.profilesMigrated && previous.selectedConnectionId == id) return
+        val profiles = previous.profiles.toMutableMap()
+        val owner = if (previous.profilesMigrated) previous.selectedConnectionId else previous.config.target?.connectionId
+        if (owner != null) profiles[owner] = NotificationProfile(previous.config, previous.records, previous.batch,
+            previous.lastSummary, previous.lastCompletedAt, previous.status)
+        val next = profiles[id] ?: NotificationProfile()
+        // 活跃档案只保留在顶层，避免清除记录后磁盘中还留着同一档案的旧副本。
+        profiles.remove(id)
+        val valid = next.config.target == null || next.config.target.connectionId == id
+        generation++
+        sendingJob?.cancel(CancellationException("通知目标已切换"))
+        update { it.copy(config = if (valid) next.config else NotificationConfig(),
+            records = if (valid) next.records else emptyList(), batch = if (valid) next.batch else null,
+            lastSummary = if (valid) next.lastSummary else "", lastCompletedAt = if (valid) next.lastCompletedAt else 0,
+            status = if (valid) next.status else "档案目标不匹配，已关闭", profiles = profiles,
+            selectedConnectionId = id, profilesMigrated = true) }
+        changed(state.value.config)
+    }
 
     @Synchronized
     private fun update(transform: (NotificationState) -> NotificationState) {
@@ -115,6 +163,8 @@ class NotificationAssistant(
     @Synchronized
     fun configure(config: NotificationConfig) {
         val previous = state.value.config
+        require(!state.value.profilesMigrated || !config.enabled || state.value.selectedConnectionId != null) { "请先选择连接，再开启通知助手" }
+        require(!state.value.profilesMigrated || config.target == null || config.target.connectionId == state.value.selectedConnectionId) { "只能授权当前连接；请先切换到目标连接" }
         val normalized = config.copy(intervalMinutes = config.intervalMinutes.coerceIn(15, 1440),
             blockedWords = config.blockedWords.map(String::trim).filter(String::isNotBlank).take(30))
         require(state.value.batch == null || previous.target == normalized.target) { "先处理或清除当前批次，再更换固定会话" }
@@ -126,7 +176,8 @@ class NotificationAssistant(
     }
 
     @Synchronized
-    fun capture(raw: IncomingNotification) {
+    fun capture(raw: IncomingNotification, token: Long? = null) {
+        if (token != null && token != generation) return
         val now = clock()
         val row = NotificationFilter.apply(raw, state.value.config, ownPackage, now) ?: return
         update { old ->
@@ -148,6 +199,8 @@ class NotificationAssistant(
     }
 
     suspend fun summarize(accessGranted: Boolean, force: Boolean = false): Boolean = sending.withLock {
+        val job = currentCoroutineContext().job
+        val revision = synchronized(this) { generation }
         val batch = synchronized(this) {
             val now = clock()
             val initial = state.value
@@ -163,29 +216,35 @@ class NotificationAssistant(
                 update { it.copy(batch = NotificationBatch(UUID.randomUUID().toString(), target, rows)) }
             }
             busy.value = true
+            sendingJob = job
             checkNotNull(state.value.batch)
         }
         try {
-            update { it.copy(status = "正在生成摘要…") }
-            val summary = sender(batch) { run ->
-                update { it.copy(batch = it.batch?.copy(runId = run)) }
+            fun updateCurrent(transform: (NotificationState) -> NotificationState) = synchronized(this) {
+                if (revision != generation) throw CancellationException("通知连接已切换")
+                update(transform)
             }
-            update { old ->
+            updateCurrent { it.copy(status = "正在生成摘要…") }
+            val summary = sender(batch) { run ->
+                updateCurrent { it.copy(batch = it.batch?.copy(runId = run)) }
+            }
+            updateCurrent { old ->
                 val ids = batch.records.map { it.id }.toSet()
                 old.copy(records = old.records.map { if (it.id in ids) it.copy(sent = true) else it },
                     batch = null, lastSummary = summary.take(12_000), lastCompletedAt = clock(), status = "摘要已完成")
             }
-            runCatching { completed(batch.target) }
+            synchronized(this) { if (revision == generation) runCatching { completed(batch.target) } }
             true
         } catch (e: CancellationException) {
-            update { it.copy(status = "本次处理已中断，批次已保留，可稍后重试") }
+            synchronized(this) { if (revision == generation) update { it.copy(status = "本次处理已中断，批次已保留，可稍后重试") } }
             throw e
         } catch (_: Exception) {
             // 不把可能带通知正文、服务器地址的异常写入状态或诊断。
-            update { it.copy(status = "摘要未完成，记录已保留。可稍后重试；若需要审批，请到固定会话处理。") }
+            synchronized(this) { if (revision == generation) update { it.copy(status = "摘要未完成，记录已保留。可稍后重试；若需要审批，请到固定会话处理。") } }
             false
         } finally {
             busy.value = false
+            synchronized(this) { if (sendingJob == job) sendingJob = null }
         }
     }
 

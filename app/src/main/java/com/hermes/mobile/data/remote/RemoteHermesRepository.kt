@@ -115,6 +115,7 @@ class RemoteHermesRepository(
     private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
     private val connectionDiagnostics: ConnectionDiagnostics = ConnectionDiagnostics(),
     override val notificationAssistant: com.hermes.mobile.data.notifications.NotificationAssistant? = null,
+    override val localRuntime: com.hermes.mobile.data.local.LocalRuntimeManager? = null,
 ) : HermesRepository {
     private val cache = cacheDir?.let(::ChatCache)
 
@@ -195,12 +196,14 @@ class RemoteHermesRepository(
     private val seenHostKeys = ConcurrentHashMap<String, String>()
 
     override fun switchConnection(id: String) {
+        notificationAssistant?.selectConnection(id)
         _activeConnectionId.value = id
         persist { it.copy(activeConnectionId = id) }
         connect(id)
     }
 
     private fun connect(id: String) {
+        notificationAssistant?.selectConnection(id)
         connectJob?.cancel()
         runScope.cancel()
         runScope = newRunScope()
@@ -228,6 +231,7 @@ class RemoteHermesRepository(
         connectJob = scope.launch {
             try {
                 val started = clock()
+                if (profile.type == ConnectionType.Local && profile.id == com.hermes.mobile.data.local.LocalRuntimeManager.ConnectionId) localRuntime?.ensureRunning()
                 val newClient = openClient(effectiveProfile(profile), effectiveKey(profile), sshSecretOf(id)) { fingerprint -> pinHostKey(id, fingerprint) }
                 val health = newClient.health()
                 if (health.platform != null && health.platform != "hermes-agent") throw HermesError.NotHermes()
@@ -291,6 +295,14 @@ class RemoteHermesRepository(
     }
 
     override fun saveConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?) {
+        storeConnection(profile, apiKey, sshSecret, activate = true)
+    }
+
+    override fun saveConnectionWithoutActivating(profile: ConnectionProfile, apiKey: String) {
+        storeConnection(profile, apiKey, null, activate = false)
+    }
+
+    private fun storeConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?, activate: Boolean) {
         val previous = _connections.value.firstOrNull { it.id == profile.id }
         // 改了 SSH 地址就是另一台服务器了，旧指纹作废
         val moved = previous != null && (previous.host != profile.host || previous.sshPort != profile.sshPort)
@@ -308,9 +320,9 @@ class RemoteHermesRepository(
             if (apiKey != null) keys = keys + (saved.id to secrets.encrypt(apiKey.trim()))
             if (sshSecret != null) keys = keys + (SshSecretPrefix + saved.id to secrets.encrypt(sshSecret))
             if (saved.sshUser.isNullOrBlank()) keys = keys - (SshSecretPrefix + saved.id)
-            s.copy(connections = _connections.value, keys = keys, activeConnectionId = s.activeConnectionId ?: saved.id)
+            s.copy(connections = _connections.value, keys = keys, activeConnectionId = s.activeConnectionId ?: saved.id.takeIf { activate })
         }
-        if (_activeConnectionId.value == null || _activeConnectionId.value == saved.id) {
+        if (activate && (_activeConnectionId.value == null || _activeConnectionId.value == saved.id)) {
             switchConnection(saved.id)
         }
     }
@@ -322,6 +334,7 @@ class RemoteHermesRepository(
     }
 
     override fun deleteConnection(id: String) {
+        notificationAssistant?.forgetConnection(id)
         cache?.removeConnection(id)
         _connections.update { list -> list.filterNot { it.id == id } }
         persist { s ->
@@ -2468,6 +2481,7 @@ class RemoteHermesRepository(
     }
 
     init {
+        notificationAssistant?.selectConnection(_activeConnectionId.value)
         watchErrorsForDiagnostics()
         watchSessionsForCache()
         _activeConnectionId.value?.let { connect(it) }

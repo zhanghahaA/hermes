@@ -5,8 +5,15 @@
 
 ## 现状
 
+- 当前开发 **0.13.0-dev / code 37**，基于 0.12 的 d3b400e，工作区 `/workspace/hermes-runtime-0.13`，分支 `codex/local-runtime`。已接入「设置 → 本机运行与服务」、外部 Termux 命令桥、签名 APT 安装、独立目录配置、凭据存储与连接检查、Python／Caddy 服务管理、Chromium 与独立 Termux:X11 启停。业务使用可替换 `LocalRuntimeBackend`，为以后内置合并保留接口。详见 [0.13 说明](docs/0.13.md)。
+- 验证：标准套件 217 项报告、201 项实际通过、0 失败，16 项真实 IT 无环境未执行；另 11 项 Python 运行测试通过。App 与 Android 自检 APK 构建成功，浅／深色及缺少环境截图已检查，无 adb 设备。签名证书仍为 d985fcaf…db1dc7；APK SHA-256 为 728c6c3813203f0927447f2c8c65cd5086c9ffcb58515fa708b7b0089cbdc1ab。安装包在 `/workspace/shared/downloads/hermes-mobile-0.13.0-dev.apk`，留档在 `/workspace/hermes-cloud/releases/0.13.0-dev`。
+- 0.13 沿用已有通知采集，新增按每个连接独立开关、白名单、目标、加密队列和摘要；旧固定目标只迁移给所属连接。切换取消手机端旧等待并拒绝旧采集回调，删除连接清除档案；已提交的服务器任务不能靠切换撤回。本版没有新增独立读取短信数据库。
+- 2026-10-24 重新核对 Hermes 上游 Termux 文档仍标注安装包 broken，故安装入口为实验功能并要求确认。本环境没有 adb 设备，不能宣称真实 Termux 权限／回调、Hermes arm64 安装、X11 显示输入或 vivo 后台已经可用。原版 Termux 首次仍需粘贴执行一次初始化命令；本轮不改变主项目许可证，不接入订阅／广告，也不发布正式 Release。
+
+## 0.12 整理记录
+
 - 用户已确认重新按交付顺序编号：**0.12 整理已有 dev 功能，本机部署顺延 0.13**。本轮基于 GitHub `dev` 的 a6dbe47，候选版本为 **0.12.0 / code 36**，生产功能及测试源码与基线逐文件核对一致。重新执行标准套件报告 202 项、0 失败，186 项实际通过，16 项真实 IT 未配置未执行；App 与 Android 自检 APK 构建成功，无 adb 设备。签名证书仍为 d985fcaf…db1dc7，APK SHA-256 为 67cb1a87de88803ac8b83b0a0daf6ee05a77b5a79bc485c5d9cd2bd1ac7a522d。构建／测试留档在 `/workspace/hermes-cloud/releases/0.12.0`，下载包在 `/workspace/shared/downloads`；未创建 Release。历史记录与包不改写，新说明见 [docs/0.12.md](docs/0.12.md)，计划见 [docs/roadmap.md](docs/roadmap.md)。
-- 0.13 的运行模块草稿已隔离到 `/workspace/hermes-runtime-0.13`，分支 `codex/local-runtime`；尚未接入或验证，不包含在 0.12。外部 Termux／X11 方案保持，业务面向可替换运行后端，为以后内置合并留入口。基础免费开源，可选订阅／部署／广告资格后续接入；不擅自更改主项目许可或公开仓库。
+- 0.13 的运行模块曾先以独立草稿保存，不包含在 0.12；现已在 `codex/local-runtime` 接入，设备验证边界见上方现状。基础免费开源，可选订阅／部署／广告资格后续接入；不擅自更改主项目许可或公开仓库。
 - 当前可见 dev 源码包含通知助手，未发现独立读取短信数据库的实现。0.12 不新增或重写这部分；按连接独立隐私档案和切换隔离纳入 0.13，不能把现有固定目标发送行为当成已经完成新隔离方案。
 
 ## 历史开发与发布记录

@@ -43,7 +43,7 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
     var error by remember { mutableStateOf<String?>(null) }
     var creating by remember { mutableStateOf(false) }
     val config = state.config
-    var keywordText by remember { mutableStateOf(config.blockedWords.joinToString("，")) }
+    var keywordText by remember(state.selectedConnectionId) { mutableStateOf(config.blockedWords.joinToString("，")) }
     fun configure(next: NotificationConfig) {
         runCatching { assistant.configure(next) }.onFailure { error = it.message ?: "设置未保存，请重试" }
     }
@@ -55,7 +55,7 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("把选定应用的新通知保存在手机，定时发到固定的 Hermes 会话，整理待办和提醒。",
+            Text("每个连接保存独立档案。当前连接：" + (connections.firstOrNull { it.id == active }?.name ?: "未选择") + "。切换连接后只使用该连接的授权与记录。",
                 Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.bodyMedium)
             SettingsGroup("读取与授权") {
                 SwitchRow(Icons.Rounded.Notifications, "启用通知助手", "默认关闭，随时暂停读取和发送",

@@ -31,6 +31,7 @@ sourceSets {
                 "com/hermes/mobile/platform/ReplyNotifier.kt",
                 "com/hermes/mobile/platform/AttachmentImport.kt",
                 "com/hermes/mobile/platform/Platform.kt",
+                "com/hermes/mobile/platform/RuntimePlatform.kt",
                 "com/hermes/mobile/platform/AndroidStorage.kt",
                 "com/hermes/mobile/platform/ScreenWebView.kt",
             )
