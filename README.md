@@ -1,17 +1,17 @@
 # Hermes Mobile (Android)
 
-**0.15.0-dev.2 notification assistant:** opt-in app allowlist, encrypted local notification records, a fixed connection/Bot/session, and periodic summaries. Android permission, scheduling, and vivo background behavior still need device validation. See [the development guide](docs/notification-assistant.md). Other roadmap features and long-term memory are not included.
+**Current development build: 0.16.0-dev.** Keeps streamed replies visible across tool calls, adds optional thinking/work progress, and lets you drag the glass Dock indicator to select a tab on release. See [the 0.16 guide](docs/0.16.md). Includes the 0.15 notification assistant; Android permission, scheduling, and vivo background behavior still need device validation. Other roadmap features and long-term memory are not included.
 
 English | [中文](README.zh-CN.md)
 
-An Android app for chatting with [Hermes Agent](https://github.com/NousResearch/hermes-agent) the way you text a friend. You only see the final replies: no chain of thought, no tool calls. When Hermes needs your approval or asks a follow-up question, a card appears in the chat for you to tap.
+An Android app for chatting with [Hermes Agent](https://github.com/NousResearch/hermes-agent). It shows final replies by default; settings let you enable streaming replies or expandable thinking and tool progress supplied by the server. When Hermes needs your approval or asks a follow-up question, a card appears in the chat for you to tap.
 
 Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to the Hermes API Server; features that the API does not cover are done over SSH using Hermes's own commands.
 
 ## Features
 
 - **Connections**: direct (LAN / Tailscale), HTTPS, **SSH tunnel** (generate a key on the phone or import one, password login, host key pinning, automatic reconnect) and **local Termux**. Each connection has a step-by-step "Test connection".
-- **Chat**: final replies only, approval and clarify cards, stop, **steer** Hermes while it is replying, resume after the network drops or the app is killed, notifications when a reply arrives in the background. Markdown rendering (tables, formulas, task lists, footnotes, and the quirks models tend to produce), in-chat search, swipe a reply to quote it, select text and ask a follow-up.
+- **Chat**: final replies by default, optional continuous streaming and collapsible server-supplied thinking/tool progress, approval and clarify cards, stop, **steer** Hermes while it is replying, resume after the network drops or the app is killed, notifications when a reply arrives in the background. Markdown rendering (tables, formulas, task lists, footnotes, and the quirks models tend to produce), in-chat search, swipe a reply to quote it, select text and ask a follow-up.
 - **Sessions**: new / fork / rename / pin / **archive** / delete, automatic titles. Sessions are grouped by Hermes **projects**; create a project, move a chat into one, or start a new chat inside it.
 - **Attachments**: photos, camera, files. PDFs are sent as page images, text files are inlined, other files are uploaded over SSH. Original photos are also saved on the server so the agent can work with the files.
 - **Models** (lock a model per chat or set the default for new chats), **scheduled jobs** (create / edit / pause / run now), **skills and toolsets**.

@@ -169,9 +169,17 @@ fun SettingsScreen(
                 SwitchRow(
                     Icons.AutoMirrored.Rounded.Subject,
                     "逐字显示回复",
-                    "关闭时回复整条出现，像收到一条消息",
+                    if (settings.showWorkProcess) "工作过程模式已实时显示回复" else "开启后保留已有文字；关闭时回复整条出现",
                     checked = settings.streamReplies,
                     onCheckedChange = { value -> repository.updateSettings { it.copy(streamReplies = value) } },
+                )
+                GroupDivider()
+                SwitchRow(
+                    Icons.Rounded.AutoAwesome,
+                    "思考与工作过程",
+                    "展开服务器提供的思考、工具步骤，回复实时显示；不提供的内容不会显示",
+                    checked = settings.showWorkProcess,
+                    onCheckedChange = { value -> repository.updateSettings { it.copy(showWorkProcess = value) } },
                 )
                 GroupDivider()
                 SwitchRow(

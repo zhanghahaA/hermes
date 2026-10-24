@@ -2,7 +2,7 @@
 
 App 不绑定任何 Hermes 版本：连接时先探测服务器能力，再选择走哪条接口。
 这份文档记录各版本接口的差异和 App 的应对方式，依据是 `NousResearch/hermes-agent`
-源码 `gateway/platforms/api_server*.py`（核对到 v0.22.2，2026-10）。
+源码 `gateway/platforms/api_server*.py`（0.16 的过程事件核对到 2026-10-23 上游 main）。
 
 ## 版本分档
 
@@ -72,7 +72,7 @@ Message 字段：`id`、`role`（`user` / `assistant` / `tool` / `system`）、`
 `tool_calls`、`tool_call_id`、`tool_name`、`reasoning`、`reasoning_content`、`finish_reason`、
 `display_kind`（新版本）。
 
-### 显示规则：只显示对话本身，不显示思考和工具
+### 正式历史消息与可选的实时过程
 
 App 只保留：
 - `role == "user"` 且有文字或图片；
@@ -80,7 +80,8 @@ App 只保留：
 
 一律丢弃：`role == "tool"`、`role == "system"`、`display_kind == "hidden"`，
 以及所有消息上的 `reasoning`、`reasoning_content`、`tool_calls` 字段——解析时就不读进来，
-所以界面、本地缓存、引用功能都不可能碰到思考内容。
+所以正式消息、本地历史缓存、引用功能不含思考内容。0.16 的“思考与工作过程”另从本轮 SSE
+事件收集，独立展示在 `ChatItem.Activity` 中，默认关闭；不会把历史消息中的 reasoning 倒灌进正文。
 
 `content` 可能是字符串，也可能是 OpenAI 风格的分段数组（`[{"type":"text","text":...},{"type":"image_url",...}]`），
 两种都要处理。
@@ -109,17 +110,26 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 
 | 事件 | App 怎么处理 |
 |---|---|
-| `message.delta` `{delta}` | 打开“逐字显示”时拼到临时气泡里；否则只显示“正在输入” |
-| `message.interim`、`subagent.*`、`reasoning.*` | 忽略（旁白、思考不显示） |
-| `tool.started` / `tool.completed` | 不显示；同时清掉逐字显示里之前那段（那只是调用工具前的过程话） |
+| `message.delta` `{delta}` | 打开逐字显示或过程模式时实时累积正文；已显示文字保留，下方继续显示输入圆点（可关闭） |
+| `message.interim` `{text, already_streamed}` | 公开的阶段性回复；`already_streamed=true` 不重复拼接刚才的 delta，下一段另起段落 |
+| `reasoning.available` `{text}` / `reasoning.delta` `{text 或 delta}` | 仅开启“思考与工作过程”时收集、显示；不进入正式回复、引用或后续请求 |
+| `tool.started` / `tool.completed` / `tool.failed` | 仅分隔公开正文，绝不擦除；过程模式记录工具名、预览、完成或失败状态，用 `tool_call_id` 配对 |
+| `tool.progress` | 过程模式追加工具预览；`tool_name=_thinking` 视作思考内容，不是正文分段边界 |
+| `subagent.*`、未知事件 | 忽略，继续处理后续事件 |
 | `approval.request` | 显示审批卡片。字段：`command`、`description`、`choices`（`once/session/always/deny` 子集），新版还有 `prompt_id`、`execution_generation` |
 | `approval.responded` / `approval.settled` | 卡片收起 |
 | `clarify.request` | 追问卡片：`question`、`choices`、`prompt_id`、`execution_generation`、`multi_select`。`question` 末尾的 `Reply "skip"…` 提示和选项上的 `(Recommended)` 后缀 App 去掉再显示（Hermes 匹配回答时本来就忽略这个后缀） |
-| `run.completed` `{output}` | `output` 就是最终回复，作为 Hermes 的消息显示 |
-| `run.failed` `{error}` / `run.cancelled` / `run.interrupted` | 结束“正在输入”，失败时提示原因 |
-| `replay.truncated` | 断线太久、漏掉的事件已经过期：改为查询状态 + 重新拉聊天记录 |
+| `run.completed` `{output}` | 最后一段以最终正文对齐，避免重复；此前展示的公开旁白留在 Activity 中 |
+| `run.failed` `{error}` / `run.cancelled` / `run.interrupted` | 结束“正在输入”，保留已展示的正文，失败时提示原因 |
+| `replay.truncated` | 保留已收到的内容；过程模式提示部分事件已过期。流结束后查询状态、结束后重新拉正式历史 |
 
-注释行 `: keepalive`、`: open`、`: stream closed` 跳过。思考内容（`_thinking`）服务器端就不发。
+注释行 `: keepalive`、`: open`、`: stream closed` 跳过。服务器版本/执行路径决定是否发送思考内容。
+核对的上游 `_make_run_event_callback` 可发送 `reasoning.available`，但仍会过滤 `_thinking` / 子工具噪音；
+有的执行路径仅提供工具开始/结束。App 不伪造没有收到的思考，也不修改服务器配置来开启它。
+
+过程数据只在当前连接的内存中保留：每轮最多最近 100 个步骤，每步最多 8,000 字符；关闭开关立即清空已收集的步骤，
+关闭期间不收集。切换连接/Bot 或重启后仅恢复服务器正式历史和未结束任务可补发的事件，已过期的过程不能恢复。
+流式模式保留的阶段性旁白也属于本机 Activity，不写回服务器、不混入正式历史缓存。
 
 ### 状态、审批、追问、停止
 

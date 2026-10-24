@@ -15,6 +15,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -46,12 +48,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hermes.mobile.ui.glass.GlassCircleButton
@@ -59,6 +73,7 @@ import com.hermes.mobile.ui.glass.liquidGlass
 import com.hermes.mobile.ui.glass.pressScale
 import com.hermes.mobile.ui.glass.rememberGlassStyle
 import com.kyant.backdrop.Backdrop
+import kotlin.math.roundToInt
 
 /** 悬浮栏本身的高度和离屏幕底边的距离；内容区需要据此留出底部空间。 */
 val FloatingBarHeight = 64.dp
@@ -146,6 +161,13 @@ private fun TabPill(
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val index = tabs.indexOf(selected)
     val indicatorColor = if (dark) Color.White.copy(alpha = 0.14f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+    val density = LocalDensity.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val insetPx = with(density) { 5.dp.toPx() }
+    var pillWidth by remember { mutableStateOf(0f) }
+    var dragIndex by remember { mutableStateOf<Float?>(null) }
+    val select by rememberUpdatedState(onSelect)
+    val previewIndex = dragIndex?.roundToInt()?.coerceIn(tabs.indices) ?: index
 
     // 记录移动方向：前沿用硬弹簧冲过去，后沿用软弹簧跟上，形成“拉长再回弹”。
     // 位置以“第几格”为单位动画，胶囊宽度变化时指示器始终对齐格子。
@@ -153,31 +175,64 @@ private fun TabPill(
     val movingRight = remember(index) { (index >= previous[0]).also { previous[0] = index } }
     val fast = spring<Float>(dampingRatio = 0.72f, stiffness = 900f)
     val slow = spring<Float>(dampingRatio = 0.8f, stiffness = Spring.StiffnessLow)
-    val left by animateFloatAsState(index.toFloat(), if (movingRight) slow else fast, label = "indicator-left")
-    val right by animateFloatAsState(index + 1f, if (movingRight) fast else slow, label = "indicator-right")
+    val dragging = dragIndex != null
+    val target = dragIndex ?: index.toFloat()
+    val left by animateFloatAsState(target, if (dragging) snap() else if (movingRight) slow else fast, label = "indicator-left")
+    val right by animateFloatAsState(target + 1f, if (dragging) snap() else if (movingRight) fast else slow, label = "indicator-right")
+    val lift by animateFloatAsState(if (dragging) 1f else 0f,
+        spring(dampingRatio = 0.6f, stiffness = 500f), label = "dock-lift")
+    val indicatorStyle = style.copy(tint = indicatorColor,
+        fallbackTint = if (dark) Color(0xFF3B445B) else Color(0xFFDDE8FF), shadow = null)
 
     Box(
         modifier
             .testTag("tab-pill")
             .height(FloatingBarHeight)
-            .liquidGlass(backdrop, CircleShape, style, scale = pressScale(interaction, pressed = 0.97f))
-            .drawBehind {
-                val inset = 5.dp.toPx()
-                val item = (size.width - inset * 2) / tabs.size
-                val h = size.height - inset * 2
-                drawRoundRect(
-                    color = indicatorColor,
-                    topLeft = Offset(inset + item * left, inset),
-                    size = Size(item * (right - left), h),
-                    cornerRadius = CornerRadius(h / 2f),
-                )
-            },
+            .onSizeChanged { pillWidth = it.width.toFloat() }
+            .pointerInput(tabs, rtl) {
+                fun position(x: Float): Float {
+                    val logical = if (rtl) pillWidth - x else x
+                    val cell = ((pillWidth - insetPx * 2) / tabs.size).coerceAtLeast(1f)
+                    return ((logical - insetPx) / cell - 0.5f).coerceIn(0f, tabs.lastIndex.toFloat())
+                }
+                try {
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragIndex = position(it.x) },
+                        onHorizontalDrag = { change, _ ->
+                            change.consume()
+                            dragIndex = position(change.position.x)
+                        },
+                        onDragEnd = {
+                            dragIndex?.let { select(tabs[it.roundToInt().coerceIn(tabs.indices)]) }
+                            dragIndex = null
+                        },
+                        onDragCancel = { dragIndex = null },
+                    )
+                } finally { dragIndex = null }
+            }
+            .liquidGlass(backdrop, CircleShape, style, scale = pressScale(interaction, pressed = 0.97f)),
     ) {
+        // 指示器自身也从页面取样折射。手指移动时轻轻鼓起，松手用同一套弹簧吸附。
+        val cell = with(density) { ((pillWidth - insetPx * 2).coerceAtLeast(0f) / tabs.size).toDp() }
+        Box(
+            Modifier.offset { IntOffset((insetPx + with(density) { cell.toPx() } * left).roundToInt(), insetPx.roundToInt()) }
+                .testTag("dock-indicator")
+                .width((cell * (right - left)).coerceAtLeast(1.dp))
+                .height(FloatingBarHeight - 10.dp)
+                .liquidGlass(backdrop, CircleShape, indicatorStyle, blurRadius = 0.5.dp,
+                    scale = { 1f + 0.04f * lift })
+                .drawBehind {
+                    val rim = if (dark) 0.12f else 0.38f
+                    drawRoundRect(Brush.verticalGradient(listOf(Color.White.copy(alpha = rim + 0.12f * lift), Color.Transparent)),
+                        cornerRadius = CornerRadius(size.height / 2))
+                },
+        )
         Row(Modifier.fillMaxHeight().padding(horizontal = 5.dp)) {
-            tabs.forEach { tab ->
+            tabs.forEachIndexed { i, tab ->
                 TabItem(
                     tab = tab,
-                    selected = tab == selected,
+                    selected = i == previewIndex,
+                    committed = tab == selected,
                     badge = badges[tab] ?: 0,
                     onClick = { onSelect(tab) },
                     interaction = interaction,
@@ -192,6 +247,7 @@ private fun TabPill(
 private fun TabItem(
     tab: MainTab,
     selected: Boolean,
+    committed: Boolean,
     badge: Int,
     onClick: () -> Unit,
     interaction: MutableInteractionSource,
@@ -204,6 +260,7 @@ private fun TabItem(
     Column(
         modifier
             .fillMaxHeight()
+            .semantics { this.selected = committed }
             .clickable(interactionSource = interaction, indication = null, role = Role.Tab, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.booleanOrNull
 
 /** Hermes 要用户处理的一件事（审批或追问），以及回复时要带回去的标识。 */
 data class ControlRequest(
@@ -67,16 +68,19 @@ data class ControlRequest(
     }
 }
 
-/** App 关心的事件。其它（工具过程、旁白、子代理）都归为 [Ignored]。 */
+/** App 关心的事件。工作过程是否展示由本地设置决定。 */
 sealed interface RunEvent {
     val seq: Long?
 
     data class Delta(override val seq: Long?, val text: String) : RunEvent
+    data class Interim(override val seq: Long?, val text: String, val alreadyStreamed: Boolean) : RunEvent
+    data class Reasoning(override val seq: Long?, val text: String, val delta: Boolean) : RunEvent
     data class Control(override val seq: Long?, val request: ControlRequest) : RunEvent
     /** [choice] 为空表示不知道选了什么（例如在别的设备上处理的）。 */
     data class ControlSettled(override val seq: Long?, val promptId: String?, val choice: String?) : RunEvent
-    /** 工具调用等中间步骤开始/结束：之前流式显示的那段话只是过程，要清掉。 */
-    data class Step(override val seq: Long?) : RunEvent
+    /** 只有工具生命周期会分隔正文；进度通知不能截断正在流式生成的一句话。 */
+    data class Step(override val seq: Long?, val tool: String, val callId: String?, val text: String,
+        val finished: Boolean, val failed: Boolean, val boundary: Boolean) : RunEvent
     data class Completed(override val seq: Long?, val output: String, val pendingSteer: String? = null) : RunEvent
     data class Failed(override val seq: Long?, val error: String) : RunEvent
     data class Cancelled(override val seq: Long?) : RunEvent
@@ -89,8 +93,12 @@ internal fun parseRunEvent(frame: SseEvent): RunEvent {
     val obj = runCatching { HermesJson.parseToJsonElement(frame.data).jsonObject }.getOrNull()
         ?: return RunEvent.Ignored(frame.id)
     val seq = (obj["seq"] as? JsonPrimitive)?.longOrNull ?: frame.id
-    return when (obj.string("event") ?: frame.event) {
+    val name = obj.string("event") ?: frame.event
+    return when (name) {
         "message.delta" -> RunEvent.Delta(seq, obj.string("delta").orEmpty())
+        "message.interim" -> RunEvent.Interim(seq, obj.string("text").orEmpty(), (obj["already_streamed"] as? JsonPrimitive)?.booleanOrNull == true)
+        "reasoning.delta", "reasoning.available" -> RunEvent.Reasoning(seq,
+            obj.string("delta") ?: obj.string("text").orEmpty(), name == "reasoning.delta")
         "approval.request" -> ControlRequest.from(obj, ControlRequest.Kind.Approval)?.let { RunEvent.Control(seq, it) } ?: RunEvent.Ignored(seq)
         "clarify.request" -> ControlRequest.from(obj, ControlRequest.Kind.Clarify)?.let { RunEvent.Control(seq, it) } ?: RunEvent.Ignored(seq)
         "approval.settled", "approval.responded", "clarify.settled", "clarify.responded" ->
@@ -99,7 +107,16 @@ internal fun parseRunEvent(frame: SseEvent): RunEvent {
         "run.failed", "error" -> RunEvent.Failed(seq, obj.string("error") ?: obj.string("message") ?: "Hermes 处理失败")
         "run.cancelled", "run.interrupted" -> RunEvent.Cancelled(seq)
         "replay.truncated" -> RunEvent.Truncated(seq)
-        else -> if ((obj.string("event") ?: frame.event).orEmpty().startsWith("tool.")) RunEvent.Step(seq) else RunEvent.Ignored(seq)
+        "tool.started", "tool.completed", "tool.failed", "tool.progress" -> {
+            val tool = obj.string("tool") ?: obj.string("tool_name") ?: "工具"
+            val text = obj.string("preview") ?: obj.string("delta").orEmpty()
+            if (tool == "_thinking") RunEvent.Reasoning(seq, text, name == "tool.progress")
+            else RunEvent.Step(seq, tool, obj.string("tool_call_id"), text,
+                name == "tool.completed" || name == "tool.failed",
+                name == "tool.failed" || (obj["error"] as? JsonPrimitive)?.booleanOrNull == true,
+                name != "tool.progress")
+        }
+        else -> RunEvent.Ignored(seq)
     }
 }
 

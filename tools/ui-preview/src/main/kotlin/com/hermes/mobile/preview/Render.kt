@@ -95,6 +95,15 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("41-streaming-keeps-text") { repo, _ -> StreamingPreview(repo, process = false) },
+    Scene("41b-work-process") { repo, _ -> StreamingPreview(repo, process = true) },
+    Scene("41c-work-process-dark", dark = true) { repo, _ -> StreamingPreview(repo, process = true) },
+    Scene("41d-streaming-completed") { repo, _ -> StreamingPreview(repo, process = false, completed = true) },
+    Scene("41e-process-completed") { repo, _ -> StreamingPreview(repo, process = true, completed = true) },
+    Scene("42-dock-glass") { repo, _ -> mainScreen(repo, MainTab.Chats)() },
+    Scene("42b-dock-glass-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Chats)() },
+    Scene("43-process-settings") { repo, _ -> mainScreen(repo, MainTab.Settings)() },
+    Scene("43b-process-settings-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("01-chats") { repo, _ -> mainScreen(repo, MainTab.Chats)() },
     Scene("02-chats-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Chats)() },
     Scene("03-chat") { repo, _ -> ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) },
@@ -235,6 +244,34 @@ private val scenes = listOf(
     Scene("21-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
     Scene("22-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
 )
+
+/** 演示固定的服务器事件快照；正文、过程卡片和三个点都走真正聊天页。 */
+@Composable
+private fun StreamingPreview(base: HermesRepository, process: Boolean, completed: Boolean = false) {
+    val repo = remember(base, process, completed) {
+        val now = System.currentTimeMillis()
+        val activity = com.hermes.mobile.data.model.ChatItem.Activity(
+            "preview-work", now,
+            steps = listOf(
+                com.hermes.mobile.data.model.WorkStep("r", com.hermes.mobile.data.model.WorkStep.Kind.Reasoning, "思考", "先检查现有的回复事件，再核对工具调用时的文字保留。", finished = true),
+                com.hermes.mobile.data.model.WorkStep("t", com.hermes.mobile.data.model.WorkStep.Kind.Tool, "读取项目", "查看聊天页面和事件处理代码", finished = true),
+            ),
+            earlierReply = if (completed) "我已经找到文字消失的位置，会保留之前出现的内容。" else "",
+            status = if (completed) com.hermes.mobile.data.model.ActivityStatus.Completed else com.hermes.mobile.data.model.ActivityStatus.Working,
+        )
+        object : HermesRepository by base {
+            override val settings = kotlinx.coroutines.flow.MutableStateFlow(base.settings.value.copy(streamReplies = true, showWorkProcess = process))
+            override fun chatItems(sessionId: String) = kotlinx.coroutines.flow.flowOf(listOfNotNull(
+                com.hermes.mobile.data.model.ChatItem.Message("preview-user", now, com.hermes.mobile.data.model.Role.User, "帮我修复逐字回复消失的问题。"),
+                activity,
+                if (completed) com.hermes.mobile.data.model.ChatItem.Message("preview-final", now, com.hermes.mobile.data.model.Role.Assistant, "已经修复。工具调用后，前面的句子会继续保留，后续回复接着显示。") else null,
+            ))
+            override fun runPhase(sessionId: String) = kotlinx.coroutines.flow.flowOf(if (completed) com.hermes.mobile.data.model.RunPhase.Idle else com.hermes.mobile.data.model.RunPhase.Working)
+            override fun streamingText(sessionId: String) = kotlinx.coroutines.flow.flowOf(if (completed) null else "我已经找到文字消失的位置。\n\n工具调用时，前面出现的句子会保留，后面的回复接着显示。")
+        }
+    }
+    ChatScreen(repo, "s-1", {}, {})
+}
 
 @Composable
 private fun NotificationPreview(repository: HermesRepository) {
@@ -383,7 +420,10 @@ fun main(args: Array<String>) {
 
         val composeScene = ImageComposeScene(width, height, Density(DENSITY)) {
             HermesTheme(themeMode = if (scene.dark) ThemeMode.Dark else ThemeMode.Light) {
-                PhoneFrame { scene.content(repo, arg) }
+                // 与 HermesApp 的根 Surface 一致，深色预览不能沿用桌面默认的黑色文字。
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    PhoneFrame { scene.content(repo, arg) }
+                }
             }
         }
         // 多渲染几帧，让进入动画、LaunchedEffect 和 Flow 收集都稳定下来
