@@ -9,19 +9,17 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.local.*
 import com.hermes.mobile.platform.rememberRuntimeControls
 import com.hermes.mobile.platform.rememberTextFilePicker
+import com.hermes.mobile.ui.components.SetupCommandCard
 
 @Composable
 fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
     val state by manager.state.collectAsState()
     val controls = rememberRuntimeControls(manager::refreshEnvironment)
-    @Suppress("DEPRECATION") val clipboard = LocalClipboardManager.current
     var confirmation by remember { mutableStateOf<RuntimeRequest?>(null) }
     var editing by remember { mutableStateOf<RuntimeAction?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -36,7 +34,8 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("在手机上运行 Hermes 和自己的小服务。远程聊天不需要开启本机环境。", style = MaterialTheme.typography.bodyMedium)
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("运行环境 · ${manager.backend.name}", style = MaterialTheme.typography.titleMedium)
+                Text("1 · 准备运行环境", style = MaterialTheme.typography.titleMedium)
+                Text(manager.backend.name, style = MaterialTheme.typography.bodySmall)
                 Text(if (env.installed) "已安装 ${env.version}" else "尚未安装")
                 env.blockers.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!env.enoughSpace) Text("安装前请至少预留 2 GB 空间", color = MaterialTheme.colorScheme.error)
@@ -46,17 +45,20 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
                         OutlinedButton(onClick = controls.openTermux) { Text("打开 Termux") }
                         if (!env.permission) OutlinedButton(onClick = controls.requestPermission) { Text("授予执行权限") }
                         manager.backend.initializationCommand?.let { command ->
-                            Text("首次还需在 Termux 允许外部应用。原版 Termux 暂需复制下面的初始化命令，粘贴到 Termux 后运行一次；无需自己编写代码。", style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(command)) }) { Text("复制首次初始化命令") }
+                            SetupCommandCard("首次只做一次：允许 Hermes 管理服务", "打开 Termux 后，在输入区域长按 → 粘贴 → 按回车。",
+                                command, copyLabel = "复制并打开 Termux", next = "运行完成后返回本页，授予执行权限，再检查环境。", onCopied = controls.openTermux)
                         }
                     }
                     TextButton(onClick = controls.batterySettings) { Text("查看后台与电池设置") }
                 }
                 Button(onClick = { manager.inspect() }, enabled = ready) { Text("检查环境") }
-                OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.Prepare) }, enabled = ready) { Text("准备 Python 服务环境") }
+                if (!snapshot.toolsReady) OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.Prepare) }, enabled = ready) { Text("检查并准备环境") }
+                else Text("环境已就绪，继续下面的部署。", color = MaterialTheme.colorScheme.primary)
+                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(state.message, color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             } }
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("这台手机的 Hermes", style = MaterialTheme.typography.titleMedium)
+                Text("2 · 部署并连接 Hermes", style = MaterialTheme.typography.titleMedium)
                 Text(if (!state.checked) "尚未检查" else if (!snapshot.hermesInstalled) "尚未安装" else if (snapshot.hermesRunning) "进程运行中" else "已安装，进程未运行")
                 manager.backend.hermesInstallWarning?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 Button(onClick = { editing = RuntimeAction.InstallHermes }, enabled = ready) { Text("部署本机 Hermes（实验）") }
@@ -72,7 +74,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
                 }
             } }
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("自己的服务", style = MaterialTheme.typography.titleMedium)
+                Text("可选 · 自己的服务", style = MaterialTheme.typography.titleMedium)
                 Text("导入你信任的 Python 程序，或添加只监听本机的反向代理。服务共享 Termux 的数据访问权限，虚拟环境不是安全沙箱。", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = { editing = RuntimeAction.InstallService }, enabled = ready && snapshot.toolsReady) { Text("导入 Python 服务") }
                 OutlinedButton(onClick = { editing = RuntimeAction.InstallProxy }, enabled = ready && snapshot.toolsReady) { Text("添加本机反向代理") }
@@ -86,7 +88,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
                 }
             } }
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("桌面浏览器 · X11 + Chromium", style = MaterialTheme.typography.titleMedium)
+                Text("可选 · 桌面浏览器", style = MaterialTheme.typography.titleMedium)
                 Text("使用独立的 Termux:X11 显示窗口；只有打开浏览器时才启动。当前是浏览器启动与显示，尚不包含 Hermes 自动操作网页。", style = MaterialTheme.typography.bodySmall)
                 if (!env.viewerInstalled && manager.backend.externalApps) OutlinedButton(onClick = controls.downloadViewer) { Text("下载 Termux:X11") }
                 OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.InstallBrowser) }, enabled = ready) { Text("安装浏览器配套包") }
@@ -149,7 +151,7 @@ private fun RuntimeEditor(action: RuntimeAction, manager: LocalRuntimeManager, o
                     Text("反向代理仅监听本机；本版不开放公网入口。")
                 }
             } else {
-                Text("在独立的本机配置中保存模型和连接凭据。已有用户目录不自动覆盖。配置前请停止本机 Hermes。")
+                Text("填写模型名称和服务商提供的模型 API Key，其余可以保留默认值。模型 Key 不是连接手机用的密钥，手机连接密钥会自动创建。已有配置目录不覆盖；修改前请先停止本机 Hermes。")
                 OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, singleLine = true)
                 OutlinedTextField(key, { key = it }, label = { Text("模型 API Key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 OutlinedTextField(url, { url = it }, label = { Text("模型接口地址") }, singleLine = true)

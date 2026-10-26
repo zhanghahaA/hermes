@@ -7,11 +7,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import com.hermes.mobile.data.model.SshAuthMethod
 import com.hermes.mobile.data.ssh.SshKeys
 import com.hermes.mobile.platform.rememberTextFilePicker
@@ -35,7 +32,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cancel
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Key
@@ -81,40 +77,59 @@ import com.hermes.mobile.data.model.ConnectionType
 import com.hermes.mobile.data.model.TestStepStatus
 import com.hermes.mobile.ui.LocalShowMessage
 import com.hermes.mobile.ui.components.icon
-import com.hermes.mobile.ui.rememberPlaceholder
 import com.hermes.mobile.ui.theme.CodeTextStyle
 import com.hermes.mobile.ui.theme.LocalHermesColors
 import kotlinx.coroutines.launch
+import com.hermes.mobile.data.setup.ConnectionSetup
+import com.hermes.mobile.platform.rememberTextCopier
+import com.hermes.mobile.platform.rememberConnectionSetupProgram
+import com.hermes.mobile.ui.components.SetupCommandCard
+import com.hermes.mobile.data.store.DiagnosticRedactor
+import java.util.UUID
 
 @Composable
 fun ConnectionEditorScreen(
     repository: HermesRepository,
     connectionId: String?,
     initialType: String? = null,
+    onOpenLocalRuntime: (() -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     val connections by repository.connections.collectAsState()
     val existing = remember(connectionId) { connections.firstOrNull { it.id == connectionId } }
-    val defaultType = existing?.type ?: initialType?.let { runCatching { ConnectionType.valueOf(it) }.getOrNull() } ?: ConnectionType.Direct
+    val defaultType = existing?.type ?: initialType?.let { runCatching { ConnectionType.valueOf(it) }.getOrNull() } ?: ConnectionType.Ssh
 
     var type by rememberSaveable { mutableStateOf(defaultType) }
     var name by rememberSaveable { mutableStateOf(existing?.name.orEmpty()) }
     var host by rememberSaveable { mutableStateOf(existing?.host.orEmpty()) }
     var port by rememberSaveable { mutableStateOf((existing?.port ?: 8642).toString()) }
-    var apiKey by rememberSaveable { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
     var profileName by rememberSaveable { mutableStateOf(existing?.profile.orEmpty()) }
     var sshUser by rememberSaveable { mutableStateOf(existing?.sshUser.orEmpty()) }
     var sshPort by rememberSaveable { mutableStateOf((existing?.sshPort ?: 22).toString()) }
     var sshAuth by rememberSaveable { mutableIntStateOf(if (existing?.sshAuth == SshAuthMethod.Password) 1 else 0) }
     // 这次编辑里新生成/导入的私钥，和输入的 SSH 密码；留空表示沿用已保存的
-    var privateKey by rememberSaveable { mutableStateOf("") }
-    var publicKey by rememberSaveable { mutableStateOf(existing?.id?.let(repository::sshPublicKey).orEmpty()) }
-    var sshPassword by rememberSaveable { mutableStateOf("") }
+    var privateKey by remember { mutableStateOf("") }
+    var publicKey by remember { mutableStateOf(existing?.id?.let(repository::sshPublicKey).orEmpty()) }
+    var sshPassword by remember { mutableStateOf("") }
     var resetHostKey by rememberSaveable { mutableStateOf(false) }
     // 本机 Termux / 直连：可选的“文件互通”SSH
     var fileSsh by rememberSaveable { mutableStateOf(existing != null && existing.type != ConnectionType.Ssh && !existing.sshUser.isNullOrBlank()) }
     var showPaste by rememberSaveable { mutableStateOf(false) }
     val showMessage = LocalShowMessage.current
+    val copyText = rememberTextCopier()
+    val readText = com.hermes.mobile.platform.rememberTextReader()
+    val setupProgram = rememberConnectionSetupProgram()
+    val draftId = rememberSaveable { existing?.id ?: "c-${UUID.randomUUID()}" }
+    val setupNonce = remember { UUID.randomUUID().toString() }
+    var choosingType by rememberSaveable { mutableStateOf(initialType == null && existing == null) }
+    var advanced by rememberSaveable { mutableStateOf(existing != null) }
+    var showQuickSetup by rememberSaveable { mutableStateOf(existing == null) }
+    var showSetupResult by remember { mutableStateOf(false) }
+    var copiedSetup by remember { mutableStateOf(false) }
+    var setupKeyAtCopy by remember { mutableStateOf("") }
+    var discoveredHostKey by remember { mutableStateOf<String?>(null) }
+    var testing by remember { mutableStateOf(false) }
     fun useKey(text: String?) {
         if (text.isNullOrBlank()) {
             showMessage("没读到内容（文件太大或不是文本）")
@@ -130,24 +145,93 @@ fun ConnectionEditorScreen(
     val pickKeyFile = rememberTextFilePicker(::useKey)
     var steps by remember { mutableStateOf<List<ConnectionTestStep>>(emptyList()) }
     val scope = rememberCoroutineScope()
-    val placeholder = rememberPlaceholder()
 
     fun currentProfile() = ConnectionProfile(
-        id = existing?.id ?: "c-${System.currentTimeMillis()}",
+        id = draftId,
         name = name.ifBlank { type.label },
         type = type,
         host = if (type == ConnectionType.Local) "127.0.0.1" else host,
-        port = port.toIntOrNull() ?: 8642,
+        port = port.toIntOrNull() ?: -1,
         profile = profileName.ifBlank { null },
         sshUser = sshUser.ifBlank { null }?.takeIf { type == ConnectionType.Ssh || (fileSsh && (type == ConnectionType.Local || type == ConnectionType.Direct)) },
-        sshPort = sshPort.toIntOrNull() ?: 22,
+        sshPort = sshPort.toIntOrNull() ?: -1,
         sshAuth = if (sshAuth == 0) SshAuthMethod.Key else SshAuthMethod.Password,
-        sshHostKey = if (resetHostKey) null else existing?.sshHostKey,
+        sshHostKey = if (resetHostKey) null else discoveredHostKey ?: existing?.sshHostKey,
     )
 
     fun sshSecret(): String? {
         val usesSsh = type == ConnectionType.Ssh || (fileSsh && (type == ConnectionType.Local || type == ConnectionType.Direct))
         return if (!usesSsh) null else if (sshAuth == 0) privateKey.ifBlank { null } else sshPassword.ifBlank { null }
+    }
+
+    fun report(error: Throwable) {
+        showMessage(DiagnosticRedactor.redact(error.message ?: "未完成，请重试", listOf(apiKey, privateKey, sshPassword).filter(String::isNotBlank)))
+    }
+    fun makeSetupCommand() {
+        runCatching {
+            val profile = currentProfile()
+            ConnectionSetup.validate(profile)
+            if (apiKey.isBlank()) apiKey = ConnectionSetup.generateApiKey()
+            if (profile.type == ConnectionType.Ssh && profile.sshAuth == SshAuthMethod.Key && publicKey.isBlank()) {
+                val pair = SshKeys.generate()
+                privateKey = pair.privateKey
+                publicKey = pair.publicKey
+            }
+            val command = ConnectionSetup.command(setupProgram, profile, apiKey,
+                publicKey.takeIf { profile.type == ConnectionType.Ssh && profile.sshAuth == SshAuthMethod.Key }.orEmpty(), setupNonce)
+            copyText(command, true)
+            copiedSetup = true
+            setupKeyAtCopy = apiKey
+            showMessage("已复制。请在运行 Hermes 的机器上粘贴并执行。")
+        }.onFailure(::report)
+    }
+    fun checkAndConnect() {
+        if (testing) return
+        runCatching {
+            var candidate = currentProfile()
+            ConnectionSetup.validate(candidate)
+            var key = apiKey.ifBlank { null }
+            val secret = sshSecret()
+            require(key != null || existing != null) { "请先复制配置命令，或填写已有的 API Key" }
+            require(key == null || key.length >= 16) { "API Key 至少需要 16 位" }
+            if (candidate.sshUser != null) require(secret != null || existing?.sshUser != null) { "请先生成／导入密钥，或填写 SSH 密码" }
+            testing = true
+            steps = emptyList()
+            scope.launch {
+                try {
+                    if (candidate.type == ConnectionType.Ssh && copiedSetup && apiKey == setupKeyAtCopy) {
+                        val original = candidate
+                        val originalKey = key
+                        val result = repository.readConnectionSetup(candidate, secret, setupNonce)
+                        if (result != null) {
+                            check(currentProfile() == original && apiKey.ifBlank { null } == originalKey && sshSecret() == secret) { "设置已变化，请按当前设置重新检查" }
+                            apiKey = result.apiKey
+                            key = result.apiKey
+                            port = result.port.toString()
+                            discoveredHostKey = result.hostKey
+                            resetHostKey = false
+                            candidate = currentProfile()
+                        }
+                    }
+                    for (attempt in 0..2) {
+                        repository.testConnection(candidate, key, secret).collect { steps = it }
+                        if (!copiedSetup || steps.none { it.status == TestStepStatus.Failed && it.title == "网络可达" } || attempt == 2) break
+                        kotlinx.coroutines.delay(1500)
+                    }
+                    val passed = steps.isNotEmpty() && steps.all { it.status == TestStepStatus.Passed || it.status == TestStepStatus.Skipped } &&
+                        steps.any { it.status == TestStepStatus.Passed }
+                    if (passed) {
+                        check(currentProfile() == candidate && apiKey.ifBlank { null } == key && sshSecret() == secret) { "设置已变化，请按当前设置重新检查" }
+                        repository.saveConnection(candidate, key, secret)
+                        if (repository.activeConnectionId.value != candidate.id) repository.switchConnection(candidate.id)
+                        showMessage("检查通过，已保存并连接")
+                        onClose()
+                    } else showMessage("尚未连接成功，请按检查结果处理后再试")
+                } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                catch (e: Exception) { report(e) }
+                finally { testing = false }
+            }
+        }.onFailure(::report)
     }
 
     // SSH 账号（SSH 隧道用；本机 Termux / 直连的“文件互通”也用这一套）
@@ -159,43 +243,45 @@ fun ConnectionEditorScreen(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            listOf("密钥", "密码").forEachIndexed { index, label ->
-                SegmentedButton(
-                    selected = sshAuth == index,
-                    onClick = { sshAuth = index },
-                    shape = SegmentedButtonDefaults.itemShape(index, 2),
-                ) { Text(label) }
+        if (advanced) {
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                listOf("密钥", "密码").forEachIndexed { index, label ->
+                    SegmentedButton(
+                        selected = sshAuth == index,
+                        onClick = { sshAuth = index },
+                        shape = SegmentedButtonDefaults.itemShape(index, 2),
+                    ) { Text(label) }
+                }
             }
-        }
-        if (sshAuth == 0) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = pickKeyFile, modifier = Modifier.weight(1f)) { Text("导入文件") }
-                OutlinedButton(onClick = { showPaste = true }, modifier = Modifier.weight(1f)) { Text("粘贴") }
+            if (sshAuth == 0) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = pickKeyFile, modifier = Modifier.weight(1f)) { Text("导入文件") }
+                    OutlinedButton(onClick = { showPaste = true }, modifier = Modifier.weight(1f)) { Text("粘贴") }
+                }
+                FilledTonalButton(
+                    onClick = {
+                        val pair = SshKeys.generate()
+                        privateKey = pair.privateKey
+                        publicKey = pair.publicKey
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Rounded.Key, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (publicKey.isEmpty()) "在手机上生成新密钥" else "重新生成密钥")
+                }
+                if (publicKey.isNotEmpty()) {
+                    PublicKeyCard(publicKey, saved = privateKey.isEmpty(), user = sshUser.ifBlank { "用户" })
+                }
+            } else {
+                SecretField(
+                    "SSH 密码",
+                    sshPassword,
+                    { sshPassword = it },
+                    if (!existing?.sshUser.isNullOrBlank() && existing?.sshAuth == SshAuthMethod.Password) "已保存。留空表示不修改" else null,
+                )
             }
-            FilledTonalButton(
-                onClick = {
-                    val pair = SshKeys.generate()
-                    privateKey = pair.privateKey
-                    publicKey = pair.publicKey
-                },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(Icons.Rounded.Key, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (publicKey.isEmpty()) "在手机上生成新密钥" else "重新生成密钥")
-            }
-            if (publicKey.isNotEmpty()) {
-                PublicKeyCard(publicKey, saved = privateKey.isEmpty(), user = sshUser.ifBlank { "用户" })
-            }
-        } else {
-            SecretField(
-                "SSH 密码",
-                sshPassword,
-                { sshPassword = it },
-                if (!existing?.sshUser.isNullOrBlank() && existing?.sshAuth == SshAuthMethod.Password) "已保存。留空表示不修改" else null,
-            )
-        }
+        } else Text("登录密钥会在复制配置命令时自动生成，无需创建文件。", style = MaterialTheme.typography.bodySmall)
         existing?.sshHostKey?.let { pinned ->
             HostKeyRow(pinned, reset = resetHostKey, onReset = { resetHostKey = true })
         }
@@ -205,16 +291,41 @@ fun ConnectionEditorScreen(
         PasteKeyDialog(onDismiss = { showPaste = false }, onDone = { showPaste = false; useKey(it) })
     }
 
+    if (showSetupResult) {
+        var resultText by remember { mutableStateOf("") }
+        AlertDialog(onDismissRequest = { showSetupResult = false }, title = { Text("粘贴配置结果") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("复制终端中以 HERMES-MOBILE-SETUP: 开头的完整一行。它含连接密钥，请勿发到公开群聊。")
+                OutlinedTextField(resultText, { resultText = it }, label = { Text("连接码") },
+                    visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            } }, confirmButton = { TextButton(enabled = resultText.isNotBlank(), onClick = {
+                runCatching { val result = ConnectionSetup.readResult(resultText, currentProfile(), setupNonce); apiKey = result.apiKey; port = result.port.toString(); showSetupResult = false; showMessage("已填入服务器的已有密钥，可检查并连接") }.onFailure(::report)
+            }) { Text("自动填入") } }, dismissButton = { TextButton(onClick = { showSetupResult = false }) { Text("取消") } })
+    }
+
     Scaffold(
+        bottomBar = { Surface(tonalElevation = 3.dp) {
+            Button(onClick = ::checkAndConnect, enabled = !testing,
+                modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 10.dp)) {
+                if (testing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Rounded.NetworkCheck, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (testing) "正在检查…" else "检查并连接")
+            }
+        } },
         topBar = {
             TopAppBar(
                 navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, contentDescription = "关闭") } },
                 title = { Text(if (existing == null) "添加连接" else "编辑连接") },
                 actions = {
-                    Button(
+                    if (advanced) Button(
+                        enabled = !testing,
                         onClick = {
-                            repository.saveConnection(currentProfile(), apiKey.ifBlank { null }, sshSecret())
-                            onClose()
+                            runCatching {
+                                ConnectionSetup.validate(currentProfile())
+                                repository.saveConnection(currentProfile(), apiKey.ifBlank { null }, sshSecret())
+                                onClose()
+                            }.onFailure(::report)
                         },
                         modifier = Modifier.padding(end = 8.dp),
                     ) { Text("保存") }
@@ -233,9 +344,16 @@ fun ConnectionEditorScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text("连接方式", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TypeGrid(type, onSelect = { type = it; steps = emptyList() })
+            if (choosingType) TypeGrid(type, onSelect = { type = it; steps = emptyList(); choosingType = false })
+            else Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(type.label, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = { choosingType = true }) { Text("更换连接方式") }
+            }
 
-            OutlinedTextField(
+            Text("1 · 填写连接地址", style = MaterialTheme.typography.titleMedium)
+            Text("端口和连接名称已有默认值。只填你知道的信息，其余放在高级设置中。", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { advanced = !advanced }) { Text(if (advanced) "收起高级设置" else "高级设置／已有密钥") }
+            if (advanced) OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 label = { Text("名称") },
@@ -248,8 +366,8 @@ fun ConnectionEditorScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     when (current) {
                         ConnectionType.Direct -> {
-                            HostPortFields(host, { host = it }, port, { port = it }, "地址", "100.x.x.x 或 192.168.x.x")
-                            FileSshSection(
+                            HostPortFields(host, { host = it }, port, { port = it }, "地址", "电脑的局域网或 VPN 地址", showPort = advanced)
+                            if (advanced) FileSshSection(
                                 enabled = fileSsh,
                                 onEnabled = { fileSsh = it },
                                 hint = "同一台机器的 SSH 账号。配好后能显示 Hermes 生成的图片、发送任意文件（聊天仍然走直连）",
@@ -268,20 +386,12 @@ fun ConnectionEditorScreen(
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            OutlinedTextField(
-                                value = "",
-                                onValueChange = {},
-                                label = { Text("证书指纹（可选）") },
-                                supportingText = { Text("自签证书时填写 SHA-256 指纹") },
-                                leadingIcon = { Icon(Icons.Rounded.Fingerprint, null) },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+
                         }
                         ConnectionType.Ssh -> {
-                            HostPortFields(host, { host = it }, sshPort, { sshPort = it }, "SSH 主机", "nas.local 或 100.x.x.x", "SSH 端口")
+                            HostPortFields(host, { host = it }, sshPort, { sshPort = it }, "SSH 主机", "电脑或服务器地址", "SSH 端口", showPort = advanced)
                             sshCredentials()
-                            OutlinedTextField(
+                            if (advanced) OutlinedTextField(
                                 value = port,
                                 onValueChange = { port = it },
                                 label = { Text("远端 Hermes 端口") },
@@ -292,7 +402,7 @@ fun ConnectionEditorScreen(
                             )
                         }
                         ConnectionType.Local -> {
-                            OutlinedTextField(
+                            if (advanced) OutlinedTextField(
                                 value = port,
                                 onValueChange = { port = it },
                                 label = { Text("Hermes 端口") },
@@ -301,30 +411,69 @@ fun ConnectionEditorScreen(
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            FileSshSection(
+                            if (advanced) FileSshSection(
                                 enabled = fileSsh,
                                 onEnabled = { on ->
                                     fileSsh = on
                                     if (on && sshPort == "22") sshPort = "8022"
+                                    if (on && sshUser.isBlank()) sshUser = "termux"
                                 },
                                 hint = "填 Termux 自己的 SSH（sshd，默认端口 8022）。配好后能显示 Hermes 生成的图片、发送任意文件",
                                 sshPort = sshPort,
                                 onSshPort = { sshPort = it },
                                 credentials = sshCredentials,
                             )
-                            TermuxGuide()
+                            if (advanced && fileSsh) {
+                                sshPort.toIntOrNull()?.takeIf { it in 1..65535 }?.let { localSshPort ->
+                                    SetupCommandCard("准备手机文件互通", "在这台手机的 Termux 中粘贴并执行，只开放本机回环地址。",
+                                        "pkg install -y openssh && (ssh-keyscan -T 2 -p $localSshPort 127.0.0.1 >/dev/null 2>&1 || sshd -p $localSshPort -o ListenAddress=127.0.0.1)",
+                                        copyLabel = "复制文件互通准备命令", next = "再执行上方公钥安装命令，返回检查连接。")
+                                }
+                                SetupCommandCard("允许访问下载文件", "在 Termux 中执行，出现系统存储授权时选择允许。",
+                                    "termux-setup-storage", copyLabel = "复制存储授权命令", next = "授权完成后返回 Hermes，重新发送或打开文件。")
+                            }
                         }
                     }
                 }
             }
 
-            SecretField(
+            val managedLocal = type == ConnectionType.Local && existing?.id == com.hermes.mobile.data.local.LocalRuntimeManager.ConnectionId
+            if (managedLocal) {
+                Text("这台手机的连接由本机运行中心管理，请在那里修复或修改配置，避免改到其它 Hermes 目录。", style = MaterialTheme.typography.bodyMedium)
+                onOpenLocalRuntime?.let { open -> Button(onClick = open) { Text("打开本机运行中心") } }
+            }
+            if (!managedLocal && !showQuickSetup) TextButton(onClick = { showQuickSetup = true }) { Text("连接不上？打开配置向导") }
+            if (!managedLocal && showQuickSetup) Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.large) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("2 · 复制一次，完成配置", style = MaterialTheme.typography.titleMedium)
+                    Text(if (type == ConnectionType.Local) "在这台手机的 Termux 中粘贴，按回车运行。需已安装 Hermes。"
+                        else "在运行 Hermes 的机器上${if (type == ConnectionType.Ssh && sshUser.isNotBlank()) "以 $sshUser 登录后" else ""}打开终端，粘贴并按回车（Linux／macOS，需已安装 Hermes）。")
+                    Text("自动备份配置、开通手机连接并授权本手机，保留已有密钥和端口。会重启 Hermes，正在进行的回复可能中断。", style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = ::makeSetupCommand, enabled = !testing) { Text(if (copiedSetup) "重新复制配置命令" else "生成并复制配置命令") }
+                    if (copiedSetup) Text("已复制。执行完成后，直接点底部「检查并连接」。若终端提示保留了已有密钥，请先粘贴配置结果。", style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = {
+                        val text = readText()
+                        if (text != null && text.contains(ConnectionSetup.ReceiptPrefix)) {
+                            runCatching { val result = ConnectionSetup.readResult(text, currentProfile(), setupNonce); apiKey = result.apiKey; port = result.port.toString(); showMessage("已填入服务器的已有密钥") }.onFailure(::report)
+                        } else showSetupResult = true
+                    }) { Text("粘贴配置结果") }
+                }
+            }
+            if (advanced) SecretField(
                 "API Key",
                 apiKey,
                 { apiKey = it },
-                if (existing != null) "已保存。留空表示不修改" else "对应服务器上的 API_SERVER_KEY（至少 16 位）",
+                if (existing != null) "已保存。留空表示不修改" else "会在复制配置命令时自动填好；已有密钥也可直接粘贴",
             )
-            OutlinedTextField(
+            if (!advanced && apiKey.isNotBlank()) Text(if (type == ConnectionType.Ssh && copiedSetup) "检查时会通过 SSH 自动获取连接密钥，无需手动填写。" else "连接密钥已填入，检查通过后会加密保存。", style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = {
+                val text = readText()?.trim()
+                if (text != null && text.length in 16..4096 && text.none { it.isWhitespace() || it.isISOControl() }) {
+                    apiKey = text
+                    showMessage("API Key 已粘贴")
+                } else showMessage("请先复制有效的 API Key；终端生成的连接码请用「粘贴配置结果」")
+            }) { Text("粘贴已有 API Key") }
+            if (advanced) OutlinedTextField(
                 value = profileName,
                 onValueChange = { profileName = it },
                 label = { Text("Hermes Profile（可选）") },
@@ -334,7 +483,7 @@ fun ConnectionEditorScreen(
             )
 
             ConnectionTestPanel(steps) {
-                scope.launch { repository.testConnection(currentProfile(), apiKey.ifBlank { null }, sshSecret()).collect { steps = it } }
+                checkAndConnect()
             }
 
             if (existing != null) {
@@ -402,6 +551,7 @@ private fun HostPortFields(
     hostLabel: String,
     hostHint: String,
     portLabel: String = "端口",
+    showPort: Boolean = true,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
@@ -413,7 +563,7 @@ private fun HostPortFields(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.weight(1f),
         )
-        OutlinedTextField(
+        if (showPort) OutlinedTextField(
             value = port,
             onValueChange = onPort,
             label = { Text(portLabel) },
@@ -462,39 +612,13 @@ private fun FileSshSection(
 /** 公钥：用户要把它加到服务器上。给出可以直接粘贴到服务器终端执行的命令。 */
 @Composable
 private fun PublicKeyCard(publicKey: String, saved: Boolean, user: String) {
-    val clipboard = LocalClipboardManager.current
-    val showMessage = LocalShowMessage.current
-    val command = "mkdir -p ~/.ssh && echo '$publicKey' >> ~/.ssh/authorized_keys"
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        shape = MaterialTheme.shapes.medium,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                if (saved) "已保存私钥。对应的公钥：" else "把公钥加到服务器上（以 $user 登录后执行下面的命令）：",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                if (saved) publicKey else command,
-                style = CodeTextStyle,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(LocalHermesColors.current.codeBackground, MaterialTheme.shapes.small)
-                    .padding(10.dp),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { clipboard.setText(AnnotatedString(publicKey)); showMessage("公钥已复制") }) {
-                    Icon(Icons.Rounded.ContentCopy, null, Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("复制公钥")
-                }
-                if (!saved) {
-                    OutlinedButton(onClick = { clipboard.setText(AnnotatedString(command)); showMessage("命令已复制") }) { Text("复制命令") }
-                }
-            }
-        }
+    val copy = rememberTextCopier()
+    val message = LocalShowMessage.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SetupCommandCard("把手机公钥加入服务器", "以 $user 登录运行 Hermes 的机器，在终端粘贴并按回车。",
+            ConnectionSetup.publicKeyCommand(publicKey), copyLabel = "复制公钥安装命令")
+        TextButton(onClick = { copy(publicKey, false); message("公钥已复制") }) { Text("复制公钥") }
+        if (saved) Text("私钥已加密保存在手机。可以重复执行安装命令，不会重复添加相同公钥。", style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -555,56 +679,6 @@ private fun SecretField(label: String, value: String, onChange: (String) -> Unit
         },
         modifier = Modifier.fillMaxWidth(),
     )
-}
-
-@Composable
-private fun TermuxGuide() {
-    val showMessage = LocalShowMessage.current
-    @Suppress("DEPRECATION")
-    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    val commands = listOf(
-        "安装 Hermes" to "# 按 Hermes 官方文档在 Termux 中安装",
-        "开启 API Server" to "echo 'API_SERVER_ENABLED=true' >> ~/.hermes/.env",
-        "设置 API Key" to "echo 'API_SERVER_KEY=<随机长密钥>' >> ~/.hermes/.env",
-        "防止被系统杀掉" to "termux-wake-lock",
-        "启动" to "hermes gateway",
-        "检查（应该返回 platform: hermes-agent）" to "curl http://127.0.0.1:8642/health",
-    )
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.large) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("在 Termux 里运行 Hermes", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "按顺序在 Termux 中执行下面的命令（示意，具体以官方文档为准）。还需要在系统设置里关闭 Termux 的电池优化。",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            commands.forEachIndexed { index, (title, command) ->
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${index + 1}. $title", style = MaterialTheme.typography.labelLarge)
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Surface(
-                            color = LocalHermesColors.current.codeBackground,
-                            shape = MaterialTheme.shapes.small,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text(command, style = CodeTextStyle, modifier = Modifier.padding(10.dp))
-                        }
-                        IconButton(onClick = {
-                            clipboard.setText(androidx.compose.ui.text.AnnotatedString(command))
-                            showMessage("已复制命令")
-                        }) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = "复制命令")
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable

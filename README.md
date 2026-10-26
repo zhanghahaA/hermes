@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.0-dev (Android versionCode 37).** Adds the local runtime/service center with external Termux and Termux:X11, Python services, local reverse proxies, and isolated notification profiles per connection. See [the 0.13 guide](docs/0.13.md). Upstream still marks its Termux package as broken, so Hermes installation is experimental. Android device flows remain unverified; no production Release has been published.
+**Current development build: 0.13.1-dev (Android versionCode 38).** Simplifies setup with generated phone keys, complete copyable configuration commands, authenticated SSH configuration retrieval, and connection validation followed by automatic saving. Termux initialization, notifications, and screen installation show actionable next steps. See [the setup guide](docs/easy-setup.md). Termux deployment remains experimental, device flows remain unverified, and no production Release has been published.
 
 English | [中文](README.zh-CN.md)
 

@@ -95,6 +95,17 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("52-quick-ssh") { repo, _ -> ConnectionEditorScreen(repo, null, "Ssh", onClose = {}) },
+    Scene("52b-quick-ssh-dark", dark = true) { repo, _ -> ConnectionEditorScreen(repo, null, "Ssh", onClose = {}) },
+    Scene("52c-quick-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
+    Scene("52d-quick-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
+    Scene("52e-notification-setup") { repo, _ -> NotificationPreview(repo) },
+    Scene("52f-copy-screen-install") { _, _ ->
+        Column(Modifier.fillMaxSize().padding(24.dp)) {
+            com.hermes.mobile.ui.components.SetupCommandCard("安装屏幕组件", "在运行 Hermes 的主机终端中，以管理员身份粘贴并执行。",
+                "hermes computer-use screen install", next = "安装完成后返回本页刷新。")
+        }
+    },
     Scene("51-runtime-missing") { _, _ -> RuntimePreview(false) },
     Scene("51b-runtime-ready") { _, _ -> RuntimePreview(true) },
     Scene("51c-runtime-dark", dark = true) { _, _ -> RuntimePreview(true) },

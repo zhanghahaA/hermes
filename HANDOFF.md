@@ -5,6 +5,13 @@
 
 ## 现状
 
+- 当前工作为 **0.13.1-dev / code 38**，基于已合并 main 的 8f78c69，独立工作区 `/workspace/hermes-easy-setup`，分支 `codex/easy-setup`。欢迎页、本机授权、连接配置、通知助手和屏幕安装均增加直接可用的操作引导；SSH 主流程为填写地址和账号后「生成并复制配置命令 → 在服务器执行 → 检查并连接」，自动生成手机密钥、经 SSH 读取实际 Key／端口、检查通过后保存切换。详情与边界见 [简化配置说明](docs/easy-setup.md)。
+- 配置命令保留有效 API Key 和端口、备份 `.env`，只安装公钥，不发送手机私钥；SSH 模式在服务器生成 API Key。配置结果以私有文件暂存，手机只发送随机配置标识的摘要，回包匹配后才采用凭据与指纹。未保存的敏感输入不进入 SavedInstanceState；Android 复制操作标记敏感，粘贴只由按钮触发。首次终端执行、系统权限和模型服务商 Key 仍需用户操作；本轮未实现 PowerShell 引导。
+- 回归复现原有任务操作回包覆盖后续状态的问题，补了按连接／任务串行提交及删除确认保护，并增加可控延迟回包测试；工具集先发布功能标记再发布列表。
+- 最终验证：桌面套件 228 项报告、212 项实际通过、0 失败，16 项真实 Hermes／OpenSSH IT 无环境未执行；另 17 项 Python 运行与配置测试通过。App 和 Android 自检 APK 构建成功；浅／深色、新手连接、Termux、通知与屏幕安装提示截图已检查。没有 adb 设备，真实服务器、Android 授权／剪贴板／跨应用恢复与 macOS 尚未实测。签名与旧包一致，APK SHA-256 为 6dabb234ac1457399db00192d17b37319de0e04c9274eb9917db4a6fba4f83a2；留档在 `/workspace/hermes-cloud/releases/0.13.1-dev`，下载包在 `/workspace/shared/downloads/hermes-mobile-0.13.1-dev.apk`。图片恢复、乐观置顶等旧测试改为等待实际异步结果或使用受控回包时机，保留原断言；最终整套串行通过。
+
+## 0.13 交付记录
+
 - 当前开发 **0.13.0-dev / code 37**，基于 0.12 的 d3b400e，工作区 `/workspace/hermes-runtime-0.13`，分支 `codex/local-runtime`。已接入「设置 → 本机运行与服务」、外部 Termux 命令桥、签名 APT 安装、独立目录配置、凭据存储与连接检查、Python／Caddy 服务管理、Chromium 与独立 Termux:X11 启停。业务使用可替换 `LocalRuntimeBackend`，为以后内置合并保留接口。详见 [0.13 说明](docs/0.13.md)。
 - 验证：标准套件 217 项报告、201 项实际通过、0 失败，16 项真实 IT 无环境未执行；另 11 项 Python 运行测试通过。App 与 Android 自检 APK 构建成功，浅／深色及缺少环境截图已检查，无 adb 设备。签名证书仍为 d985fcaf…db1dc7；APK SHA-256 为 728c6c3813203f0927447f2c8c65cd5086c9ffcb58515fa708b7b0089cbdc1ab。安装包在 `/workspace/shared/downloads/hermes-mobile-0.13.0-dev.apk`，留档在 `/workspace/hermes-cloud/releases/0.13.0-dev`。
 - 0.13 沿用已有通知采集，新增按每个连接独立开关、白名单、目标、加密队列和摘要；旧固定目标只迁移给所属连接。切换取消手机端旧等待并拒绝旧采集回调，删除连接清除档案；已提交的服务器任务不能靠切换撤回。本版没有新增独立读取短信数据库。

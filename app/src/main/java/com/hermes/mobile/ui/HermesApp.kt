@@ -137,6 +137,7 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 repository = repository,
                 connectionId = route.connectionId,
                 initialType = route.type,
+                onOpenLocalRuntime = { navigator.push(LocalRuntimeRoute, clearAboveRoot = true) }.takeIf { repository.localRuntime != null },
                 onClose = navigator::pop,
             )
             is RoomRoute -> com.hermes.mobile.ui.bots.GroupChatScreen(repository, route.roomId, onBack = navigator::pop)
@@ -148,7 +149,11 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 onOpenChat = { navigator.push(ChatRoute(it)) },
             )
             WelcomeRoute -> WelcomeScreen(
-                onPickType = { type -> navigator.push(ConnectionEditRoute(type = type.name), clearAboveRoot = true) },
+                onPickType = { type ->
+                    val route = if (type == com.hermes.mobile.data.model.ConnectionType.Local && repository.localRuntime != null)
+                        LocalRuntimeRoute else ConnectionEditRoute(type = type.name)
+                    navigator.push(route, clearAboveRoot = true)
+                },
                 onSkip = navigator::pop,
             )
         }

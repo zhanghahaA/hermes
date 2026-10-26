@@ -43,6 +43,8 @@ interface HermesRepository {
      * [sshSecret] 是 SSH 私钥全文（密钥登录）或密码（密码登录），按 [ConnectionProfile.sshAuth] 解释。
      */
     fun saveConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String? = null)
+    /** 用户执行配置命令后，经认证的 SSH 读取当前页对应的私密配置结果。 */
+    suspend fun readConnectionSetup(profile: ConnectionProfile, sshSecret: String?, nonce: String): com.hermes.mobile.data.setup.ConnectionSetup.Result? = null
     /** 本机部署先保存凭据，接口检查通过后再切换，不提前改变当前连接。 */
     fun saveConnectionWithoutActivating(profile: ConnectionProfile, apiKey: String) {
         error("当前仓库不支持预存本机连接")

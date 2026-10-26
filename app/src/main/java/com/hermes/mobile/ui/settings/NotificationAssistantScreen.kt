@@ -57,6 +57,28 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("每个连接保存独立档案。当前连接：" + (connections.firstOrNull { it.id == active }?.name ?: "未选择") + "。切换连接后只使用该连接的授权与记录。",
                 Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.bodyMedium)
+            if (!granted || config.packages.isEmpty() || config.target == null || !config.enabled) {
+                ElevatedCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("跟着这一步继续", style = MaterialTheme.typography.titleMedium)
+                        Text("系统授权 → 选择应用 → 指定摘要会话 → 开启。每一步都有对应按钮。", style = MaterialTheme.typography.bodySmall)
+                        Button(enabled = active != null, onClick = {
+                            when {
+                                !granted -> openAccess()
+                                config.packages.isEmpty() -> showApps = true
+                                config.target == null -> choosing = true
+                                else -> confirmEnable = true
+                            }
+                        }) { Text(when {
+                            active == null -> "请先添加并选择连接"
+                            !granted -> "去授权通知使用权"
+                            config.packages.isEmpty() -> "选择允许读取的应用"
+                            config.target == null -> "选择摘要会话"
+                            else -> "开启通知助手"
+                        }) }
+                    }
+                }
+            }
             SettingsGroup("读取与授权") {
                 SwitchRow(Icons.Rounded.Notifications, "启用通知助手", "默认关闭，随时暂停读取和发送",
                     checked = config.enabled, onCheckedChange = { if (it) confirmEnable = true else configure(config.copy(enabled = false)) })
@@ -71,7 +93,7 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
                 SettingsRow(Icons.Rounded.Forum, "固定会话", config.target?.label ?: "尚未绑定",
                     enabled = !busy && !creating, onClick = { choosing = true })
                 GroupDivider()
-                Text("绑定后切换连接或 Bot 不会改变发送目标。已有待发批次时，需先完成或清除本地记录再换目标。",
+                Text("目标属于当前连接的独立档案；切换连接会切换档案，切换 Bot 不会改固定目标。已有待发批次时，需先完成或清除记录再换会话。",
                     Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(15, 30, 60).forEach { minutes ->

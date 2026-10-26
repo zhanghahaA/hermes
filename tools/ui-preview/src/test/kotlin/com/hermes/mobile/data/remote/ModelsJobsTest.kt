@@ -189,6 +189,26 @@ class ModelsJobsTest {
     }
 
     @Test
+    fun delayedPauseResumeRepliesCannotRestoreADeletedJob() {
+        val s = server()
+        val repo = connected(s)
+        repo.features.await("探测到任务接口") { AppFeature.Jobs in it }
+        repo.saveJob(newJob("test", JobSchedule.Interval(60)))
+        val job = repo.jobs.await("新任务") { it.isNotEmpty() }.single()
+        s.jobActionDelayMillis = 300
+        repo.setJobEnabled(job.id, false)
+        repo.setJobEnabled(job.id, true)
+        repo.saveJob(job.copy(name = "renamed"))
+        repo.deleteJob(job.id)
+        runBlocking { withTimeout(5000) {
+            while (s.requests.none { it.method == "DELETE" && it.path == "/api/jobs/${job.id}" }) kotlinx.coroutines.delay(20)
+        } }
+        Thread.sleep(800) // 明确覆盖假服务器延后的两次回包，不能只看乐观删除的瞬时状态。
+        assertTrue(s.jobs.isEmpty())
+        assertTrue(repo.jobs.value.isEmpty(), "较早的暂停／恢复回包不能把已删任务放回列表")
+    }
+
+    @Test
     fun runNowWaitsForTheRunAndNotifies() {
         val s = server()
         val repo = connected(s)

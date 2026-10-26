@@ -39,10 +39,10 @@ import com.hermes.mobile.ui.components.icon
 private data class Option(val type: ConnectionType, val title: String, val subtitle: String)
 
 private val options = listOf(
-    Option(ConnectionType.Direct, "家里的电脑 / NAS", "通过 Tailscale、ZeroTier 或局域网直连，推荐"),
-    Option(ConnectionType.Ssh, "通过 SSH 连接", "服务器只开放了 SSH 端口时使用"),
-    Option(ConnectionType.Https, "HTTPS 网址", "已经用反向代理把 Hermes 发布出去"),
-    Option(ConnectionType.Local, "这台手机（Termux）", "Hermes 就跑在手机上"),
+    Option(ConnectionType.Ssh, "连接电脑或服务器", "推荐 · 帮你生成密钥和配置命令，SSH 加密连接"),
+    Option(ConnectionType.Local, "直接在这台手机运行", "按步骤安装、授权和部署，无需自己写代码"),
+    Option(ConnectionType.Direct, "已有局域网或 VPN 地址", "Hermes 已配置好，填入地址和连接密钥即可"),
+    Option(ConnectionType.Https, "已有 HTTPS 网址", "已有反向代理，直接填写网址"),
 )
 
 /** 首次启动：选择 Hermes 在哪里。 */
@@ -71,7 +71,7 @@ fun WelcomeScreen(onPickType: (ConnectionType) -> Unit, onSkip: () -> Unit) {
         Text("连接你的 Hermes", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
         Text(
-            "在手机上像发消息一样使用 Hermes。先告诉我它在哪里运行。",
+            "选好运行位置，跟着按钮完成配置。密钥自动生成，需要执行的命令直接复制。",
             style = MaterialTheme.typography.bodyLarge,
             color = colors.onSurfaceVariant,
         )
@@ -95,7 +95,7 @@ fun WelcomeScreen(onPickType: (ConnectionType) -> Unit, onSkip: () -> Unit) {
         TextButton(onClick = onSkip, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("稍后设置") }
         Spacer(Modifier.height(16.dp))
         Text(
-            "需要在 Hermes 那边开启 API Server（API_SERVER_ENABLED=true）并设置 API Key。",
+            "已经装好 Hermes？不必手动改配置文件。向导会告诉你在哪里粘贴命令，检查通过后直接开始聊天。",
             style = MaterialTheme.typography.bodySmall,
             color = colors.onSurfaceVariant,
             textAlign = TextAlign.Center,

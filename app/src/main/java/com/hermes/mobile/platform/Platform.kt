@@ -307,3 +307,32 @@ fun rememberShareText(): (title: String, text: String) -> Unit {
         }
     }
 }
+
+/** 只在用户点复制时写剪贴板，含连接密钥时隐藏系统剪贴板预览。 */
+@androidx.compose.runtime.Composable
+fun rememberTextCopier(): (String, Boolean) -> Unit {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember(context) { { text, sensitive ->
+        val clip = android.content.ClipData.newPlainText("Hermes 配置", text)
+        if (sensitive) clip.description.extras = android.os.PersistableBundle().apply {
+            putBoolean("android.content.extra.IS_SENSITIVE", true)
+        }
+        (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(clip)
+    } }
+}
+
+@androidx.compose.runtime.Composable
+fun rememberConnectionSetupProgram(): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember(context) { context.assets.open("setup/configure.py").bufferedReader().use { it.readText() } }
+}
+
+/** 仅由明确的粘贴按钮调用，不在页面加载时读取剪贴板。 */
+@Composable
+fun rememberTextReader(): () -> String? {
+    val context = LocalContext.current
+    return androidx.compose.runtime.remember(context) { {
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
+    } }
+}

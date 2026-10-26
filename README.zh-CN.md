@@ -1,6 +1,6 @@
 # Hermes 移动版（Android）
 
-当前开发包 **0.13.0-dev / Android versionCode 37**：在 0.12 已有功能上接入本机运行与服务中心、独立 Termux／Termux:X11、Python 与反向代理管理，以及按连接隔离的通知档案。使用方法和验证边界见 [0.13 说明](docs/0.13.md)。Hermes 官方 Termux 安装包仍在修复，本机部署为实验功能；没有真机验证，也没有发布正式 Release。
+当前开发包 **0.13.1-dev / Android versionCode 38**：在 0.13 基础上简化首次使用，自动生成手机登录密钥、复制完整配置命令、经 SSH 获取连接配置，检查通过后直接保存连接。Termux 初始化、通知助手和屏幕安装也有明确的下一步按钮。见 [简化配置指南](docs/easy-setup.md)。Hermes Termux 部署的实验提示保留；没有把自动测试当作真机验证，也没有发布正式 Release。
 
 在手机上使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：默认像发消息一样收到最终回复，可在设置中开启逐字回复或思考与工作过程；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 
