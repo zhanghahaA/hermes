@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -128,6 +129,21 @@ def tail(name):
                     text = text.replace(key, "[已隐藏]")
             except (ValueError, AttributeError):
                 pass
+    env_path = owned(ROOT / ".env")
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" not in line or line.lstrip().startswith("#"):
+                continue
+            name, value = line.split("=", 1)
+            if not re.search(r"(?i)(key|token|secret|password)", name):
+                continue
+            try:
+                pieces = shlex.split(value, comments=True)
+                value = pieces[0] if pieces else ""
+            except ValueError:
+                value = value.strip().strip("\"'")
+            if value:
+                text = text.replace(value, "[已隐藏]")
     return text
 
 

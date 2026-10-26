@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.1-dev (Android versionCode 38).** Simplifies setup with generated phone keys, complete copyable configuration commands, authenticated SSH configuration retrieval, and connection validation followed by automatic saving. Termux initialization, notifications, and screen installation show actionable next steps. See [the setup guide](docs/easy-setup.md). Termux deployment remains experimental, device flows remain unverified, and no production Release has been published.
+**Current development build: 0.13.2-dev (Android versionCode 39).** Notification app discovery runs on demand in the background. Termux setup provides permission recovery and automatic rechecking, installs Hermes before asking for model credentials, and connects after configuration. Settings supports upstream account sign-in, API keys, custom endpoints, and existing local model services, with SSH management for remote Hermes. See [deployment and model settings](docs/model-settings.md) and [first connection setup](docs/easy-setup.md). Android permissions, arm64 installation, and real account authorization still require device validation; this is a development prerelease.
 
 English | [中文](README.zh-CN.md)
 

@@ -10,7 +10,7 @@ import kotlin.test.*
 
 @OptIn(ExperimentalTestApi::class)
 class LocalRuntimeUiTest {
-    @Test fun installRequiresExplicitConsentAndModelCredentials() = runComposeUiTest {
+    @Test fun installNeedsConsentButNotModelCredentials() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val calls = CopyOnWriteArrayList<RuntimeAction>()
         val backend = object : LocalRuntimeBackend {
@@ -29,14 +29,15 @@ class LocalRuntimeUiTest {
         })
         try {
             setContent { HermesTheme { LocalRuntimeScreen(manager, {}) } }
-            onNodeWithText("部署本机 Hermes（实验）").performScrollTo().performClick()
-            onNodeWithText("确认并继续").assertIsNotEnabled()
-            onNodeWithText("模型名称").performTextInput("fake-model")
-            onNodeWithText("模型 API Key").performTextInput("test-key")
-            onNode(isToggleable()).performScrollTo().performClick()
+            waitUntil(timeoutMillis = 5000) { manager.state.value.checked && !manager.state.value.busy }
+            calls.clear()
+            onNodeWithText("一键安装 Hermes").performScrollTo().performClick()
+            onNodeWithText("模型 API Key").assertDoesNotExist()
+            assertTrue(calls.isEmpty(), "只有明确确认后才可安装")
+            onNodeWithText("确认并继续").assertIsEnabled()
             onNodeWithText("确认并继续").performClick()
             waitUntil(timeoutMillis = 5000) { manager.state.value.checked && !manager.state.value.busy }
-            assertEquals(listOf(RuntimeAction.InstallHermes, RuntimeAction.Prepare, RuntimeAction.ConfigureHermes, RuntimeAction.StartHermes), calls.toList())
+            assertEquals(listOf(RuntimeAction.Prepare, RuntimeAction.InstallHermes, RuntimeAction.ConfigureHermes), calls.toList())
         } finally { scope.cancel() }
     }
 
@@ -54,8 +55,28 @@ class LocalRuntimeUiTest {
         try {
             setContent { HermesTheme { LocalRuntimeScreen(manager, {}) } }
             onNodeWithText("下载 Termux").assertIsDisplayed()
-            onNodeWithText("检查环境").performScrollTo().assertIsNotEnabled()
-            onNodeWithText("部署本机 Hermes（实验）").performScrollTo().assertIsNotEnabled()
+            onNodeWithText("检查环境").performScrollTo().assertIsEnabled()
+            onNodeWithText("一键安装 Hermes").performScrollTo().assertIsNotEnabled()
         } finally { scope.cancel() }
     }
+    @Test fun deniedPermissionStillOffersCheckAndSystemSettings() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val manager = LocalRuntimeManager(scope, object : LocalRuntimeBackend {
+            override val name = "Termux"
+            override val externalApps = true
+            override fun environment() = RuntimeEnvironment(true, true, false, true, 4L * 1024 * 1024 * 1024)
+            override suspend fun execute(request: RuntimeRequest, progress: (String) -> Unit): RuntimeResponse = error("不应未授权就执行")
+        }, object : LocalConnectionAccess {
+            override fun save(apiKey: String) = Unit
+            override suspend fun verifyAndActivate() = Unit
+        })
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(manager, {}) } }
+            onNodeWithText("检查环境").performScrollTo().assertIsEnabled().performClick()
+            assertEquals("permission", com.hermes.mobile.platform.DesktopRuntimeActions.lastAction)
+            onNodeWithText("打开系统权限设置").performScrollTo().performClick()
+            assertEquals("permission-settings", com.hermes.mobile.platform.DesktopRuntimeActions.lastAction)
+        } finally { scope.cancel() }
+    }
+
 }

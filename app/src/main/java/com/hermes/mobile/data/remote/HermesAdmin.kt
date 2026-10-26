@@ -43,6 +43,7 @@ interface AdminApi {
     suspend fun setMcpEnabled(name: String, enabled: Boolean)
     /** `hermes mcp test` 的输出。 */
     suspend fun testMcpServer(name: String): String
+    suspend fun modelSettings(program: String, input: String): String = throw AdminException("当前连接不支持模型设置")
     suspend fun readConfig(): String
     /** 先在临时目录里让 Hermes 读一遍，格式没问题才替换（原文件备份为 config.yaml.mobile-backup）。 */
     suspend fun saveConfig(text: String)
@@ -374,26 +375,24 @@ class HermesAdmin(private val shell: RemoteShell, val profileName: String?) : Ad
      * 旧的安装方式（venv / pip）没有这个参数，就照老办法顺着启动脚本找 Python。
      * 脚本先写进临时文件（读完就删），stdin 留给脚本用（Bot 屏幕的画面数据走 stdin/stdout）。
      */
-    internal fun hermesPython(dir: String, script: String, args: List<String>): String {
-        val argv = args.joinToString(" ") { q(it) }
-        return listOf(
-            "HM_SCRIPT=\$(mktemp \"\${TMPDIR:-/tmp}/hermes-mobile.XXXXXX\") || exit 1",
-            "cat > \"\$HM_SCRIPT\" <<'HERMES_MOBILE_PY'",
-            script,
-            "HERMES_MOBILE_PY",
-            "HM_LOADER=${q(PythonLoader)}",
-            "export HM_SCRIPT HM_LOADER HERMES_HOME=${q(dir)}",
-            "HM_RC=\$($hermesBare --print-runtime-command 2>/dev/null | tail -n 1)",
-            "case \"\$HM_RC\" in",
-            "  '[\"'*)",
-            "    export HM_RC",
-            "    HM_PY=\$(printf '%s' \"\$HM_RC\" | sed -n 's/^\\[\"\\([^\"]*\\)\".*/\\1/p')",
-            "    if [ -x \"\$HM_PY\" ]; then \"\$HM_PY\" -I -c ${q(RuntimeShim)} $argv; HM_CODE=\$?; [ \$HM_CODE -ne 70 ] && exit \$HM_CODE; fi",
-            "    ;;",
-            "esac",
-            FindHermesPython,
-            "exec \$PY -c \"\$HM_LOADER\" $argv",
-        ).joinToString("\n")
+    internal fun hermesPython(dir: String, script: String, args: List<String>): String = runtimePython(dir, script, args)
+
+    override suspend fun modelSettings(program: String, input: String): String = withContext(Dispatchers.IO) {
+        // 密钥通过 SSH 的标准输入发送，不放进远端命令行、临时脚本或诊断。
+        val command = runtimePython(home(), program, emptyList())
+        kotlinx.coroutines.runInterruptible(Dispatchers.IO) { shell.openStream(command).use { stream ->
+            stream.input.write(input.toByteArray(Charsets.UTF_8))
+            stream.input.close()
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = stream.output.read(buffer)
+                if (count < 0) break
+                check(output.size() + count <= 512 * 1024) { "模型配置回包过大" }
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray().toString(Charsets.UTF_8)
+        } }
     }
 
     private fun checkFolder(folder: String) = "[ -d ${q(folder)} ] || { echo $NoSuchFolder >&2; exit 2; }; "
@@ -592,7 +591,30 @@ class HermesAdmin(private val shell: RemoteShell, val profileName: String?) : Ad
         return name
     }
 
-    private companion object {
+    companion object {
+        internal fun runtimePython(dir: String, script: String, args: List<String>): String {
+            val argv = args.joinToString(" ") { q(it) }
+            return listOf(
+                "HM_SCRIPT=\$(mktemp \"\${TMPDIR:-/tmp}/hermes-mobile.XXXXXX\") || exit 1",
+                "cat > \"\$HM_SCRIPT\" <<'HERMES_MOBILE_PY'",
+                script,
+                "HERMES_MOBILE_PY",
+                "HM_LOADER=${q(PythonLoader)}",
+                "export HM_SCRIPT HM_LOADER HERMES_HOME=${q(dir)}",
+                "HM_RC=\$(hermes --print-runtime-command 2>/dev/null | tail -n 1)",
+                "case \"\$HM_RC\" in",
+                "  '[\"'*)",
+                "    export HM_RC",
+                "    HM_PY=\$(printf '%s' \"\$HM_RC\" | sed -n 's/^\\[\"\\([^\"]*\\)\".*/\\1/p')",
+                "    if [ -x \"\$HM_PY\" ]; then \"\$HM_PY\" -I -c ${q(RuntimeShim)} $argv; HM_CODE=\$?; [ \$HM_CODE -ne 70 ] && exit \$HM_CODE; fi",
+                "    ;;",
+                "esac",
+                FindHermesPython,
+                "exec \$PY -c \"\$HM_LOADER\" $argv",
+            ).joinToString("\n")
+        }
+
+
         /**
          * 只读地查 Hermes 的两个库：projects.db（项目和它们的文件夹）、state.db（每个会话的工作目录）。
          * 匹配规则和 Hermes 一样：文件夹等于或包含工作目录的项目里，取路径最长的那个。

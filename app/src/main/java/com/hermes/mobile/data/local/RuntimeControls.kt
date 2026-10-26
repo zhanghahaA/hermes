@@ -7,4 +7,5 @@ class RuntimeControls(
     val downloadTermux: () -> Unit,
     val downloadViewer: () -> Unit,
     val batterySettings: () -> Unit,
+    val permissionSettings: () -> Unit = {},
 )

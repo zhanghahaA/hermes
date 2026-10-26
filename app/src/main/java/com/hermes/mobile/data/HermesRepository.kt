@@ -100,6 +100,7 @@ interface HermesRepository {
     fun answerClarify(sessionId: String, itemId: String, answer: String)
 
     // 模型与能力
+    fun refreshModels() = Unit
     val models: StateFlow<List<ModelOption>>
     val defaultModelId: StateFlow<String>
     fun setSessionModel(sessionId: String, modelId: String)

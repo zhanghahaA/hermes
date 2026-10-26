@@ -1,6 +1,8 @@
 package com.hermes.mobile.ui.settings
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -34,7 +36,6 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
     val sessions by repository.sessions.collectAsState()
     val scope = rememberCoroutineScope()
     val (granted, openAccess) = rememberNotificationAccess()
-    val apps = rememberNotificationApps()
     var confirmEnable by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
@@ -153,10 +154,14 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
         confirmButton = { TextButton(onClick = {
             runCatching { assistant.clear() }.onFailure { error = it.message }; confirmClear = false
         }) { Text("清除") } }, dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } })
-    if (showApps) AlertDialog(onDismissRequest = { showApps = false }, title = { Text("允许读取的应用") },
-        text = { Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-            (apps.map { it.packageName to it.name } + config.packages.filter { selected -> apps.none { it.packageName == selected } }.map { it to it })
-                .forEach { (pkg, name) ->
+    if (showApps) {
+        val apps = rememberNotificationApps()
+        AlertDialog(onDismissRequest = { showApps = false }, title = { Text("允许读取的应用") },
+        text = { LazyColumn(Modifier.heightIn(max = 420.dp)) {
+            if (apps == null) item { Text("正在读取应用列表…") }
+            else if (apps.isEmpty()) item { Text("没有读取到应用，可关闭后重试；已选应用仍会保留。") }
+            val available = apps.orEmpty()
+            items(available.map { it.packageName to it.name } + config.packages.filter { selected -> available.none { it.packageName == selected } }.map { it to it }, key = { it.first }) { (pkg, name) ->
                     Row { Checkbox(checked = pkg in config.packages,
                         modifier = Modifier.semantics { contentDescription = "允许读取" + name },
                         onCheckedChange = { checked ->
@@ -164,6 +169,7 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
                     }); Text(name, Modifier.padding(top = 12.dp)) }
                 }
         } }, confirmButton = { TextButton(onClick = { showApps = false }) { Text("完成") } })
+    }
     if (choosing) AlertDialog(onDismissRequest = { choosing = false }, title = { Text("绑定当前连接与 Bot") },
         text = { Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
             val connection = connections.firstOrNull { it.id == active }

@@ -24,7 +24,10 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
         if (request.action in setOf(RuntimeAction.InstallHermes, RuntimeAction.UpgradeHermes)) {
             check(request.acceptExperimental) { PackageWarning }
             progress("正在验证官方软件源并安装 Hermes，可能需要几分钟")
-            checkedRun(installScript(request.channel, request.action == RuntimeAction.UpgradeHermes))
+            if (request.action == RuntimeAction.InstallHermes) {
+                val existing = checkedRun(Header + "\nif command -v hermes >/dev/null 2>&1 && hermes --version >/dev/null 2>&1; then echo HM_HERMES_READY; fi")
+                if ("HM_HERMES_READY" !in existing.stdout.lines()) checkedRun(installScript(request.channel, false))
+            } else checkedRun(installScript(request.channel, true))
         } else if (request.action == RuntimeAction.Prepare) {
             progress("正在准备 Python 服务环境，可能需要几分钟")
             checkedRun(Header + "\npkg install -y python")
@@ -60,6 +63,13 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
         return RuntimeResponse(snapshot, output, key)
     }
 
+    override suspend fun modelSettings(program: String, input: String): String {
+        check(environment().blockers.isEmpty()) { "请先完成 Termux 执行授权" }
+        val command = com.hermes.mobile.data.remote.HermesAdmin.runtimePython(
+            "/data/data/com.termux/files/home/.hermes-mobile", program, emptyList())
+        return checkedRun(Header + "\n" + command, input).stdout
+    }
+
     private fun safe(value: String): String = DiagnosticRedactor.redact(value, privateValues)
         .replace(Regex("(?i)\\bsk-[a-z0-9_-]{10,}\\b"), "[已隐藏]").takeLast(12_000)
 
@@ -76,11 +86,11 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
 
     companion object {
         const val Receipt = "HMRUNTIME"
-        const val PackageWarning = "Hermes 官方仍标注 Termux 包正在修复。本机安装为实验功能，可能失败；已有连接和数据会保留。"
+        const val PackageWarning = "从 Hermes 官方签名软件源安装到 Termux，需要网络和存储空间；保留已有配置。安装失败时可查看原因并重试。"
         const val DownloadTermux = "https://github.com/termux/termux-app/releases"
         const val DownloadX11 = "https://github.com/termux/termux-x11/releases/tag/nightly"
         const val Fingerprint = "C572B5FDD1A29CCFA9A912B6840B0848E139156D"
-        val EnableExternalApps = "mkdir -p ~/.termux && printf '\\nallow-external-apps=true\\n' >> ~/.termux/termux.properties && termux-reload-settings"
+        val EnableExternalApps = "mkdir -p ~/.termux && printf '\\nallow-external-apps=true\\n' >> ~/.termux/termux.properties && termux-reload-settings && printf '准备完成，请返回 Hermes 继续授权和安装。\\n' && (am start -n com.hermes.mobile/.MainActivity >/dev/null 2>&1 || true)"
         internal fun quote(text: String) = "'" + text.replace("'", "'\"'\"'") + "'"
         private val Key = Regex("[a-f0-9]{64}")
         internal val Header = """

@@ -20,6 +20,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.produceState
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.NotificationCompat
@@ -105,16 +109,33 @@ fun rememberNotificationAccess(): Pair<Boolean, () -> Unit> {
     }
 }
 
-/** 仅查询有启动入口的应用，不申请读取全部软件列表。 */
-@Composable
-fun rememberNotificationApps(): List<NotificationApp> {
-    val context = LocalContext.current
-    return remember {
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        context.packageManager.queryIntentActivities(intent, 0)
-            .map { NotificationApp(it.activityInfo.packageName, it.loadLabel(context.packageManager).toString()) }
-            .filter { it.packageName != context.packageName }.distinctBy { it.packageName }.sortedBy { it.name }
+/** 应用标签可能触发磁盘和跨进程查询；仅在打开选择器后于后台读取并缓存。 */
+private object NotificationAppsCache {
+    private val mutex = Mutex()
+    private var cached: List<NotificationApp>? = null
+    private var loadedAt = 0L
+    suspend fun load(context: Context): List<NotificationApp> = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            cached?.takeIf { android.os.SystemClock.elapsedRealtime() - loadedAt < 60_000 } ?: run {
+                val pm = context.packageManager
+                pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                    .distinctBy { it.activityInfo.packageName }
+                    .filter { it.activityInfo.packageName != context.packageName }
+                    .map { NotificationApp(it.activityInfo.packageName, it.loadLabel(pm).toString()) }
+                    .sortedBy { it.name }.also { cached = it; loadedAt = android.os.SystemClock.elapsedRealtime() }
+            }
+        }
     }
+}
+
+@Composable
+fun rememberNotificationApps(): List<NotificationApp>? {
+    val context = LocalContext.current.applicationContext
+    return produceState<List<NotificationApp>?>(null, context) {
+        value = try { NotificationAppsCache.load(context) }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { emptyList() }
+    }.value
 }
 
 /** Android 负责绑定与唤起；不把历史活动通知重新采集为新通知。 */

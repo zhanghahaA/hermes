@@ -16,4 +16,5 @@ fun rememberRuntimeControls(refresh: () -> Unit) = RuntimeControls(
     downloadTermux = { DesktopRuntimeActions.record("download-termux") },
     downloadViewer = { DesktopRuntimeActions.record("download-x11") },
     batterySettings = { DesktopRuntimeActions.record("battery") },
+    permissionSettings = { DesktopRuntimeActions.record("permission-settings") },
 )

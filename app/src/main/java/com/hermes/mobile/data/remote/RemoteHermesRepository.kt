@@ -1712,6 +1712,8 @@ class RemoteHermesRepository(
     private val pendingModels = ConcurrentHashMap<String, ModelOption>()
 
     /** 读 Hermes 的模型清单：只列已经配好（有 Key / 已登录）且有模型的 Provider，Hermes 当前用的排最前。 */
+    override fun refreshModels() { scope.launch { loadModels() } }
+
     private suspend fun loadModels() {
         val c = client ?: return
         if (capabilities?.endpoints?.contains("model_options") != true) return
@@ -1732,6 +1734,7 @@ class RemoteHermesRepository(
                     )
                 }
             }
+            if (client !== c) return
             _models.value = options
             serverDefaultModel = options.firstOrNull { it.note == "Hermes 默认" }?.id
             _defaultModelId.value = appDefaultModel()?.id ?: serverDefaultModel.orEmpty()
@@ -1780,9 +1783,9 @@ class RemoteHermesRepository(
     /** “新对话默认模型”：只影响从手机新建的对话（Hermes 自己的默认在服务器配置里，API 改不了）。 */
     override fun setDefaultModel(modelId: String) {
         val connection = scopeId ?: return
-        val toServerDefault = modelId == serverDefaultModel
+        val toServerDefault = modelId.isBlank() || modelId == serverDefaultModel
         persist { st -> st.copy(defaultModels = if (toServerDefault) st.defaultModels - connection else st.defaultModels + (connection to modelId)) }
-        _defaultModelId.value = modelId
+        _defaultModelId.value = if (toServerDefault) serverDefaultModel.orEmpty() else modelId
     }
 
     /** 新会话刚在服务器上建好：把草稿时选的模型（或手机上设的默认模型）锁上。 */

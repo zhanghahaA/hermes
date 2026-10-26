@@ -5,7 +5,16 @@
 
 ## 现状
 
-- 当前工作为 **0.13.1-dev / code 38**，基于已合并 main 的 8f78c69，独立工作区 `/workspace/hermes-easy-setup`，分支 `codex/easy-setup`。欢迎页、本机授权、连接配置、通知助手和屏幕安装均增加直接可用的操作引导；SSH 主流程为填写地址和账号后「生成并复制配置命令 → 在服务器执行 → 检查并连接」，自动生成手机密钥、经 SSH 读取实际 Key／端口、检查通过后保存切换。详情与边界见 [简化配置说明](docs/easy-setup.md)。
+- 当前开发为 **0.13.2-dev / code 39**，在 `/workspace/hermes-easy-setup`、`codex/easy-setup` 继续，目标 PR #3 → main。通知页应用扫描改为仅打开选择器时在 IO 线程执行、短时缓存及懒列表；“检查环境”在缺执行权限时仍可点击，拒绝或不弹窗时提供系统 App 权限入口，返回自动重查。
+- 一键安装不再提前要求模型 Key；自动准备 Python、安装或复用原生 Hermes、配置手机接口，再进入模型设置。模型设置支持目标 Hermes 的 API Key 服务、订阅账号（复用设备码流程或带 HERMES_HOME 的 CLI 登录）、命名自定义端点及已有 Ollama／LM Studio／llama.cpp 接口。本机保存后启动、验连并等待正式连接完成才进入聊天，等待不持有运行锁，避免与自动恢复互相等待。不同连接不会自动复制密钥，同一配置目录／外部 CLI 全局账号的共享边界需如实说明。
+- `assets/providers/settings.py` 在 Hermes 自带 Python 下运行；API Key 通过 SSH stdin 或 Termux 命令输入传入，现有 Key／token 不回到手机；修改前保留首次私有备份，损坏 YAML 不覆盖。账号授权的后台工作进程脱离命令桥，私有状态文件保存授权码和状态；不持有 stdout 或配置锁，具有取消检查。详见 [模型设置与部署](docs/model-settings.md)。
+- 用户已确认：按正常原生 Termux 方式开发，不新增 proot/Linux 兼容层；本机与远程模型设置均需支持，优先复用 Hermes 已有订阅登录。不得把模拟授权或云端测试描述成真机授权成功。
+- 验证：完整桌面套件报告 237 项、0 失败，221 项实际通过，16 项真实 Hermes／OpenSSH IT 未配置未执行；28 项 Python 测试通过，其中 4 项使用真实上游源码及临时配置，账号授权仍为假服务商流程。上游核对基线为 edfa1c2a135532a8b64f7825c0ac0af6cfe73d4d。App 与 Android 自检 APK 构建通过，相关浅／深色、账号授权与 Termux 缺权限截图已检查。没有 adb 设备，vivo 冷启动耗时、执行授权、arm64 安装、跨 App 返回、真实账号授权及首条回复均未实测。交付留档为 `/workspace/hermes-cloud/releases/0.13.2-dev`，安装包复制到 `/workspace/shared/downloads`；发布结果以 GitHub 实际状态为准。
+- 最终模型清单修复与授权码文案调整后，10 项相关桌面回归、28 项 Python 回归及 App／Android 自检构建再次通过；新截图已复查。APK SHA-256 为 272420beb2086a8955d8679684ec623900cb92f1f0d508f9260a7232f6a96099，证书仍为 d985fcaf…db1dc7，code 39，可覆盖同签名旧包。
+
+### 0.13.1 引导整理记录
+
+- 上一轮为 **0.13.1-dev / code 38**，基于已合并 main 的 8f78c69，独立工作区 `/workspace/hermes-easy-setup`，分支 `codex/easy-setup`。欢迎页、本机授权、连接配置、通知助手和屏幕安装均增加直接可用的操作引导；SSH 主流程为填写地址和账号后「生成并复制配置命令 → 在服务器执行 → 检查并连接」，自动生成手机密钥、经 SSH 读取实际 Key／端口、检查通过后保存切换。详情与边界见 [简化配置说明](docs/easy-setup.md)。
 - 配置命令保留有效 API Key 和端口、备份 `.env`，只安装公钥，不发送手机私钥；SSH 模式在服务器生成 API Key。配置结果以私有文件暂存，手机只发送随机配置标识的摘要，回包匹配后才采用凭据与指纹。未保存的敏感输入不进入 SavedInstanceState；Android 复制操作标记敏感，粘贴只由按钮触发。首次终端执行、系统权限和模型服务商 Key 仍需用户操作；本轮未实现 PowerShell 引导。
 - 回归复现原有任务操作回包覆盖后续状态的问题，补了按连接／任务串行提交及删除确认保护，并增加可控延迟回包测试；工具集先发布功能标记再发布列表。
 - 最终验证：桌面套件 228 项报告、212 项实际通过、0 失败，16 项真实 Hermes／OpenSSH IT 无环境未执行；另 17 项 Python 运行与配置测试通过。App 和 Android 自检 APK 构建成功；浅／深色、新手连接、Termux、通知与屏幕安装提示截图已检查。没有 adb 设备，真实服务器、Android 授权／剪贴板／跨应用恢复与 macOS 尚未实测。签名与旧包一致，APK SHA-256 为 6dabb234ac1457399db00192d17b37319de0e04c9274eb9917db4a6fba4f83a2；留档在 `/workspace/hermes-cloud/releases/0.13.1-dev`，下载包在 `/workspace/shared/downloads/hermes-mobile-0.13.1-dev.apk`。图片恢复、乐观置顶等旧测试改为等待实际异步结果或使用受控回包时机，保留原断言；最终整套串行通过。
@@ -154,7 +163,7 @@ gradle test                        # 单元 + 界面 + 集成测试（没设 HER
 ## 接下来的计划
 
 用户定的方向（2026-10）：集成 Termux 一键安装本地 Hermes，然后做可选扩展（智能家居、ADB 操作手机、本地 Chromium、读取通知）和“越用越懂你”。
-版本已重新安排，拆分、做法、风险、验证方式见 [docs/roadmap.md](docs/roadmap.md)。通知助手及工作过程已纳入 0.12；0.13 仅有隔离工作区内的运行模块草稿，其它阶段仍属计划。
+版本已重新安排，拆分、做法、风险、验证方式见 [docs/roadmap.md](docs/roadmap.md)。通知助手及工作过程已纳入 0.12；0.13 已接入外部 Termux 运行模块，当前引导与模型设置进展见本文顶部，其它阶段仍属计划。
 
 ## 没做完 / 待确认
 

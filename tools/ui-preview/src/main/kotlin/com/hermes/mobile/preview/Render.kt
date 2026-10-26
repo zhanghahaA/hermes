@@ -95,6 +95,10 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("53-model-providers", frames = 16) { _, _ -> ModelSettingsPreview("openrouter") },
+    Scene("53b-model-local-dark", dark = true, frames = 16) { _, _ -> ModelSettingsPreview("local") },
+    Scene("53c-model-account", frames = 16) { _, _ -> ModelSettingsPreview("openai-codex") },
+    Scene("53d-termux-permission") { _, _ -> RuntimePreview(true, permission = false) },
     Scene("52-quick-ssh") { repo, _ -> ConnectionEditorScreen(repo, null, "Ssh", onClose = {}) },
     Scene("52b-quick-ssh-dark", dark = true) { repo, _ -> ConnectionEditorScreen(repo, null, "Ssh", onClose = {}) },
     Scene("52c-quick-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
@@ -457,7 +461,7 @@ fun main(args: Array<String>) {
 
 /** 独立假后端，只展示运行中心布局，不执行 Android 命令。 */
 @Composable
-private fun RuntimePreview(ready: Boolean) {
+private fun RuntimePreview(ready: Boolean, permission: Boolean = ready) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val manager = remember {
         com.hermes.mobile.data.local.LocalRuntimeManager(scope, object : com.hermes.mobile.data.local.LocalRuntimeBackend {
@@ -466,7 +470,7 @@ private fun RuntimePreview(ready: Boolean) {
             override val hermesInstallWarning = com.hermes.mobile.data.local.TermuxRuntimeBackend.PackageWarning
             override val initializationCommand = com.hermes.mobile.data.local.TermuxRuntimeBackend.EnableExternalApps
             override fun environment() = com.hermes.mobile.data.local.RuntimeEnvironment(
-                installed = ready, compatible = ready, permission = ready, arm64 = true,
+                installed = ready, compatible = ready, permission = permission, arm64 = true,
                 freeBytes = 4L * 1024 * 1024 * 1024, viewerInstalled = ready, version = if (ready) "0.118.3" else "",
             )
             override suspend fun execute(request: com.hermes.mobile.data.local.RuntimeRequest, progress: (String) -> Unit) =
@@ -477,6 +481,30 @@ private fun RuntimePreview(ready: Boolean) {
         })
     }
     com.hermes.mobile.ui.settings.LocalRuntimeScreen(manager, {})
+}
+
+/** 配置界面的固定演示数据，不连接真实模型或账号。 */
+@Composable
+private fun ModelSettingsPreview(provider: String) {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val manager = remember(provider) {
+        val snapshot = com.hermes.mobile.data.providers.ModelSettingsSnapshot(
+            providers = listOf(
+                com.hermes.mobile.data.providers.ModelProvider("openrouter", "OpenRouter", apiKey = true),
+                com.hermes.mobile.data.providers.ModelProvider("openai-codex", "ChatGPT / Codex 订阅账号", flow = "device_code"),
+                com.hermes.mobile.data.providers.ModelProvider("custom", "自定义端点", apiKey = true),
+                com.hermes.mobile.data.providers.ModelProvider("local", "本地模型")), provider = provider,
+            model = if (provider == "openrouter") "按服务商提供的名称填写" else "",
+            baseUrl = if (provider == "local") "http://127.0.0.1:11434/v1" else "")
+        val login = if (provider == "openai-codex") com.hermes.mobile.data.providers.AccountLogin("a".repeat(32), provider,
+            "pending", "DEMO-ONLY", "https://example.invalid/authorize", 9_999_999_999) else null
+        com.hermes.mobile.data.providers.ModelSettingsManager(scope, "fixture") { _, _ ->
+            com.hermes.mobile.data.providers.ModelSettingsManager.Receipt + kotlinx.serialization.json.Json.encodeToString(
+                com.hermes.mobile.data.providers.ModelSettingsResponse.serializer(),
+                com.hermes.mobile.data.providers.ModelSettingsResponse(snapshot = snapshot, login = login))
+        }
+    }
+    com.hermes.mobile.ui.settings.ModelSettingsContent(manager, "这台手机 · 演示", {})
 }
 
 /** 液态玻璃对比用：彩色内容上放 Tab 栏和输入栏，看通透程度。 */

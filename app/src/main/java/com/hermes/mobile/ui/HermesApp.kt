@@ -41,6 +41,7 @@ import com.hermes.mobile.ui.welcome.WelcomeScreen
 import kotlinx.coroutines.launch
 
 data object MainRoute
+data class ModelSettingsRoute(val connectionId: String?)
 data object LocalRuntimeRoute
 data object WelcomeRoute
 data object NotificationAssistantRoute
@@ -118,10 +119,16 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 onOpenRoom = { navigator.push(RoomRoute(it)) },
                 onOpenNotificationAssistant = { navigator.push(NotificationAssistantRoute) },
                 onOpenLocalRuntime = { navigator.push(LocalRuntimeRoute) },
+                onOpenModelSettings = { navigator.push(ModelSettingsRoute(repository.activeConnectionId.value)) },
             )
             LocalRuntimeRoute -> repository.localRuntime?.let {
-                com.hermes.mobile.ui.settings.LocalRuntimeScreen(it, onBack = navigator::pop)
+                com.hermes.mobile.ui.settings.LocalRuntimeScreen(it, onBack = navigator::pop,
+                    onConfigureModels = { navigator.push(ModelSettingsRoute(com.hermes.mobile.data.local.LocalRuntimeManager.ConnectionId)) },
+                    onConnected = { repository.createSession()?.let { id -> navigator.push(ChatRoute(id), clearAboveRoot = true) } })
             }
+            is ModelSettingsRoute -> com.hermes.mobile.ui.settings.ModelSettingsScreen(repository, route.connectionId, navigator::pop,
+                onEditConnection = { navigator.push(ConnectionEditRoute(it)) },
+                onConnected = { repository.createSession()?.let { id -> navigator.push(ChatRoute(id), clearAboveRoot = true) } })
             NotificationAssistantRoute -> repository.notificationAssistant?.let {
                 com.hermes.mobile.ui.settings.NotificationAssistantScreen(repository, it, onBack = navigator::pop)
             }

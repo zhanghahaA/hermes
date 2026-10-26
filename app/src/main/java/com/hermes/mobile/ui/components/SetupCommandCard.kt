@@ -13,7 +13,7 @@ import com.hermes.mobile.ui.theme.CodeTextStyle
 /** 命令默认收起；复制后直接告诉用户在哪里执行，不要求理解代码。 */
 @Composable
 fun SetupCommandCard(title: String, destination: String, command: String, sensitive: Boolean = false,
-    copyLabel: String = "复制命令", next: String = "粘贴后按回车，完成后回到 Hermes。", onCopied: () -> Unit = {}) {
+    copyLabel: String = "复制命令", next: String = "粘贴后按回车，完成后回到 Hermes。", contentName: String = "命令", onCopied: () -> Unit = {}) {
     val copy = rememberTextCopier()
     val message = LocalShowMessage.current
     var expanded by remember(command) { mutableStateOf(false) }
@@ -24,7 +24,7 @@ fun SetupCommandCard(title: String, destination: String, command: String, sensit
             Text(destination, style = MaterialTheme.typography.bodyMedium)
             Button(onClick = { copy(command, sensitive); copied = true; message("已复制。$destination"); onCopied() }) { Text(copyLabel) }
             if (copied) Text("已复制 · $next", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起命令" else "查看命令内容") }
+            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起$contentName" else "查看${contentName}内容") }
             if (expanded) SelectionContainer { Text(command, style = CodeTextStyle) }
         }
     }

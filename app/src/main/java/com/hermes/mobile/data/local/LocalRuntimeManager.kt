@@ -74,7 +74,7 @@ class LocalRuntimeManager(
     }
 
     fun inspect() = operation("正在检查运行环境") {
-        execute(RuntimeRequest(RuntimeAction.Inspect))
+        withTimeout(25_000) { execute(RuntimeRequest(RuntimeAction.Inspect)) }
         mutable.update { it.copy(message = "环境检查完成") }
     }
 
@@ -87,6 +87,20 @@ class LocalRuntimeManager(
         mutable.update { it.copy(message = "${label(request.action)}完成") }
     }
 
+    /** 安装不再依赖模型 Key；先完成安装与手机接口配置，再由设置页配置提供方。 */
+    fun install(channel: ReleaseChannel = ReleaseChannel.Stable) = operation("正在安装本机 Hermes") {
+        check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
+        execute(RuntimeRequest(RuntimeAction.Prepare))
+        execute(RuntimeRequest(RuntimeAction.InstallHermes, channel = channel, acceptExperimental = true))
+        execute(RuntimeRequest(RuntimeAction.ConfigureHermes))
+        mutable.update { it.copy(message = "Hermes 已安装。下一步配置模型提供方，再启动并连接。") }
+    }
+
+    suspend fun modelSettings(program: String, input: String): String = mutex.withLock {
+        refreshEnvironment()
+        withTimeout(90_000) { backend.modelSettings(program, input) }
+    }
+
     fun deploy(model: LocalModelSetup, channel: ReleaseChannel, acceptExperimental: Boolean) = operation("正在准备本机 Hermes") {
         backend.hermesInstallWarning?.let { check(acceptExperimental) { it } }
         check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
@@ -97,6 +111,9 @@ class LocalRuntimeManager(
         connection.verifyAndActivate()
         mutable.update { it.copy(message = "本机连接检查通过，已切换到「这台手机」") }
     }
+
+    /** 切换后的连接恢复可能再次调用 ensureRunning；必须在操作锁释放后等待，避免互相等待。 */
+    suspend fun awaitConnected() = connection.awaitActivated()
 
     fun connect() = operation("正在检查本机连接") {
         execute(RuntimeRequest(RuntimeAction.StartHermes))

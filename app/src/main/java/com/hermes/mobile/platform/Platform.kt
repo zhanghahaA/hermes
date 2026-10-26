@@ -336,3 +336,9 @@ fun rememberTextReader(): () -> String? {
         clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString()
     } }
 }
+
+@androidx.compose.runtime.Composable
+fun rememberModelSettingsProgram(): String {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    return androidx.compose.runtime.remember(context) { context.assets.open("providers/settings.py").bufferedReader().use { it.readText() } }
+}

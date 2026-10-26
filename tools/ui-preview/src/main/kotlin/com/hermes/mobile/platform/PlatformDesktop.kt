@@ -86,3 +86,8 @@ fun appVersion(): String = "预览"
 
 @Composable
 fun rememberShareText(): (title: String, text: String) -> Unit = { _, _ -> }
+
+@Composable
+fun rememberModelSettingsProgram(): String = androidx.compose.runtime.remember {
+    requireNotNull(DesktopSetupClipboard.javaClass.getResourceAsStream("/providers/settings.py")).bufferedReader().use { it.readText() }
+}
