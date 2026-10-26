@@ -9,26 +9,30 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.local.*
 import com.hermes.mobile.platform.rememberRuntimeControls
 import com.hermes.mobile.platform.rememberTextFilePicker
+import com.hermes.mobile.ui.components.SetupCommandCard
+import kotlinx.coroutines.launch
 
 @Composable
-fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
+fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfigureModels: () -> Unit = {}, onConnected: () -> Unit = {}) {
     val state by manager.state.collectAsState()
     val controls = rememberRuntimeControls(manager::refreshEnvironment)
-    @Suppress("DEPRECATION") val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
     var confirmation by remember { mutableStateOf<RuntimeRequest?>(null) }
     var editing by remember { mutableStateOf<RuntimeAction?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    var openingChat by remember { mutableStateOf(false) }
     val env = state.environment
     val snapshot = state.snapshot
-    val ready = env.blockers.isEmpty() && !state.busy
+    val ready = env.blockers.isEmpty() && !state.busy && !openingChat
     LaunchedEffect(manager) { manager.refreshEnvironment() }
+    LaunchedEffect(env.installed, env.permission) {
+        if (env.blockers.isEmpty() && !state.checked && !state.busy) manager.inspect()
+    }
     Scaffold(topBar = { TopAppBar(title = { Text("本机运行与服务") }, navigationIcon = {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回") }
     }) }) { padding ->
@@ -36,7 +40,8 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("在手机上运行 Hermes 和自己的小服务。远程聊天不需要开启本机环境。", style = MaterialTheme.typography.bodyMedium)
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("运行环境 · ${manager.backend.name}", style = MaterialTheme.typography.titleMedium)
+                Text("1 · 准备运行环境", style = MaterialTheme.typography.titleMedium)
+                Text(manager.backend.name, style = MaterialTheme.typography.bodySmall)
                 Text(if (env.installed) "已安装 ${env.version}" else "尚未安装")
                 env.blockers.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (!env.enoughSpace) Text("安装前请至少预留 2 GB 空间", color = MaterialTheme.colorScheme.error)
@@ -44,35 +49,54 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
                     if (!env.installed) OutlinedButton(onClick = controls.downloadTermux) { Text("下载 Termux") }
                     else {
                         OutlinedButton(onClick = controls.openTermux) { Text("打开 Termux") }
-                        if (!env.permission) OutlinedButton(onClick = controls.requestPermission) { Text("授予执行权限") }
+                        if (!env.permission) {
+                            OutlinedButton(onClick = controls.requestPermission) { Text("授予执行权限") }
+                            Text("没有弹出授权窗口？打开系统权限设置 → 权限 → 其他权限，允许在 Termux 中执行命令，然后返回此页。", style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = controls.permissionSettings) { Text("打开系统权限设置") }
+                        }
                         manager.backend.initializationCommand?.let { command ->
-                            Text("首次还需在 Termux 允许外部应用。原版 Termux 暂需复制下面的初始化命令，粘贴到 Termux 后运行一次；无需自己编写代码。", style = MaterialTheme.typography.bodySmall)
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(command)) }) { Text("复制首次初始化命令") }
+                            SetupCommandCard("首次只做一次：允许 Hermes 管理服务", "打开 Termux 后，在输入区域长按 → 粘贴 → 按回车。",
+                                command, copyLabel = "复制并打开 Termux", next = "完成后返回本页授权执行权限，App 会自动检查；然后点一键安装。", onCopied = controls.openTermux)
                         }
                     }
                     TextButton(onClick = controls.batterySettings) { Text("查看后台与电池设置") }
                 }
-                Button(onClick = { manager.inspect() }, enabled = ready) { Text("检查环境") }
-                OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.Prepare) }, enabled = ready) { Text("准备 Python 服务环境") }
+                Button(onClick = {
+                    manager.refreshEnvironment()
+                    if (manager.state.value.environment.installed && !manager.state.value.environment.permission) controls.requestPermission()
+                    else manager.inspect()
+                }, enabled = !state.busy) { Text("检查环境") }
+                if (!snapshot.toolsReady) OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.Prepare) }, enabled = ready) { Text("检查并准备环境") }
+                else Text("环境已就绪，继续下面的部署。", color = MaterialTheme.colorScheme.primary)
+                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(state.message, color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             } }
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("这台手机的 Hermes", style = MaterialTheme.typography.titleMedium)
+                Text("2 · 部署并连接 Hermes", style = MaterialTheme.typography.titleMedium)
                 Text(if (!state.checked) "尚未检查" else if (!snapshot.hermesInstalled) "尚未安装" else if (snapshot.hermesRunning) "进程运行中" else "已安装，进程未运行")
                 manager.backend.hermesInstallWarning?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                Button(onClick = { editing = RuntimeAction.InstallHermes }, enabled = ready) { Text("部署本机 Hermes（实验）") }
+                Button(onClick = { editing = RuntimeAction.InstallHermes }, enabled = ready) { Text("一键安装 Hermes") }
                 if (snapshot.hermesInstalled) {
-                    OutlinedButton(onClick = { editing = RuntimeAction.ConfigureHermes }, enabled = ready && snapshot.toolsReady) { Text("配置模型与本机连接") }
-                    Button(onClick = { manager.connect() }, enabled = ready && snapshot.configured) { Text("启动并连接聊天") }
+                    OutlinedButton(onClick = onConfigureModels, enabled = ready && snapshot.toolsReady) { Text("配置模型与提供方") }
+                    Text("安装完成后，在 App 内配置账号或模型密钥，再点「启动并连接聊天」。", style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = { openingChat = true; scope.launch {
+                        try {
+                            manager.connect().join()
+                            if (!manager.state.value.failed) { manager.awaitConnected(); onConnected() }
+                        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                        catch (_: Exception) { error = "本机连接尚未就绪，请检查运行状态后重试。" }
+                        finally { openingChat = false }
+                    } }, enabled = ready && snapshot.configured) { Text("启动并连接聊天") }
                     RuntimeButton(manager, RuntimeAction.StartHermes, ready && snapshot.configured)
                     RuntimeButton(manager, RuntimeAction.StopHermes, ready && snapshot.toolsReady)
                     RuntimeButton(manager, RuntimeAction.RestartHermes, ready && snapshot.configured)
                     RuntimeButton(manager, RuntimeAction.HermesLogs, ready && snapshot.toolsReady)
-                    OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.UpgradeHermes, acceptExperimental = true) }, enabled = ready) { Text("升级 Hermes（实验）") }
+                    OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.UpgradeHermes, acceptExperimental = true) }, enabled = ready) { Text("升级 Hermes") }
                     TextButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.RemoveHermes) }, enabled = ready && snapshot.toolsReady) { Text("卸载 Hermes 软件包") }
                 }
             } }
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("自己的服务", style = MaterialTheme.typography.titleMedium)
+                Text("可选 · 自己的服务", style = MaterialTheme.typography.titleMedium)
                 Text("导入你信任的 Python 程序，或添加只监听本机的反向代理。服务共享 Termux 的数据访问权限，虚拟环境不是安全沙箱。", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = { editing = RuntimeAction.InstallService }, enabled = ready && snapshot.toolsReady) { Text("导入 Python 服务") }
                 OutlinedButton(onClick = { editing = RuntimeAction.InstallProxy }, enabled = ready && snapshot.toolsReady) { Text("添加本机反向代理") }
@@ -86,7 +110,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
                 }
             } }
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("桌面浏览器 · X11 + Chromium", style = MaterialTheme.typography.titleMedium)
+                Text("可选 · 桌面浏览器", style = MaterialTheme.typography.titleMedium)
                 Text("使用独立的 Termux:X11 显示窗口；只有打开浏览器时才启动。当前是浏览器启动与显示，尚不包含 Hermes 自动操作网页。", style = MaterialTheme.typography.bodySmall)
                 if (!env.viewerInstalled && manager.backend.externalApps) OutlinedButton(onClick = controls.downloadViewer) { Text("下载 Termux:X11") }
                 OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.InstallBrowser) }, enabled = ready) { Text("安装浏览器配套包") }
@@ -110,7 +134,12 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit) {
         }) },
         confirmButton = { TextButton(onClick = { manager.perform(request); confirmation = null }) { Text("确认并继续") } },
         dismissButton = { TextButton(onClick = { confirmation = null }) { Text("取消") } }) }
-    editing?.let { action -> RuntimeEditor(action, manager, onClose = { editing = null }, onError = { error = it }) }
+    editing?.let { action -> RuntimeEditor(action, manager, onClose = { editing = null }, onError = { error = it }, onInstall = { channel ->
+        scope.launch {
+            manager.install(channel).join()
+            if (!manager.state.value.failed && manager.state.value.snapshot.hermesInstalled) onConfigureModels()
+        }
+    }) }
     error?.let { message -> AlertDialog(onDismissRequest = { error = null }, title = { Text("请检查输入") }, text = { Text(message) },
         confirmButton = { TextButton(onClick = { error = null }) { Text("知道了") } }) }
 }
@@ -121,7 +150,7 @@ private fun RuntimeButton(manager: LocalRuntimeManager, action: RuntimeAction, e
 }
 
 @Composable
-private fun RuntimeEditor(action: RuntimeAction, manager: LocalRuntimeManager, onClose: () -> Unit, onError: (String) -> Unit) {
+private fun RuntimeEditor(action: RuntimeAction, manager: LocalRuntimeManager, onClose: () -> Unit, onError: (String) -> Unit, onInstall: (ReleaseChannel) -> Unit) {
     var id by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
@@ -130,7 +159,6 @@ private fun RuntimeEditor(action: RuntimeAction, manager: LocalRuntimeManager, o
     var port by remember { mutableStateOf("8080") }
     var requirements by remember { mutableStateOf("") }
     var source by remember { mutableStateOf<String?>(null) }
-    var accepted by remember { mutableStateOf(false) }
     var channel by remember { mutableStateOf(ReleaseChannel.Stable) }
     val picker = rememberTextFilePicker { if (it != null) source = it }
     val service = action in setOf(RuntimeAction.InstallService, RuntimeAction.InstallProxy)
@@ -149,25 +177,18 @@ private fun RuntimeEditor(action: RuntimeAction, manager: LocalRuntimeManager, o
                     Text("反向代理仅监听本机；本版不开放公网入口。")
                 }
             } else {
-                Text("在独立的本机配置中保存模型和连接凭据。已有用户目录不自动覆盖。配置前请停止本机 Hermes。")
-                OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, singleLine = true)
-                OutlinedTextField(key, { key = it }, label = { Text("模型 API Key") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-                OutlinedTextField(url, { url = it }, label = { Text("模型接口地址") }, singleLine = true)
-                if (action == RuntimeAction.ConfigureHermes) Text("模型和 Key 同时留空时，保留现有模型设置，仅配置本机连接。")
-                if (action == RuntimeAction.InstallHermes) {
-                    Row { ReleaseChannel.entries.forEach { option -> FilterChip(channel == option, { channel = option }, label = { Text(option.id) }) } }
-                    Text(manager.backend.hermesInstallWarning.orEmpty())
-                    Row { Checkbox(accepted, { accepted = it }); Text("了解实验安装可能失败，同意准备软件包和本机配置") }
-                }
+                Text("自动准备依赖、安装 Hermes 并创建手机连接接口。安装后再配置提供方，无需现在填写模型密钥。已有可用 Hermes 会直接识别，配置与会话保留。")
+                Row { ReleaseChannel.entries.forEach { option -> FilterChip(channel == option, { channel = option }, label = { Text(option.id) }) } }
+                Text(manager.backend.hermesInstallWarning.orEmpty())
             }
         }
-    }, confirmButton = { TextButton(enabled = action != RuntimeAction.InstallHermes || accepted, onClick = {
+    }, confirmButton = { TextButton(onClick = {
         runCatching {
             when (action) {
                 RuntimeAction.InstallService -> manager.perform(RuntimeRequest(action, service = PythonService(id, name,
                     source ?: error("请先选择 Python 程序"), requirements.lines().map(String::trim).filter(String::isNotEmpty))))
                 RuntimeAction.InstallProxy -> manager.perform(RuntimeRequest(action, proxy = ReverseProxyService(id, name, port.toIntOrNull() ?: 0, url)))
-                RuntimeAction.InstallHermes -> manager.deploy(LocalModelSetup(model, key, url), channel, accepted)
+                RuntimeAction.InstallHermes -> onInstall(channel)
                 else -> manager.perform(RuntimeRequest(action, model = if (model.isBlank() && key.isBlank()) null else LocalModelSetup(model, key, url)))
             }
         }.onSuccess { key = ""; onClose() }.onFailure { onError(it.message ?: "输入无效") }

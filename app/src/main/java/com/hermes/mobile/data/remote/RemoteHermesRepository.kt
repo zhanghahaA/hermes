@@ -298,6 +298,24 @@ class RemoteHermesRepository(
         storeConnection(profile, apiKey, sshSecret, activate = true)
     }
 
+    override suspend fun readConnectionSetup(profile: ConnectionProfile, sshSecret: String?, nonce: String): com.hermes.mobile.data.setup.ConnectionSetup.Result? {
+        require(profile.type == ConnectionType.Ssh) { "自动获取配置需要 SSH 连接" }
+        val command = com.hermes.mobile.data.setup.ConnectionSetup.resultReadCommand(profile, nonce)
+        val auth = sshAuthOf(profile, sshSecret ?: sshSecretOf(profile.id)) ?: error("请先生成密钥或填写 SSH 密码")
+        return withContext(Dispatchers.IO) {
+            var observedHostKey: String? = null
+            SshTunnel(profile.host.trim(), profile.sshPort, checkNotNull(profile.sshUser).trim(), auth,
+                profile.port, profile.sshHostKey, { observedHostKey = it }).use { setupTunnel ->
+                setupTunnel.connect()
+                val (status, output) = setupTunnel.exec(command, timeoutSeconds = 20)
+                check(status == 0) { "还未找到本次配置结果。请以填写的 SSH 用户执行复制的命令，完成后重试；也可以粘贴配置结果。" }
+                val result = com.hermes.mobile.data.setup.ConnectionSetup.readResult(output, profile, nonce)
+                observedHostKey?.let { seenHostKeys[profile.id] = it }
+                com.hermes.mobile.data.setup.ConnectionSetup.Result(result.apiKey, result.port, setupTunnel.hostKey)
+            }
+        }
+    }
+
     override fun saveConnectionWithoutActivating(profile: ConnectionProfile, apiKey: String) {
         storeConnection(profile, apiKey, null, activate = false)
     }
@@ -1694,6 +1712,8 @@ class RemoteHermesRepository(
     private val pendingModels = ConcurrentHashMap<String, ModelOption>()
 
     /** 读 Hermes 的模型清单：只列已经配好（有 Key / 已登录）且有模型的 Provider，Hermes 当前用的排最前。 */
+    override fun refreshModels() { scope.launch { loadModels() } }
+
     private suspend fun loadModels() {
         val c = client ?: return
         if (capabilities?.endpoints?.contains("model_options") != true) return
@@ -1714,6 +1734,7 @@ class RemoteHermesRepository(
                     )
                 }
             }
+            if (client !== c) return
             _models.value = options
             serverDefaultModel = options.firstOrNull { it.note == "Hermes 默认" }?.id
             _defaultModelId.value = appDefaultModel()?.id ?: serverDefaultModel.orEmpty()
@@ -1762,9 +1783,9 @@ class RemoteHermesRepository(
     /** “新对话默认模型”：只影响从手机新建的对话（Hermes 自己的默认在服务器配置里，API 改不了）。 */
     override fun setDefaultModel(modelId: String) {
         val connection = scopeId ?: return
-        val toServerDefault = modelId == serverDefaultModel
+        val toServerDefault = modelId.isBlank() || modelId == serverDefaultModel
         persist { st -> st.copy(defaultModels = if (toServerDefault) st.defaultModels - connection else st.defaultModels + (connection to modelId)) }
-        _defaultModelId.value = modelId
+        _defaultModelId.value = if (toServerDefault) serverDefaultModel.orEmpty() else modelId
     }
 
     /** 新会话刚在服务器上建好：把草稿时选的模型（或手机上设的默认模型）锁上。 */
@@ -1831,10 +1852,11 @@ class RemoteHermesRepository(
         val c = client ?: return
         if (capabilities?.endpoints?.contains("toolsets") != true) return
         try {
-            _toolsets.value = c.toolsets().data.map {
+            val loaded = c.toolsets().data.map {
                 Toolset(it.name, it.label?.takeIf { l -> l.isNotBlank() } ?: it.name, it.description.orEmpty(), it.tools, it.enabled == true, it.configured != false)
             }
             _features.update { it + AppFeature.Toolsets }
+            _toolsets.value = loaded
         } catch (e: HermesError) {
             // 读不到就不显示
         }
@@ -1911,13 +1933,30 @@ class RemoteHermesRepository(
         _jobs.update { list -> if (list.any { it.id == job.id }) list.map { if (it.id == job.id) job.copy(runningNow = it.runningNow) else it } else list + job }
     }
 
-    private fun jobCall(what: String, rollback: List<CronJob>? = null, call: suspend HermesClient.() -> Unit) {
-        scope.launch {
+    private val jobMutationLocks = ConcurrentHashMap<String, kotlinx.coroutines.sync.Mutex>()
+
+    /** 同一任务按点击顺序提交，防止旧回包覆盖改名或把已删除任务加回列表。 */
+    private fun jobCall(what: String, lockId: String, rollback: List<CronJob>? = null,
+        applied: (JobDto?) -> Unit = ::replaceJob, call: suspend HermesClient.() -> JobDto?) {
+        val expectedClient = client
+        val expectedConnection = connectedId
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            val lock = jobMutationLocks.getOrPut("$expectedConnection:$lockId") { kotlinx.coroutines.sync.Mutex() }
+            lock.lock()
             try {
-                client?.call() ?: throw HermesError.Unreachable("未连接")
-            } catch (e: HermesError) {
-                rollback?.let { _jobs.value = it }
-                _errors.tryEmit("$what：${e.message}")
+                if (client !== expectedClient || connectedId != expectedConnection) return@launch
+                try {
+                    val target = expectedClient ?: throw HermesError.Unreachable("未连接")
+                    val result = target.call()
+                    if (client === expectedClient && connectedId == expectedConnection) applied(result)
+                } catch (e: HermesError) {
+                    if (client === expectedClient && connectedId == expectedConnection) {
+                        rollback?.let { _jobs.value = it }
+                        _errors.tryEmit("$what：${e.message}")
+                    }
+                }
+            } finally {
+                lock.unlock()
             }
         }
     }
@@ -1925,7 +1964,7 @@ class RemoteHermesRepository(
     override fun setJobEnabled(id: String, enabled: Boolean) {
         val before = _jobs.value
         _jobs.update { list -> list.map { if (it.id == id) it.copy(enabled = enabled) else it } }
-        jobCall(if (enabled) "恢复任务失败" else "暂停任务失败", before) { replaceJob(jobAction(id, if (enabled) "resume" else "pause")) }
+        jobCall(if (enabled) "恢复任务失败" else "暂停任务失败", id, before) { jobAction(id, if (enabled) "resume" else "pause") }
     }
 
     /**
@@ -1984,15 +2023,15 @@ class RemoteHermesRepository(
             put("deliver", job.deliver)
         }
         val exists = _jobs.value.any { it.id == job.id }
-        jobCall(if (exists) "保存任务失败" else "新建任务失败") {
-            replaceJob(if (exists) updateJob(job.id, fields) else createJob(fields))
+        jobCall(if (exists) "保存任务失败" else "新建任务失败", job.id.ifBlank { "new" }) {
+            if (exists) updateJob(job.id, fields) else createJob(fields)
         }
     }
 
     override fun deleteJob(id: String) {
         val before = _jobs.value
         _jobs.update { list -> list.filterNot { it.id == id } }
-        jobCall("删除任务失败", before) { deleteJob(id) }
+        jobCall("删除任务失败", id, before, applied = { _jobs.update { list -> list.filterNot { it.id == id } } }) { deleteJob(id); null }
     }
 
     // ---- 分组 ----

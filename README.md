@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.0-dev (Android versionCode 37).** Adds the local runtime/service center with external Termux and Termux:X11, Python services, local reverse proxies, and isolated notification profiles per connection. See [the 0.13 guide](docs/0.13.md). Upstream still marks its Termux package as broken, so Hermes installation is experimental. Android device flows remain unverified; no production Release has been published.
+**Current development build: 0.13.2-dev (Android versionCode 39).** Notification app discovery runs on demand in the background. Termux setup provides permission recovery and automatic rechecking, installs Hermes before asking for model credentials, and connects after configuration. Settings supports upstream account sign-in, API keys, custom endpoints, and existing local model services, with SSH management for remote Hermes. See [deployment and model settings](docs/model-settings.md) and [first connection setup](docs/easy-setup.md). Android permissions, arm64 installation, and real account authorization still require device validation; this is a development prerelease.
 
 English | [中文](README.zh-CN.md)
 

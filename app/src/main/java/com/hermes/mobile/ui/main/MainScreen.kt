@@ -73,6 +73,7 @@ fun MainScreen(
     initialTab: MainTab = MainTab.Chats,
     onOpenNotificationAssistant: () -> Unit = {},
     onOpenLocalRuntime: () -> Unit = {},
+    onOpenModelSettings: () -> Unit = {},
 ) {
     var tabIndex by rememberSaveable { mutableIntStateOf(initialTab.ordinal) }
     val tab = MainTab.entries[tabIndex]
@@ -145,6 +146,7 @@ fun MainScreen(
                             onOpenWelcome = onOpenWelcome,
                             onOpenNotificationAssistant = onOpenNotificationAssistant,
                             onOpenLocalRuntime = onOpenLocalRuntime,
+                            onOpenModelSettings = onOpenModelSettings,
                         )
                     }
                 }

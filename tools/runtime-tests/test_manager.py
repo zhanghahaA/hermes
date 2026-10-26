@@ -72,6 +72,16 @@ class RuntimeTests(unittest.TestCase):
         for name in (".env", "mobile-api-key", "config.yaml"):
             self.assertEqual(stat.S_IMODE((self.root / name).stat().st_mode), 0o600)
 
+    def test_provider_env_credentials_are_removed_from_runtime_log(self):
+        self.fake("hermes")
+        self.call("ConfigureHermes")
+        secret = "fixture-secret-" + secrets.token_hex(12)
+        with (self.root / ".env").open("a") as stream:
+            stream.write("MOBILE_PROVIDER_API_KEY='" + secret + "'\n")
+        (self.root / "logs").mkdir()
+        (self.root / "logs/hermes.log").write_text("logged credential: " + secret)
+        self.assertNotIn(secret, self.call("HermesLogs")["output"])
+
     def test_symlink_cannot_redirect_configuration(self):
         self.root.mkdir()
         outside = self.base / "outside"

@@ -9,6 +9,7 @@ interface LocalRuntimeBackend {
     val hermesInstallWarning: String? get() = null
     val initializationCommand: String? get() = null
     fun environment(): RuntimeEnvironment
+    suspend fun modelSettings(program: String, input: String): String = error("此运行环境暂不支持模型设置")
     suspend fun execute(request: RuntimeRequest, progress: (String) -> Unit): RuntimeResponse
 }
 
@@ -116,6 +117,7 @@ class RuntimeResponse(val snapshot: RuntimeSnapshot, val output: String = "", in
 interface LocalConnectionAccess {
     fun save(apiKey: String)
     suspend fun verifyAndActivate()
+    suspend fun awaitActivated() = Unit
 }
 
 /** Android Intent 桥是外部后端的私有实现；业务和界面不直接发任意 shell 命令。 */

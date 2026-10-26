@@ -1,6 +1,8 @@
 package com.hermes.mobile.ui.settings
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -34,7 +36,6 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
     val sessions by repository.sessions.collectAsState()
     val scope = rememberCoroutineScope()
     val (granted, openAccess) = rememberNotificationAccess()
-    val apps = rememberNotificationApps()
     var confirmEnable by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
@@ -57,6 +58,28 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
             verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("每个连接保存独立档案。当前连接：" + (connections.firstOrNull { it.id == active }?.name ?: "未选择") + "。切换连接后只使用该连接的授权与记录。",
                 Modifier.padding(horizontal = 20.dp), style = MaterialTheme.typography.bodyMedium)
+            if (!granted || config.packages.isEmpty() || config.target == null || !config.enabled) {
+                ElevatedCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("跟着这一步继续", style = MaterialTheme.typography.titleMedium)
+                        Text("系统授权 → 选择应用 → 指定摘要会话 → 开启。每一步都有对应按钮。", style = MaterialTheme.typography.bodySmall)
+                        Button(enabled = active != null, onClick = {
+                            when {
+                                !granted -> openAccess()
+                                config.packages.isEmpty() -> showApps = true
+                                config.target == null -> choosing = true
+                                else -> confirmEnable = true
+                            }
+                        }) { Text(when {
+                            active == null -> "请先添加并选择连接"
+                            !granted -> "去授权通知使用权"
+                            config.packages.isEmpty() -> "选择允许读取的应用"
+                            config.target == null -> "选择摘要会话"
+                            else -> "开启通知助手"
+                        }) }
+                    }
+                }
+            }
             SettingsGroup("读取与授权") {
                 SwitchRow(Icons.Rounded.Notifications, "启用通知助手", "默认关闭，随时暂停读取和发送",
                     checked = config.enabled, onCheckedChange = { if (it) confirmEnable = true else configure(config.copy(enabled = false)) })
@@ -71,7 +94,7 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
                 SettingsRow(Icons.Rounded.Forum, "固定会话", config.target?.label ?: "尚未绑定",
                     enabled = !busy && !creating, onClick = { choosing = true })
                 GroupDivider()
-                Text("绑定后切换连接或 Bot 不会改变发送目标。已有待发批次时，需先完成或清除本地记录再换目标。",
+                Text("目标属于当前连接的独立档案；切换连接会切换档案，切换 Bot 不会改固定目标。已有待发批次时，需先完成或清除记录再换会话。",
                     Modifier.padding(16.dp), style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf(15, 30, 60).forEach { minutes ->
@@ -131,10 +154,14 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
         confirmButton = { TextButton(onClick = {
             runCatching { assistant.clear() }.onFailure { error = it.message }; confirmClear = false
         }) { Text("清除") } }, dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } })
-    if (showApps) AlertDialog(onDismissRequest = { showApps = false }, title = { Text("允许读取的应用") },
-        text = { Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-            (apps.map { it.packageName to it.name } + config.packages.filter { selected -> apps.none { it.packageName == selected } }.map { it to it })
-                .forEach { (pkg, name) ->
+    if (showApps) {
+        val apps = rememberNotificationApps()
+        AlertDialog(onDismissRequest = { showApps = false }, title = { Text("允许读取的应用") },
+        text = { LazyColumn(Modifier.heightIn(max = 420.dp)) {
+            if (apps == null) item { Text("正在读取应用列表…") }
+            else if (apps.isEmpty()) item { Text("没有读取到应用，可关闭后重试；已选应用仍会保留。") }
+            val available = apps.orEmpty()
+            items(available.map { it.packageName to it.name } + config.packages.filter { selected -> available.none { it.packageName == selected } }.map { it to it }, key = { it.first }) { (pkg, name) ->
                     Row { Checkbox(checked = pkg in config.packages,
                         modifier = Modifier.semantics { contentDescription = "允许读取" + name },
                         onCheckedChange = { checked ->
@@ -142,6 +169,7 @@ fun NotificationAssistantScreen(repository: HermesRepository, assistant: Notific
                     }); Text(name, Modifier.padding(top = 12.dp)) }
                 }
         } }, confirmButton = { TextButton(onClick = { showApps = false }) { Text("完成") } })
+    }
     if (choosing) AlertDialog(onDismissRequest = { choosing = false }, title = { Text("绑定当前连接与 Bot") },
         text = { Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
             val connection = connections.firstOrNull { it.id == active }

@@ -5,6 +5,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import com.hermes.mobile.data.fake.FakeHermesRepository
@@ -48,6 +49,9 @@ class ConnectionEditorTest {
                     }
                 }
             }
+            onNodeWithText("SSH 主机").performTextInput("example.invalid")
+            onNodeWithText("用户名").performTextInput("test-user")
+            onNodeWithText("高级设置／已有密钥").performClick()
             onNodeWithText("在手机上生成新密钥").performScrollTo().performClick()
             onNodeWithText("复制公钥").performScrollTo().assertIsDisplayed()
             onNodeWithText("重新生成密钥").assertIsDisplayed()

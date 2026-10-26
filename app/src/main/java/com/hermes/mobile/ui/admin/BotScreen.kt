@@ -153,15 +153,8 @@ private fun InstallHint(status: BotScreenStatus, padding: PaddingValues) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
-            SelectionContainer {
-                Text(
-                    status.installCommand ?: "hermes computer-use screen install",
-                    style = com.hermes.mobile.ui.theme.CodeTextStyle,
-                    modifier = Modifier.padding(12.dp),
-                )
-            }
-        }
+        com.hermes.mobile.ui.components.SetupCommandCard("安装屏幕组件", "在运行 Hermes 的主机终端中，以管理员身份粘贴并执行。",
+            status.installCommand ?: "hermes computer-use screen install", next = "安装完成后返回本页刷新。")
     }
 }
 

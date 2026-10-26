@@ -75,6 +75,7 @@ fun SettingsScreen(
     onOpenWelcome: () -> Unit,
     onOpenNotificationAssistant: () -> Unit = {},
     onOpenLocalRuntime: () -> Unit = {},
+    onOpenModelSettings: () -> Unit = {},
 ) {
     val settings by repository.settings.collectAsState()
     val connections by repository.connections.collectAsState()
@@ -107,6 +108,10 @@ fun SettingsScreen(
                 .padding(top = padding.calculateTopPadding(), bottom = bottomSpace + 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
+            SettingsGroup("模型服务") {
+                SettingsRow(Icons.Rounded.AutoAwesome, "模型与提供方", "连接订阅账号、API 密钥、自定义端点和本地模型",
+                    enabled = activeId != null, onClick = onOpenModelSettings)
+            }
             SettingsGroup("连接") {
                 SettingsRow(Icons.Rounded.RocketLaunch, "本机运行与服务", "本机 Hermes、Python 服务、反向代理和 X11 浏览器",
                     enabled = repository.localRuntime != null, onClick = onOpenLocalRuntime)

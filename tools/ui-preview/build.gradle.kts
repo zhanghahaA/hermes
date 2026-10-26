@@ -7,7 +7,7 @@ plugins {
 }
 
 kotlin {
-    // 不锁定 JDK 版本：用运行 Gradle 的那个 JDK（17 及以上）
+    // 桌面图形依赖需要 JDK 21；与 CI 的桌面测试环境保持一致。
     compilerOptions {
         optIn.addAll(
             "androidx.compose.material3.ExperimentalMaterial3Api",
@@ -20,6 +20,7 @@ kotlin {
 
 sourceSets {
     main {
+        resources.srcDir("../../app/src/main/assets")
         kotlin {
             // 直接编译 app 里的界面和数据代码，只排除依赖 Android 的文件（需要替身的放在 src/main/kotlin）
             srcDir("../../app/src/main/java")

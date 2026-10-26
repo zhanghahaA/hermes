@@ -425,7 +425,8 @@ class ChatFlowTest {
         repo.sendMessage("s1", "我连接不上啊", listOf(img))
         val final = repo.chatItems("s1").await("对齐") { list ->
             list.texts().any { it.second == "收到 1 张图片" } &&
-                list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+                list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") } &&
+                list.filterIsInstance<ChatItem.Message>().lastOrNull { it.role == Role.User }?.images?.map { it.source } == listOf(img.path)
         }
         val mine = final.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
         assertEquals("我连接不上啊", mine.text, "系统提示不显示")

@@ -1,5 +1,7 @@
 package com.hermes.mobile.data.remote
 
+import java.util.concurrent.TimeUnit
+
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -28,6 +30,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
     // 测试线程遍历时服务器线程还在写：用写时复制的列表，遍历不会出错
     val requests: MutableList<RecordedRequest> = java.util.concurrent.CopyOnWriteArrayList()
     var failPatch = false
+    @Volatile var patchFailureGate: java.util.concurrent.CountDownLatch? = null
     /** PATCH 过 archived=true 的会话：列表里就带上 archived，客户端不该再显示。 */
     val archivedIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     /** 模拟有的 Hermes 模式：聊天记录里图片只记一个 [screenshot]，不记路径。 */
@@ -164,6 +167,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
 
     /** 模拟 /v1/skills 自身出错（某些 Hermes 版本就是这样）。 */
     @Volatile var skillsBroken = false
+    /** 可控地延后任务操作回包，验证连续点击的请求顺序。 */
+    @Volatile var jobActionDelayMillis: Long = 0
 
     val modelLocks = java.util.concurrent.ConcurrentHashMap<String, String>()
     /** 定时任务（JSON 字段，按 Hermes 的样子）。 */
@@ -298,8 +303,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                     cronSessions += """{"id":"cron_$id","source":"cron","title":"${job["name"]} · Oct 18 10:55","started_at":1792316103,"last_active":1792316103,"preview":"[IMPORTANT: You are running as a scheduled cron job. DELIVERY: Your fin"}"""
                 }
                 when {
-                    rest.endsWith("/pause") -> { job["enabled"] = false; job["state"] = "paused"; json("""{"job":${jobJson(job)}}""") }
-                    rest.endsWith("/resume") -> { job["enabled"] = true; job["state"] = "scheduled"; json("""{"job":${jobJson(job)}}""") }
+                    rest.endsWith("/pause") -> { job["enabled"] = false; job["state"] = "paused"; json("""{"job":${jobJson(job)}}""").setBodyDelay(jobActionDelayMillis, TimeUnit.MILLISECONDS) }
+                    rest.endsWith("/resume") -> { job["enabled"] = true; job["state"] = "scheduled"; json("""{"job":${jobJson(job)}}""").setBodyDelay(jobActionDelayMillis, TimeUnit.MILLISECONDS) }
                     rest.endsWith("/run") -> { pendingJobRuns += id; json("""{"job":${jobJson(job)}}""") }
                     request.method == "PATCH" -> {
                         val obj = HermesJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
@@ -453,7 +458,10 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 json("""{"object":"hermes.session","session":{"id":"$id","source":"api_server","title":$title,"started_at":1760009000.0}}""")
             }
             path.startsWith("/api/sessions/") && request.method == "PATCH" ->
-                if (failPatch) error(500, "database is locked") else {
+                if (failPatch) {
+                    patchFailureGate?.await(5, TimeUnit.SECONDS)
+                    error(500, "database is locked")
+                } else {
                     val id = path.removePrefix("/api/sessions/")
                     val body = request.body.clone().readUtf8()
                     if ("\"archived\":true" in body) archivedIds += id

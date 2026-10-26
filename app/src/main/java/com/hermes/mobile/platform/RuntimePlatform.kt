@@ -91,7 +91,7 @@ class AndroidTermuxTransport(context: Context) : TermuxTransport {
                 .putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
                 .putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
                 .putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", callback)
-                .putExtra("com.termux.RUN_COMMAND_BACKGROUND_CUSTOM_LOG_LEVEL", 0)
+                .putExtra("com.termux.RUN_COMMAND_BACKGROUND_CUSTOM_LOG_LEVEL", "0")
             ContextCompat.startForegroundService(context, command)
         } catch (_: Exception) {
             RuntimeCallbacks.finish(id, TermuxCommandResult(-1, stderr = "无法唤起 Termux，请检查安装、执行权限和后台限制"))
@@ -118,7 +118,14 @@ fun rememberRuntimeControls(refresh: () -> Unit): RuntimeControls {
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh() }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        currentRefresh.value()
+        // 系统不再弹窗、或 Termux 晚于本 App 安装时，给出始终可达的手动授权入口。
+        if (!granted) runCatching {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + context.packageName)))
+        }
+    }
     fun open(intent: Intent) { runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
     return RuntimeControls(
         requestPermission = { permission.launch("com.termux.permission.RUN_COMMAND") },
@@ -126,5 +133,6 @@ fun rememberRuntimeControls(refresh: () -> Unit): RuntimeControls {
         downloadTermux = { open(Intent(Intent.ACTION_VIEW, Uri.parse(TermuxRuntimeBackend.DownloadTermux))) },
         downloadViewer = { open(Intent(Intent.ACTION_VIEW, Uri.parse(TermuxRuntimeBackend.DownloadX11))) },
         batterySettings = { open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) },
+        permissionSettings = { open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName))) },
     )
 }

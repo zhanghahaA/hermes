@@ -9,6 +9,30 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 
 val supportsDynamicColor: Boolean get() = true
 
+/** 可检查的桌面剪贴板替身；Android 的系统隐私预览仍需设备验证。 */
+object DesktopSetupClipboard {
+    var text: String = ""
+    var sensitive: Boolean = false
+}
+
+@Composable
+fun rememberTextCopier(): (String, Boolean) -> Unit {
+    @Suppress("DEPRECATION") val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    return { text, sensitive ->
+        DesktopSetupClipboard.text = text
+        DesktopSetupClipboard.sensitive = sensitive
+        clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+    }
+}
+
+@Composable
+fun rememberConnectionSetupProgram(): String = androidx.compose.runtime.remember {
+    requireNotNull(DesktopSetupClipboard.javaClass.getResourceAsStream("/setup/configure.py")).bufferedReader().use { it.readText() }
+}
+
+@Composable
+fun rememberTextReader(): () -> String? = { DesktopSetupClipboard.text.takeIf(String::isNotBlank) }
+
 @Suppress("UNUSED_PARAMETER")
 @Composable
 fun dynamicColorScheme(dark: Boolean): ColorScheme? = null
@@ -62,3 +86,8 @@ fun appVersion(): String = "预览"
 
 @Composable
 fun rememberShareText(): (title: String, text: String) -> Unit = { _, _ -> }
+
+@Composable
+fun rememberModelSettingsProgram(): String = androidx.compose.runtime.remember {
+    requireNotNull(DesktopSetupClipboard.javaClass.getResourceAsStream("/providers/settings.py")).bufferedReader().use { it.readText() }
+}

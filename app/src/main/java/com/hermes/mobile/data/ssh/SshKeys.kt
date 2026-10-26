@@ -22,7 +22,9 @@ import java.security.SecureRandom
 import java.util.Base64
 
 /** 一对 SSH 密钥：私钥是 OpenSSH 格式的文本，公钥是一行 `ssh-ed25519 AAAA... 注释`，放进服务器的 authorized_keys。 */
-data class SshKeyPair(val privateKey: String, val publicKey: String)
+data class SshKeyPair(val privateKey: String, val publicKey: String) {
+    override fun toString() = "SshKeyPair(privateKey=[已隐藏], publicKey=$publicKey)"
+}
 
 object SshKeys {
     /** 在手机上生成 Ed25519 密钥。私钥不离开手机（加密保存），只需要把公钥加到服务器上。 */

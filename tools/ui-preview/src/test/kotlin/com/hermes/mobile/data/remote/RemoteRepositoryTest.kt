@@ -223,15 +223,19 @@ class RemoteRepositoryTest {
         assertEquals("""{"title":"新标题"}""", patch.body.readUtf8())
 
         s.failPatch = true
-        val errors = mutableListOf<String>()
-        val job = scope.launch { repo.errors.collect { errors += it } }
-        Thread.sleep(100)
-        repo.togglePin("s1")
-        assertTrue(repo.sessions.value.first { it.id == "s1" }.pinned)
-        Thread.sleep(800)
-        assertFalse(repo.sessions.value.first { it.id == "s1" }.pinned, "服务器失败后改回去")
-        assertTrue(errors.any { "database is locked" in it }, errors.toString())
-        job.cancel()
+        val gate = java.util.concurrent.CountDownLatch(1)
+        s.patchFailureGate = gate
+        val error = kotlinx.coroutines.CompletableDeferred<String>()
+        val job = scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { repo.errors.collect { error.complete(it) } }
+        try {
+            repo.togglePin("s1")
+            assertTrue(repo.sessions.value.first { it.id == "s1" }.pinned)
+            gate.countDown()
+            val message = runBlocking { withTimeout(5_000) { error.await() } }
+            runBlocking { withTimeout(5_000) { repo.sessions.first { rows -> !rows.first { it.id == "s1" }.pinned } } }
+            assertFalse(repo.sessions.value.first { it.id == "s1" }.pinned, "服务器失败后改回去")
+            assertTrue("database is locked" in message, message)
+        } finally { gate.countDown(); job.cancel() }
     }
 
     @Test
