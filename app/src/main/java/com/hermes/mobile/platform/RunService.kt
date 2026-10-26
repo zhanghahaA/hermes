@@ -68,8 +68,8 @@ class RunService : Service() {
 
         private fun notification(context: Context, count: Int) = NotificationCompat.Builder(context, ReplyNotifier.RunningChannel)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Hermes 正在回复…")
-            .setContentText(if (count > 1) "$count 个对话在进行中" else "回复到了会通知你")
+            .setContentTitle("Hermes 正在处理任务…")
+            .setContentText(if (count > 1) "$count 项聊天或本机操作在进行中" else "聊天或本机操作正在进行，可回 App 查看")
             .setOngoing(true)
             .setSilent(true)
             .setContentIntent(ReplyNotifier.openApp(context, null))

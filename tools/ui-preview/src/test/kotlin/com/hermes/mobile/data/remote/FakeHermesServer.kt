@@ -43,7 +43,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
      * “断线”：第一次事件流只发一半就断；“慢”：一直不结束，直到被停止。
      */
     inner class FakeRun(val id: String, val sessionId: String, val input: String, val imageShas: List<String> = emptyList()) {
-        val events = mutableListOf<String>()
+        val events = java.util.concurrent.CopyOnWriteArrayList<String>()
         var approved: String? = null
         var stopped = false
         var eventRequests = 0
@@ -62,6 +62,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
             add("run.started")
             add("reasoning.delta", "\"text\":\"SECRET-THINKING 不能显示\"")
             when {
+                "逐句" in input -> sentence("第一句。")
                 "审批" in input -> add(
                     "approval.request",
                     "\"kind\":\"approval\",\"prompt_id\":\"p1\",\"execution_generation\":3,\"command\":\"rm -rf /tmp/x\",\"description\":\"删除临时目录\",\"choices\":[\"once\",\"session\",\"always\",\"deny\"]",
@@ -77,6 +78,15 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                     complete()
                 }
             }
+        }
+
+        /** 测试主动推进下一句；两句之间保留工具等待，验证不会退回空白。 */
+        fun sentence(text: String) {
+            val encoded = kotlinx.serialization.json.JsonPrimitive(text)
+            add("message.delta", "\"delta\":$encoded")
+            add("message.interim", "\"text\":$encoded,\"already_streamed\":true")
+            add("tool.started", "\"tool\":\"terminal\",\"tool_call_id\":\"t${events.size}\",\"preview\":\"查看进度\"")
+            add("tool.completed", "\"tool\":\"terminal\"")
         }
 
         fun complete() {

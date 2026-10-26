@@ -1,15 +1,17 @@
 # Hermes Mobile (Android)
 
+**Current development build: 0.13.0-dev (Android versionCode 37).** Adds the local runtime/service center with external Termux and Termux:X11, Python services, local reverse proxies, and isolated notification profiles per connection. See [the 0.13 guide](docs/0.13.md). Upstream still marks its Termux package as broken, so Hermes installation is experimental. Android device flows remain unverified; no production Release has been published.
+
 English | [中文](README.zh-CN.md)
 
-An Android app for chatting with [Hermes Agent](https://github.com/NousResearch/hermes-agent) the way you text a friend. You only see the final replies: no chain of thought, no tool calls. When Hermes needs your approval or asks a follow-up question, a card appears in the chat for you to tap.
+An Android app for chatting with [Hermes Agent](https://github.com/NousResearch/hermes-agent). It shows final replies by default; settings let you enable streaming replies or expandable thinking and tool progress supplied by the server. When Hermes needs your approval or asks a follow-up question, a card appears in the chat for you to tap.
 
 Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to the Hermes API Server; features that the API does not cover are done over SSH using Hermes's own commands.
 
 ## Features
 
 - **Connections**: direct (LAN / Tailscale), HTTPS, **SSH tunnel** (generate a key on the phone or import one, password login, host key pinning, automatic reconnect) and **local Termux**. Each connection has a step-by-step "Test connection".
-- **Chat**: final replies only, approval and clarify cards, stop, **steer** Hermes while it is replying, resume after the network drops or the app is killed, notifications when a reply arrives in the background. Markdown rendering (tables, formulas, task lists, footnotes, and the quirks models tend to produce), in-chat search, swipe a reply to quote it, select text and ask a follow-up.
+- **Chat**: final replies by default, optional continuous streaming and collapsible server-supplied thinking/tool progress, approval and clarify cards, stop, **steer** Hermes while it is replying, resume after the network drops or the app is killed, notifications when a reply arrives in the background. Markdown rendering (tables, formulas, task lists, footnotes, and the quirks models tend to produce), in-chat search, swipe a reply to quote it, select text and ask a follow-up.
 - **Sessions**: new / fork / rename / pin / **archive** / delete, automatic titles. Sessions are grouped by Hermes **projects**; create a project, move a chat into one, or start a new chat inside it.
 - **Attachments**: photos, camera, files. PDFs are sent as page images, text files are inlined, other files are uploaded over SSH. Original photos are also saved on the server so the agent can work with the files.
 - **Models** (lock a model per chat or set the default for new chats), **scheduled jobs** (create / edit / pause / run now), **skills and toolsets**.
@@ -21,12 +23,13 @@ Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to
 
 ## Roadmap
 
-Planned (not started yet; details, risks and how each item will be verified are in [docs/roadmap.md](docs/roadmap.md), in Chinese):
+Release numbering follows delivery order. Historical 0.15/0.16 dev names remain in development records; they are consolidated into 0.12. Details and validation requirements are in [docs/roadmap.md](docs/roadmap.md), in Chinese.
 
-- **0.12** Termux integration: one-tap install of a local Hermes on the phone (official Termux APT package), auto-configured connection, keep-alive guidance.
-- **0.13** Optional extensions, off by default: smart home via the official Home Assistant plugin; phone control over ADB wireless debugging.
-- **0.14** A local Chromium (Termux X11) on the phone that Hermes can drive, viewable and take-over-able in the app.
-- **0.15** Reading phone notifications (opt-in, per-app allowlist, sensitive content masked) and long-term memory so Hermes gets to know you.
+- **0.12** Consolidate the existing notification assistant, streaming/work progress, and draggable Dock.
+- **0.13** Integrated development build: external Termux deployment, local Hermes, Python services and reverse proxies, per-connection notification profiles, and basic Chromium + external Termux:X11 setup. The replaceable runtime backend supports later integration work; real Android deployment remains unverified.
+- **0.14** Optional extensions: Home Assistant and phone control over ADB wireless debugging.
+- **0.15** Hermes-driven local browser automation and user take-over, building on 0.13's browser setup.
+- **Later** Optional subscriptions, external-service synchronization, rewarded deployment credits, and long-term memory; providers and service interfaces remain undecided.
 
 See [docs/setup.md](docs/setup.md) for how to connect the phone to Hermes (in Chinese) and [docs/protocol.md](docs/protocol.md) for the API details and version notes.
 

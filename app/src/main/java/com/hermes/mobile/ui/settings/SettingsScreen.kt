@@ -73,6 +73,8 @@ fun SettingsScreen(
     repository: HermesRepository,
     onEditConnection: (String?) -> Unit,
     onOpenWelcome: () -> Unit,
+    onOpenNotificationAssistant: () -> Unit = {},
+    onOpenLocalRuntime: () -> Unit = {},
 ) {
     val settings by repository.settings.collectAsState()
     val connections by repository.connections.collectAsState()
@@ -106,6 +108,9 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             SettingsGroup("连接") {
+                SettingsRow(Icons.Rounded.RocketLaunch, "本机运行与服务", "本机 Hermes、Python 服务、反向代理和 X11 浏览器",
+                    enabled = repository.localRuntime != null, onClick = onOpenLocalRuntime)
+                GroupDivider()
                 connections.forEachIndexed { index, profile ->
                     val active = profile.id == activeId
                     SettingsRow(
@@ -168,9 +173,17 @@ fun SettingsScreen(
                 SwitchRow(
                     Icons.AutoMirrored.Rounded.Subject,
                     "逐字显示回复",
-                    "关闭时回复整条出现，像收到一条消息",
+                    if (settings.showWorkProcess) "工作过程模式已实时显示回复" else "开启后保留已有文字；关闭时回复整条出现",
                     checked = settings.streamReplies,
                     onCheckedChange = { value -> repository.updateSettings { it.copy(streamReplies = value) } },
+                )
+                GroupDivider()
+                SwitchRow(
+                    Icons.Rounded.AutoAwesome,
+                    "思考与工作过程",
+                    "展开服务器提供的思考、工具步骤，回复实时显示；不提供的内容不会显示",
+                    checked = settings.showWorkProcess,
+                    onCheckedChange = { value -> repository.updateSettings { it.copy(showWorkProcess = value) } },
                 )
                 GroupDivider()
                 SwitchRow(
@@ -191,6 +204,13 @@ fun SettingsScreen(
             }
 
             SettingsGroup("通知") {
+                SettingsRow(
+                    Icons.Rounded.AutoAwesome, "通知助手 · 开发版",
+                    "选择应用，把通知整理成待办和提醒",
+                    enabled = repository.notificationAssistant != null,
+                    onClick = onOpenNotificationAssistant,
+                )
+                GroupDivider()
                 SwitchRow(
                     Icons.Rounded.Notifications,
                     "回复完成时通知",

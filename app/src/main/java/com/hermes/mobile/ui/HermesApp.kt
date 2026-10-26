@@ -41,7 +41,9 @@ import com.hermes.mobile.ui.welcome.WelcomeScreen
 import kotlinx.coroutines.launch
 
 data object MainRoute
+data object LocalRuntimeRoute
 data object WelcomeRoute
+data object NotificationAssistantRoute
 data class ChatRoute(val sessionId: String)
 data class ConnectionEditRoute(val connectionId: String? = null, val type: String? = null)
 data class JobEditRoute(val jobId: String? = null)
@@ -114,7 +116,15 @@ private fun HermesNavHost(repository: HermesRepository, navigator: Navigator) {
                 onOpenAdmin = { navigator.push(AdminRoute(it)) },
                 onEditBot = { navigator.push(BotEditRoute(it)) },
                 onOpenRoom = { navigator.push(RoomRoute(it)) },
+                onOpenNotificationAssistant = { navigator.push(NotificationAssistantRoute) },
+                onOpenLocalRuntime = { navigator.push(LocalRuntimeRoute) },
             )
+            LocalRuntimeRoute -> repository.localRuntime?.let {
+                com.hermes.mobile.ui.settings.LocalRuntimeScreen(it, onBack = navigator::pop)
+            }
+            NotificationAssistantRoute -> repository.notificationAssistant?.let {
+                com.hermes.mobile.ui.settings.NotificationAssistantScreen(repository, it, onBack = navigator::pop)
+            }
             is AdminRoute -> AdminScreen(repository, route.page, onBack = navigator::pop)
             is ChatRoute -> ChatScreen(
                 repository = repository,

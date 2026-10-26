@@ -29,6 +29,10 @@ import kotlinx.coroutines.flow.map
  * 之后换成真正走 Hermes API Server 的实现即可，界面代码不用改。
  */
 interface HermesRepository {
+    val localRuntime: com.hermes.mobile.data.local.LocalRuntimeManager? get() = null
+    val notificationAssistant: com.hermes.mobile.data.notifications.NotificationAssistant? get() = null
+    suspend fun createNotificationSession(target: com.hermes.mobile.data.notifications.NotificationTarget): String? = null
+
     // 连接
     val connections: StateFlow<List<ConnectionProfile>>
     val activeConnectionId: StateFlow<String?>
@@ -39,6 +43,10 @@ interface HermesRepository {
      * [sshSecret] 是 SSH 私钥全文（密钥登录）或密码（密码登录），按 [ConnectionProfile.sshAuth] 解释。
      */
     fun saveConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String? = null)
+    /** 本机部署先保存凭据，接口检查通过后再切换，不提前改变当前连接。 */
+    fun saveConnectionWithoutActivating(profile: ConnectionProfile, apiKey: String) {
+        error("当前仓库不支持预存本机连接")
+    }
     fun deleteConnection(id: String)
     /** [apiKey] / [sshSecret] 为 null 时用已保存的。 */
     fun testConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String? = null): Flow<List<ConnectionTestStep>>

@@ -140,7 +140,7 @@ sealed interface Attachment {
 
 /**
  * 引用。只能引用 Hermes 回复给你的消息正文（[ChatItem.Message.text]），
- * 思考过程、工具调用这些从来不进消息列表，所以也不可能被引用。
+ * 思考过程、工具调用属于独立的 Activity，不能作为回复引用。
  * [partial] 为 true 表示只引用了选中的一段。
  */
 @Serializable
@@ -159,9 +159,18 @@ sealed interface ChatItem {
     val id: String
     val time: Long
 
+    /** 本轮可展开的工作过程；与最终回复分开，不能作为回复引用或发回模型。只保存在当前连接的内存里。 */
+    data class Activity(
+        override val id: String,
+        override val time: Long,
+        val steps: List<WorkStep> = emptyList(),
+        val earlierReply: String = "",
+        val status: ActivityStatus = ActivityStatus.Working,
+    ) : ChatItem
+
     /**
-     * 一条消息。Hermes 的消息 [text] 只有最终回复正文：接入 API 时只拼接 assistant.delta，
-     * reasoning / commentary / tool.* 事件一律丢弃，不进这里。
+     * 一条正式消息。Hermes 的 [text] 是最终回复正文；流式期间的公开旁白和可选工作过程属于 Activity，
+     * reasoning / tool.* 不会混进正式回复、引用或发给模型的正文。
      */
     @Serializable
     data class Message(
@@ -200,6 +209,19 @@ sealed interface ChatItem {
 }
 
 enum class RunPhase { Idle, Working, AwaitingInput }
+
+enum class ActivityStatus { Working, Completed, Stopped, Failed }
+
+data class WorkStep(
+    val id: String,
+    val kind: Kind,
+    val title: String,
+    val text: String,
+    val finished: Boolean = false,
+    val failed: Boolean = false,
+) {
+    enum class Kind { Reasoning, Tool, Notice }
+}
 
 /** App 在后台时要发通知的事。 */
 data class ChatNotice(val sessionId: String, val title: String, val text: String, val kind: Kind) {
@@ -280,6 +302,8 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.System,
     val dynamicColor: Boolean = false,
     val streamReplies: Boolean = false,
+    /** 只展示服务器实际提供的思考与工具过程；不改变模型或服务器配置。 */
+    val showWorkProcess: Boolean = false,
     val showTyping: Boolean = true,
     val enterToSend: Boolean = false,
     val notifyOnReply: Boolean = true,

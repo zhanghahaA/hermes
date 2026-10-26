@@ -114,6 +114,8 @@ class RemoteHermesRepository(
     /** 断线重连的等待时间（毫秒），第 n 次失败等多久。测试里调短。 */
     private val backoff: (attempt: Int) -> Long = { attempt -> (1000L shl (attempt - 1).coerceIn(0, 4)).coerceAtMost(15_000) },
     private val connectionDiagnostics: ConnectionDiagnostics = ConnectionDiagnostics(),
+    override val notificationAssistant: com.hermes.mobile.data.notifications.NotificationAssistant? = null,
+    override val localRuntime: com.hermes.mobile.data.local.LocalRuntimeManager? = null,
 ) : HermesRepository {
     private val cache = cacheDir?.let(::ChatCache)
 
@@ -121,6 +123,13 @@ class RemoteHermesRepository(
     @Volatile private var sessionsFresh = false
 
     private val state = MutableStateFlow(store.load() ?: StoredState())
+    private val notificationSender = NotificationSender({ state.value }, secrets, clientFactory)
+
+    override suspend fun createNotificationSession(target: com.hermes.mobile.data.notifications.NotificationTarget): String =
+        notificationSender.createSession(target)
+
+    suspend fun sendNotificationSummary(batch: com.hermes.mobile.data.notifications.NotificationBatch, checkpoint: (String) -> Unit): String =
+        notificationSender.send(batch, checkpoint)
 
     private fun persist(transform: (StoredState) -> StoredState) {
         state.update(transform)
@@ -187,12 +196,14 @@ class RemoteHermesRepository(
     private val seenHostKeys = ConcurrentHashMap<String, String>()
 
     override fun switchConnection(id: String) {
+        notificationAssistant?.selectConnection(id)
         _activeConnectionId.value = id
         persist { it.copy(activeConnectionId = id) }
         connect(id)
     }
 
     private fun connect(id: String) {
+        notificationAssistant?.selectConnection(id)
         connectJob?.cancel()
         runScope.cancel()
         runScope = newRunScope()
@@ -220,6 +231,7 @@ class RemoteHermesRepository(
         connectJob = scope.launch {
             try {
                 val started = clock()
+                if (profile.type == ConnectionType.Local && profile.id == com.hermes.mobile.data.local.LocalRuntimeManager.ConnectionId) localRuntime?.ensureRunning()
                 val newClient = openClient(effectiveProfile(profile), effectiveKey(profile), sshSecretOf(id)) { fingerprint -> pinHostKey(id, fingerprint) }
                 val health = newClient.health()
                 if (health.platform != null && health.platform != "hermes-agent") throw HermesError.NotHermes()
@@ -283,6 +295,14 @@ class RemoteHermesRepository(
     }
 
     override fun saveConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?) {
+        storeConnection(profile, apiKey, sshSecret, activate = true)
+    }
+
+    override fun saveConnectionWithoutActivating(profile: ConnectionProfile, apiKey: String) {
+        storeConnection(profile, apiKey, null, activate = false)
+    }
+
+    private fun storeConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?, activate: Boolean) {
         val previous = _connections.value.firstOrNull { it.id == profile.id }
         // 改了 SSH 地址就是另一台服务器了，旧指纹作废
         val moved = previous != null && (previous.host != profile.host || previous.sshPort != profile.sshPort)
@@ -300,9 +320,9 @@ class RemoteHermesRepository(
             if (apiKey != null) keys = keys + (saved.id to secrets.encrypt(apiKey.trim()))
             if (sshSecret != null) keys = keys + (SshSecretPrefix + saved.id to secrets.encrypt(sshSecret))
             if (saved.sshUser.isNullOrBlank()) keys = keys - (SshSecretPrefix + saved.id)
-            s.copy(connections = _connections.value, keys = keys, activeConnectionId = s.activeConnectionId ?: saved.id)
+            s.copy(connections = _connections.value, keys = keys, activeConnectionId = s.activeConnectionId ?: saved.id.takeIf { activate })
         }
-        if (_activeConnectionId.value == null || _activeConnectionId.value == saved.id) {
+        if (activate && (_activeConnectionId.value == null || _activeConnectionId.value == saved.id)) {
             switchConnection(saved.id)
         }
     }
@@ -314,6 +334,7 @@ class RemoteHermesRepository(
     }
 
     override fun deleteConnection(id: String) {
+        notificationAssistant?.forgetConnection(id)
         cache?.removeConnection(id)
         _connections.update { list -> list.filterNot { it.id == id } }
         persist { s ->
@@ -810,6 +831,7 @@ class RemoteHermesRepository(
         val local: List<LocalEntry> = emptyList(),
         val phase: RunPhase = RunPhase.Idle,
         val streaming: String? = null,
+        val replyStream: ReplyStream = ReplyStream(),
         /** 服务器记录拉过了。卡片的位置靠消息数量定，所以加卡片前必须先拉。 */
         val loaded: Boolean = false,
     ) {
@@ -846,7 +868,9 @@ class RemoteHermesRepository(
     private fun chatOf(uiId: String): Flow<ChatState?> = combine(chats, aliases) { map, aliasMap -> map[aliasMap[uiId] ?: uiId] }
 
     override fun chatItems(sessionId: String): Flow<List<ChatItem>> =
-        chatOf(sessionId).map { it?.display().orEmpty() }.onStart {
+        combine(chatOf(sessionId), settings) { st, prefs ->
+            st?.display().orEmpty().filter { it !is ChatItem.Activity || prefs.showWorkProcess || it.earlierReply.isNotBlank() }
+        }.onStart {
             val key = resolve(sessionId).takeUnless { it.startsWith(DraftPrefix) } ?: return@onStart
             // 先显示本机存的记录，同时去服务器拉最新的
             val connection = _activeConnectionId.value
@@ -859,8 +883,8 @@ class RemoteHermesRepository(
 
     override fun runPhase(sessionId: String): Flow<RunPhase> = chatOf(sessionId).map { it?.phase ?: RunPhase.Idle }
 
-    override fun streamingText(sessionId: String): Flow<String?> = chatOf(sessionId).map { st ->
-        st?.streaming?.takeIf { it.isNotBlank() && _settings.value.streamReplies }?.let { MediaTags.parse(it).first }
+    override fun streamingText(sessionId: String): Flow<String?> = combine(chatOf(sessionId), settings) { st, prefs ->
+        st?.streaming?.takeIf { it.isNotBlank() && (prefs.streamReplies || prefs.showWorkProcess) }?.let { MediaTags.parse(it).first }
     }
 
     /** 拉服务器上的聊天记录，和本地还没确认的条目合并。 */
@@ -1305,7 +1329,12 @@ class RemoteHermesRepository(
         runs[sessionId] = run
         publishRuns()
         updateSession(sessionId) { it.copy(running = true) }
-        updateChat(sessionId) { it.copy(phase = if (it.pendingCards(runId)) RunPhase.AwaitingInput else RunPhase.Working) }
+        updateChat(sessionId) { st ->
+            val activity = ChatItem.Activity("activity-$runId", clock())
+            st.copy(phase = if (st.pendingCards(runId)) RunPhase.AwaitingInput else RunPhase.Working,
+                streaming = null, replyStream = ReplyStream(),
+                local = st.local + LocalEntry(activity, st.messageCount, runId))
+        }
         runScope.launch { follow(run) }
     }
 
@@ -1381,20 +1410,44 @@ class RemoteHermesRepository(
     /** 处理一个事件；返回 true 表示这一轮结束了。 */
     private fun handle(run: ActiveRun, event: RunEvent): Boolean {
         when (event) {
-            is RunEvent.Delta -> if (_settings.value.streamReplies) {
-                updateChat(run.sessionId) { it.copy(streaming = ((it.streaming ?: "") + event.text).trimStart()) }
+            is RunEvent.Delta -> updateChat(run.sessionId) {
+                val reply = it.replyStream.delta(event.text)
+                it.copy(replyStream = reply, streaming = reply.text)
             }
-            // 工具调用开始/结束：之前那段只是过程中的话，不是最终回复
-            is RunEvent.Step -> updateChat(run.sessionId) { if (it.streaming != null) it.copy(streaming = null) else it }
+            is RunEvent.Interim -> updateChat(run.sessionId) {
+                val reply = it.replyStream.interim(event.text, event.alreadyStreamed)
+                it.copy(replyStream = reply, streaming = reply.text)
+            }
+            is RunEvent.Step -> updateChat(run.sessionId) {
+                val next = if (event.boundary) it.copy(replyStream = it.replyStream.step()) else it
+                if (_settings.value.showWorkProcess) next.activity(run) { activity -> activity.tool(event) } else next
+            }
+            is RunEvent.Reasoning -> updateChat(run.sessionId) {
+                if (_settings.value.showWorkProcess) it.activity(run) { activity -> activity.reasoning(event) } else it
+            }
             is RunEvent.Control -> addControl(run, event.request, event.seq)
             is RunEvent.ControlSettled -> settleControl(run, event.promptId, event.choice)
             is RunEvent.Completed -> complete(run, event.output, event.pendingSteer)
             is RunEvent.Failed -> end(run, event.error)
             is RunEvent.Cancelled -> end(run, error = null)
-            is RunEvent.Truncated, is RunEvent.Ignored -> Unit
+            is RunEvent.Truncated -> updateChat(run.sessionId) { st ->
+                if (_settings.value.showWorkProcess) st.activity(run) { activity -> activity.copy(
+                    steps = activity.steps.takeLast(99) + com.hermes.mobile.data.model.WorkStep(
+                        "truncated-${event.seq}", com.hermes.mobile.data.model.WorkStep.Kind.Notice,
+                        "部分过程无法恢复", "断线时间过长，服务器已清理部分事件；已收到的正文仍然保留。", finished = true,
+                    ),
+                ) } else st
+            }
+            is RunEvent.Ignored -> Unit
         }
         return event is RunEvent.Completed || event is RunEvent.Failed || event is RunEvent.Cancelled
     }
+
+    private fun ChatState.activity(run: ActiveRun, transform: (ChatItem.Activity) -> ChatItem.Activity): ChatState =
+        copy(local = local.map { entry ->
+            val activity = entry.item as? ChatItem.Activity
+            if (activity != null && entry.runId == run.runId) entry.copy(item = transform(activity)) else entry
+        })
 
     private fun addControl(run: ActiveRun, request: ControlRequest, seq: Long?) {
         val itemId = "ctl-${run.runId}-${request.promptId ?: seq ?: UUID.randomUUID()}"
@@ -1420,7 +1473,7 @@ class RemoteHermesRepository(
             )
         }
         updateChat(run.sessionId) {
-            it.copy(local = it.local + LocalEntry(item, it.messageCount, run.runId), phase = RunPhase.AwaitingInput, streaming = null)
+            it.copy(local = it.local + LocalEntry(item, it.messageCount, run.runId), phase = RunPhase.AwaitingInput)
         }
         notify(run.sessionId, ChatNotice.Kind.NeedsInput,
             if (request.kind == ControlRequest.Kind.Approval) "需要你批准：${(item as ChatItem.Approval).summary}" else "Hermes 在问你：${(item as ChatItem.Clarify).question}")
@@ -1466,7 +1519,7 @@ class RemoteHermesRepository(
 
     private fun complete(run: ActiveRun, output: String, pendingSteer: String? = null) {
         if (runs[run.sessionId] !== run) return
-        val raw = output.trim().ifEmpty { chats.value[run.sessionId]?.streaming?.trim().orEmpty() }
+        val (earlier, raw) = (chats.value[run.sessionId]?.replyStream ?: ReplyStream()).finish(output)
         // 回复里的 MEDIA:<路径> 是 Hermes 生成的文件：图片显示出来，其它显示成卡片
         val (text, media) = replyMedia(raw)
         val images = media.images.mapIndexed { i, path -> ImageRef("reply-${run.runId}-$i", 200f + i * 40, 1f, RemoteMediaPrefix + path) }
@@ -1476,7 +1529,11 @@ class RemoteHermesRepository(
         updateChat(run.sessionId) { st ->
             val reply = if (text.isEmpty() && images.isEmpty() && files.isEmpty()) null else
                 LocalEntry(ChatItem.Message("reply-${run.runId}", clock(), Role.Assistant, text, images = images, files = files), st.messageCount, run.runId)
-            st.copy(phase = RunPhase.Idle, streaming = null, local = st.local + listOfNotNull(reply))
+            st.copy(phase = RunPhase.Idle, streaming = null, replyStream = ReplyStream(), local = st.local + listOfNotNull(reply))
+                .activity(run) { it.copy(
+                    earlierReply = if (_settings.value.streamReplies || _settings.value.showWorkProcess) MediaTags.parse(earlier).first else "",
+                    status = com.hermes.mobile.data.model.ActivityStatus.Completed,
+                ) }
         }
         val preview = text.replace('\n', ' ').take(80).ifEmpty { if (images.isNotEmpty()) "[图片]" else if (files.isNotEmpty()) "[文件]" else "" }
         updateSession(run.sessionId) { it.copy(preview = preview, updatedAt = clock()) }
@@ -1494,7 +1551,12 @@ class RemoteHermesRepository(
         if (runs[run.sessionId] !== run) return
         steered.remove(run.runId)
         finish(run)
-        updateChat(run.sessionId) { it.copy(phase = RunPhase.Idle, streaming = null) }
+        updateChat(run.sessionId) { st ->
+            st.activity(run) { it.copy(
+                earlierReply = if (_settings.value.streamReplies || _settings.value.showWorkProcess) MediaTags.parse(st.replyStream.text).first else "",
+                status = if (error != null) com.hermes.mobile.data.model.ActivityStatus.Failed else com.hermes.mobile.data.model.ActivityStatus.Stopped,
+            ) }.copy(phase = RunPhase.Idle, streaming = null, replyStream = ReplyStream())
+        }
         if (error != null) {
             _errors.tryEmit("Hermes 出错了：$error")
             notify(run.sessionId, ChatNotice.Kind.Failed, error)
@@ -2331,6 +2393,13 @@ class RemoteHermesRepository(
 
     override fun updateSettings(transform: (AppSettings) -> AppSettings) {
         _settings.update(transform)
+        // 关闭后立即清掉已接收的思考/工具内容；关闭期间也不收集，不能事后偷偷恢复。
+        if (!_settings.value.showWorkProcess) chats.update { map -> map.mapValues { (_, st) ->
+            st.copy(local = st.local.map { entry ->
+                val activity = entry.item as? ChatItem.Activity
+                if (activity != null) entry.copy(item = activity.copy(steps = emptyList())) else entry
+            })
+        } }
         persist { it.copy(settings = _settings.value) }
     }
 
@@ -2412,6 +2481,7 @@ class RemoteHermesRepository(
     }
 
     init {
+        notificationAssistant?.selectConnection(_activeConnectionId.value)
         watchErrorsForDiagnostics()
         watchSessionsForCache()
         _activeConnectionId.value?.let { connect(it) }

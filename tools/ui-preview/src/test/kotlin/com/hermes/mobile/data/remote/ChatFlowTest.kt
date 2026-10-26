@@ -106,17 +106,63 @@ class ChatFlowTest {
     }
 
     @Test
-    fun streamingShowsTextButResetsAfterToolSteps() {
+    fun streamingKeepsEarlierSentencesThroughToolsReconnectAndCompletion() {
         val s = server()
         val repo = connected(s)
         repo.updateSettings { it.copy(streamReplies = true) }
-        val streamed = record(repo.streamingText("s1"))
-        repo.sendMessage("s1", "查一下", emptyList())
-        repo.chatItems("s1").await("最终回复") { list -> list.texts().any { it.second == "最终回复：查一下" } }
-        Thread.sleep(200)
-        val values = streamed.filterNotNull()
-        assertTrue(values.none { "SECRET" in it }, values.toString())
-        assertTrue(values.none { it.startsWith("我先查一下。最终") }, "工具步骤之后要清掉过程中的话：$values")
+        repo.sendMessage("s1", "逐句回复", emptyList())
+        repo.streamingText("s1").await("第一句") { it == "第一句。" }
+        val run = s.runs.values.single()
+        run.sentence("第二句。")
+        val next = repo.streamingText("s1").await("第二句") { it?.contains("第二句。") == true }
+        assertEquals("第一句。\n\n第二句。", next)
+        run.complete()
+        val done = repo.chatItems("s1").await("最终回复和过程收尾") { list ->
+            list.texts().any { it.second == "最终回复：逐句回复" } &&
+                list.filterIsInstance<ChatItem.Activity>().any { it.status == com.hermes.mobile.data.model.ActivityStatus.Completed }
+        }
+        assertEquals("第一句。\n\n第二句。", done.filterIsInstance<ChatItem.Activity>().single().earlierReply)
+        val aligned = repo.chatItems("s1").await("历史对齐后仍保留先前正文") { list ->
+            list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+        }
+        assertEquals("第一句。\n\n第二句。", aligned.filterIsInstance<ChatItem.Activity>().single().earlierReply)
+        assertTrue(aligned.filterIsInstance<ChatItem.Activity>().all { it.steps.isEmpty() }, "默认不收集思考")
+        assertTrue(s.requests.count { it.path!!.endsWith("/events") } >= 2, "真实走过断流和续传")
+    }
+
+    @Test fun processIsOptInStreamsWithoutTypewriterAndCanBeClearedImmediately() {
+        val s = server()
+        val store = MemoryLocalStore()
+        val repo = connected(s, store)
+        assertFalse(repo.settings.value.showWorkProcess)
+        repo.updateSettings { it.copy(showWorkProcess = true) }
+        assertTrue(store.state!!.settings.showWorkProcess)
+        assertFalse(repo.settings.value.streamReplies)
+        repo.sendMessage("s1", "逐句研究", emptyList())
+        repo.streamingText("s1").await("过程模式自动实时显示正文") { it == "第一句。" }
+        val activities = repo.chatItems("s1").await("真实思考和工具完成状态") { list ->
+            list.filterIsInstance<ChatItem.Activity>().any { a -> a.steps.any { it.finished && it.title == "terminal" } }
+        }.filterIsInstance<ChatItem.Activity>()
+        assertTrue(activities.single().steps.any { "SECRET-THINKING" in it.text })
+        assertTrue(s.requests.filter { it.method == "POST" }.none { "SECRET" in it.body.clone().readUtf8() }, "过程不会发回模型")
+        repo.updateSettings { it.copy(showWorkProcess = false) }
+        assertTrue(runBlocking { repo.chatItems("s1").first() }.none { it is ChatItem.Activity })
+        assertNull(runBlocking { repo.streamingText("s1").first() })
+        repo.updateSettings { it.copy(showWorkProcess = true) }
+        assertTrue(runBlocking { repo.chatItems("s1").first() }.filterIsInstance<ChatItem.Activity>().single().steps.isEmpty(), "重新打开不能恢复刚清掉的思考")
+    }
+
+    @Test fun stoppingPreservesAlreadyVisibleText() {
+        val s = server()
+        val repo = connected(s)
+        repo.updateSettings { it.copy(streamReplies = true) }
+        repo.sendMessage("s1", "逐句停止", emptyList())
+        repo.streamingText("s1").await("停止前正文") { it == "第一句。" }
+        repo.stop("s1")
+        val items = repo.chatItems("s1").await("停止后正文还在") { list ->
+            list.filterIsInstance<ChatItem.Activity>().any { it.status == com.hermes.mobile.data.model.ActivityStatus.Stopped }
+        }
+        assertEquals("第一句。", items.filterIsInstance<ChatItem.Activity>().single().earlierReply)
     }
 
     @Test

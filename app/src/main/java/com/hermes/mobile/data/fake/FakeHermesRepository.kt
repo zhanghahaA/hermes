@@ -248,7 +248,7 @@ class FakeHermesRepository(
     }
 
     private suspend fun reply(sessionId: String, text: String) {
-        if (settings.value.streamReplies) {
+        if (settings.value.streamReplies || settings.value.showWorkProcess) {
             for (end in 1..text.length step 3) {
                 streaming.update { it + (sessionId to text.take(end)) }
                 delay(24)

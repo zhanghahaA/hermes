@@ -85,6 +85,8 @@ private class Scene(
     val waitMs: Long = 0,
     /** 假仓库的回复延迟；截“正在输入”时调大，避免渲染期间回复已经到达。 */
     val replyDelayMs: Long = 1200,
+    /** 动画场景在尚未结束时截帧；普通场景默认等到稳定。 */
+    val frames: Int = 60,
     val content: @Composable (HermesRepository, String?) -> Unit,
 )
 
@@ -93,6 +95,18 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("51-runtime-missing") { _, _ -> RuntimePreview(false) },
+    Scene("51b-runtime-ready") { _, _ -> RuntimePreview(true) },
+    Scene("51c-runtime-dark", dark = true) { _, _ -> RuntimePreview(true) },
+    Scene("41-streaming-keeps-text") { repo, _ -> StreamingPreview(repo, process = false) },
+    Scene("41b-work-process") { repo, _ -> StreamingPreview(repo, process = true) },
+    Scene("41c-work-process-dark", dark = true) { repo, _ -> StreamingPreview(repo, process = true) },
+    Scene("41d-streaming-completed") { repo, _ -> StreamingPreview(repo, process = false, completed = true) },
+    Scene("41e-process-completed") { repo, _ -> StreamingPreview(repo, process = true, completed = true) },
+    Scene("42-dock-glass") { repo, _ -> mainScreen(repo, MainTab.Chats)() },
+    Scene("42b-dock-glass-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Chats)() },
+    Scene("43-process-settings") { repo, _ -> mainScreen(repo, MainTab.Settings)() },
+    Scene("43b-process-settings-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("01-chats") { repo, _ -> mainScreen(repo, MainTab.Chats)() },
     Scene("02-chats-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Chats)() },
     Scene("03-chat") { repo, _ -> ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) },
@@ -156,6 +170,10 @@ private val scenes = listOf(
         SheetOver({ CapabilitiesScreen(repo, initialTab = 1) }) { SkillSheetContent(SampleData.skills[3], onUse = {}) }
     },
     Scene("17-settings") { repo, _ -> mainScreen(repo, MainTab.Settings)() },
+    Scene("40-notification-assistant") { repo, _ -> NotificationPreview(repo) },
+    Scene("40b-notification-assistant-dark", dark = true) { repo, _ -> NotificationPreview(repo) },
+    Scene("40c-notification-enter", frames = 8) { repo, _ -> NotificationTransitionPreview(repo, exiting = false) },
+    Scene("40d-notification-exit", frames = 8) { repo, _ -> NotificationTransitionPreview(repo, exiting = true) },
     Scene("18-settings-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Settings)() },
     Scene("19-connection-ssh") { repo, _ -> ConnectionEditorScreen(repo, "c-ssh", onClose = {}) },
     Scene("20-connection-termux") { repo, _ -> ConnectionEditorScreen(repo, null, ConnectionType.Local.name, onClose = {}) },
@@ -229,6 +247,69 @@ private val scenes = listOf(
     Scene("21-welcome") { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
     Scene("22-welcome-dark", dark = true) { _, _ -> WelcomeScreen(onPickType = {}, onSkip = {}) },
 )
+
+/** 演示固定的服务器事件快照；正文、过程卡片和三个点都走真正聊天页。 */
+@Composable
+private fun StreamingPreview(base: HermesRepository, process: Boolean, completed: Boolean = false) {
+    val repo = remember(base, process, completed) {
+        val now = System.currentTimeMillis()
+        val activity = com.hermes.mobile.data.model.ChatItem.Activity(
+            "preview-work", now,
+            steps = listOf(
+                com.hermes.mobile.data.model.WorkStep("r", com.hermes.mobile.data.model.WorkStep.Kind.Reasoning, "思考", "先检查现有的回复事件，再核对工具调用时的文字保留。", finished = true),
+                com.hermes.mobile.data.model.WorkStep("t", com.hermes.mobile.data.model.WorkStep.Kind.Tool, "读取项目", "查看聊天页面和事件处理代码", finished = true),
+            ),
+            earlierReply = if (completed) "我已经找到文字消失的位置，会保留之前出现的内容。" else "",
+            status = if (completed) com.hermes.mobile.data.model.ActivityStatus.Completed else com.hermes.mobile.data.model.ActivityStatus.Working,
+        )
+        object : HermesRepository by base {
+            override val settings = kotlinx.coroutines.flow.MutableStateFlow(base.settings.value.copy(streamReplies = true, showWorkProcess = process))
+            override fun chatItems(sessionId: String) = kotlinx.coroutines.flow.flowOf(listOfNotNull(
+                com.hermes.mobile.data.model.ChatItem.Message("preview-user", now, com.hermes.mobile.data.model.Role.User, "帮我修复逐字回复消失的问题。"),
+                activity,
+                if (completed) com.hermes.mobile.data.model.ChatItem.Message("preview-final", now, com.hermes.mobile.data.model.Role.Assistant, "已经修复。工具调用后，前面的句子会继续保留，后续回复接着显示。") else null,
+            ))
+            override fun runPhase(sessionId: String) = kotlinx.coroutines.flow.flowOf(if (completed) com.hermes.mobile.data.model.RunPhase.Idle else com.hermes.mobile.data.model.RunPhase.Working)
+            override fun streamingText(sessionId: String) = kotlinx.coroutines.flow.flowOf(if (completed) null else "我已经找到文字消失的位置。\n\n工具调用时，前面出现的句子会保留，后面的回复接着显示。")
+        }
+    }
+    ChatScreen(repo, "s-1", {}, {})
+}
+
+@Composable
+private fun NotificationPreview(repository: HermesRepository) {
+    val assistant = remember {
+        val store = object : com.hermes.mobile.data.notifications.NotificationStore {
+            private var value: com.hermes.mobile.data.notifications.NotificationState? = null
+            override fun load() = value
+            override fun save(state: com.hermes.mobile.data.notifications.NotificationState) { value = state }
+        }
+        com.hermes.mobile.data.notifications.NotificationAssistant(store, sender = { _, _ -> "需要处理：取件" }).apply {
+            configure(com.hermes.mobile.data.notifications.NotificationConfig(
+                packages = setOf("example.delivery", "example.calendar"),
+                target = com.hermes.mobile.data.notifications.NotificationTarget("example", "default", "fixed", "我的电脑 · 默认 Bot · 通知助手"),
+            ))
+        }
+    }
+    com.hermes.mobile.ui.settings.NotificationAssistantScreen(repository, assistant, onBack = {})
+}
+
+/** 实际驱动全局导航的进入 / 返回动画后截帧，不手动设置页面位移。 */
+@Composable
+private fun NotificationTransitionPreview(repository: HermesRepository, exiting: Boolean) {
+    val navigator = remember {
+        com.hermes.mobile.ui.navigation.Navigator("settings").apply {
+            if (exiting) push(com.hermes.mobile.ui.NotificationAssistantRoute)
+        }
+    }
+    com.hermes.mobile.ui.navigation.SwipeBackHost(navigator) { route ->
+        if (route == "settings") mainScreen(repository, MainTab.Settings)()
+        else NotificationPreview(repository)
+    }
+    androidx.compose.runtime.LaunchedEffect(navigator) {
+        if (exiting) navigator.pop() else navigator.push(com.hermes.mobile.ui.NotificationAssistantRoute)
+    }
+}
 
 /** 聊天列表里左滑展开的一行（置顶 / 归档 / 删除）。 */
 @Composable
@@ -342,12 +423,15 @@ fun main(args: Array<String>) {
 
         val composeScene = ImageComposeScene(width, height, Density(DENSITY)) {
             HermesTheme(themeMode = if (scene.dark) ThemeMode.Dark else ThemeMode.Light) {
-                PhoneFrame { scene.content(repo, arg) }
+                // 与 HermesApp 的根 Surface 一致，深色预览不能沿用桌面默认的黑色文字。
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    PhoneFrame { scene.content(repo, arg) }
+                }
             }
         }
         // 多渲染几帧，让进入动画、LaunchedEffect 和 Flow 收集都稳定下来
         var nanos = 0L
-        repeat(60) {
+        repeat(scene.frames) {
             composeScene.render(nanos)
             nanos += 16_666_666L
         }
@@ -358,6 +442,30 @@ fun main(args: Array<String>) {
         composeScene.close()
         scope.cancel()
     }
+}
+
+/** 独立假后端，只展示运行中心布局，不执行 Android 命令。 */
+@Composable
+private fun RuntimePreview(ready: Boolean) {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val manager = remember {
+        com.hermes.mobile.data.local.LocalRuntimeManager(scope, object : com.hermes.mobile.data.local.LocalRuntimeBackend {
+            override val name = "Termux（演示环境）"
+            override val externalApps = true
+            override val hermesInstallWarning = com.hermes.mobile.data.local.TermuxRuntimeBackend.PackageWarning
+            override val initializationCommand = com.hermes.mobile.data.local.TermuxRuntimeBackend.EnableExternalApps
+            override fun environment() = com.hermes.mobile.data.local.RuntimeEnvironment(
+                installed = ready, compatible = ready, permission = ready, arm64 = true,
+                freeBytes = 4L * 1024 * 1024 * 1024, viewerInstalled = ready, version = if (ready) "0.118.3" else "",
+            )
+            override suspend fun execute(request: com.hermes.mobile.data.local.RuntimeRequest, progress: (String) -> Unit) =
+                com.hermes.mobile.data.local.RuntimeResponse(com.hermes.mobile.data.local.RuntimeSnapshot(toolsReady = true))
+        }, object : com.hermes.mobile.data.local.LocalConnectionAccess {
+            override fun save(apiKey: String) = Unit
+            override suspend fun verifyAndActivate() = Unit
+        })
+    }
+    com.hermes.mobile.ui.settings.LocalRuntimeScreen(manager, {})
 }
 
 /** 液态玻璃对比用：彩色内容上放 Tab 栏和输入栏，看通透程度。 */

@@ -5,6 +5,28 @@
 
 ## 现状
 
+- 当前开发 **0.13.0-dev / code 37**，基于 0.12 的 d3b400e，工作区 `/workspace/hermes-runtime-0.13`，分支 `codex/local-runtime`。已接入「设置 → 本机运行与服务」、外部 Termux 命令桥、签名 APT 安装、独立目录配置、凭据存储与连接检查、Python／Caddy 服务管理、Chromium 与独立 Termux:X11 启停。业务使用可替换 `LocalRuntimeBackend`，为以后内置合并保留接口。详见 [0.13 说明](docs/0.13.md)。
+- 验证：标准套件 217 项报告、201 项实际通过、0 失败，16 项真实 IT 无环境未执行；另 11 项 Python 运行测试通过。App 与 Android 自检 APK 构建成功，浅／深色及缺少环境截图已检查，无 adb 设备。签名证书仍为 d985fcaf…db1dc7；APK SHA-256 为 728c6c3813203f0927447f2c8c65cd5086c9ffcb58515fa708b7b0089cbdc1ab。安装包在 `/workspace/shared/downloads/hermes-mobile-0.13.0-dev.apk`，留档在 `/workspace/hermes-cloud/releases/0.13.0-dev`。
+- 0.13 沿用已有通知采集，新增按每个连接独立开关、白名单、目标、加密队列和摘要；旧固定目标只迁移给所属连接。切换取消手机端旧等待并拒绝旧采集回调，删除连接清除档案；已提交的服务器任务不能靠切换撤回。本版没有新增独立读取短信数据库。
+- 2026-10-24 重新核对 Hermes 上游 Termux 文档仍标注安装包 broken，故安装入口为实验功能并要求确认。本环境没有 adb 设备，不能宣称真实 Termux 权限／回调、Hermes arm64 安装、X11 显示输入或 vivo 后台已经可用。原版 Termux 首次仍需粘贴执行一次初始化命令；本轮不改变主项目许可证，不接入订阅／广告，也不发布正式 Release。
+
+## 0.12 整理记录
+
+- 用户已确认重新按交付顺序编号：**0.12 整理已有 dev 功能，本机部署顺延 0.13**。本轮基于 GitHub `dev` 的 a6dbe47，候选版本为 **0.12.0 / code 36**，生产功能及测试源码与基线逐文件核对一致。重新执行标准套件报告 202 项、0 失败，186 项实际通过，16 项真实 IT 未配置未执行；App 与 Android 自检 APK 构建成功，无 adb 设备。签名证书仍为 d985fcaf…db1dc7，APK SHA-256 为 67cb1a87de88803ac8b83b0a0daf6ee05a77b5a79bc485c5d9cd2bd1ac7a522d。构建／测试留档在 `/workspace/hermes-cloud/releases/0.12.0`，下载包在 `/workspace/shared/downloads`；未创建 Release。历史记录与包不改写，新说明见 [docs/0.12.md](docs/0.12.md)，计划见 [docs/roadmap.md](docs/roadmap.md)。
+- 0.13 的运行模块曾先以独立草稿保存，不包含在 0.12；现已在 `codex/local-runtime` 接入，设备验证边界见上方现状。基础免费开源，可选订阅／部署／广告资格后续接入；不擅自更改主项目许可或公开仓库。
+- 当前可见 dev 源码包含通知助手，未发现独立读取短信数据库的实现。0.12 不新增或重写这部分；按连接独立隐私档案和切换隔离纳入 0.13，不能把现有固定目标发送行为当成已经完成新隔离方案。
+
+## 历史开发与发布记录
+
+- 开发源码通过 GitHub `dev` 分支管理：历史中分别保存 0.15.0-dev.2 通知助手/全局导航和 0.16.0-dev 流式正文/工作过程/Dock 改进，分支当前版本为 0.16.0-dev（code 35）。通知助手已包含在其中；正式发布仍单独使用对应版本标签和 Release。源码核对与已验证的 0.16 留档一致，之后仅有交接文档更新；构建/测试结果沿用下方已执行记录，不把未运行的真实 IT 或真机检查算作通过。
+- 0.11.5 发布材料已重新备齐：核对 GitHub 已有 v0.11.5 标签，tag object 5481ed3b7403141563bfecad5d0e0402a3c777f1 指向 0f346ce400686e8fd2d43ea77490b91b7d2f7442。从标签独立导出源码到 /workspace/hermes-cloud/releases/0.11.5/source，源码逐文件校验一致，未修改标签代码；用外部 Gradle init 脚本指定保留的调试签名。APK versionName 0.11.5 / code 31，SHA256 d4848734e41bc6da73ad76af00d85aa7e758af39fd98262f079de3a90e4ecf6a，签名与已发布 0.11.1 实包一致。本次重新构建成功，170 项测试报告中 154 项实际通过、16 项真实 IT 未配置未执行，无 adb 设备。发布 POST 请求再次返回 Forbidden，未创建 Release；GitHub 仍仅有 0.11.1、0.10.2。可手动发布的 APK、校验文件、双语说明、填写步骤打包为 /workspace/shared/downloads/hermes-0.11.5-release-kit.zip，单独文档与 APK 同目录可用。
+- 用户的发布文案要求：中英文双语，以已发布的上一版本为比较基准，只写当前发布的改进，不提其它已开发但未发布的版本；表达持续完善产品，不编造发布日期或更新记录。0.11.5 文案聚焦 SSH 稳定性、长回复/取消、准确错误和匿名诊断，基准为已发布 0.11.1；手动发布时选择已有标签 v0.11.5，并设为最新正式 Release。
+- dev.2 验证：176 项实际执行测试通过，另 16 项真实 IT 未执行；新增 2 项通知助手导航回归通过，进入 / 返回中间帧已检查，APK 构建和同签名校验通过。安装包为 /workspace/shared/downloads/hermes-mobile-0.15.0-dev.2.apk，验证记录保留于 /workspace/hermes-cloud/releases/0.15.0-dev.2。
+- 0.15.0-dev.2：通知助手改用全局 NotificationAssistantRoute + Navigator / SwipeBackHost，设置入口 push，返回按钮 pop；移除设置页内直接替换内容和通知页自带的 SystemBackHandler。进入、退出、右滑跟手 / 取消统一走全局动画，返回后保留设置页的 Tab 和滚动位置。新增真实入口的动画中间进度与手势回归测试。
+- 0.11.1 已按留档补丁恢复源码并推送标签 v0.11.1（源码提交 90124d35a0317ee309b5fb602d0088699ed74500）。用户决定自行在浏览器发布 Release；发布资料包位于 /workspace/shared/downloads/hermes-0.11.1-release-kit.zip，包含原 APK、校验文件、中英文双语更新说明和填写步骤。
+- 当前工作区开发版 **0.16.0-dev / code 35**：基于 0.15.0-dev.2，修复流式公开正文在工具/审批边界消失；正文与三个点同时显示。增加设置「思考与工作过程」（默认关闭、自动流式、宽版正文、可展开收起），仅收集服务器实际发来的 reasoning/tool 事件；关闭立即清除步骤，过程和公开阶段旁白仅留当前连接内存，不入正式消息缓存/引用/模型请求。Dock 支持跟手拖动、图标预览、松手吸附切页及玻璃回弹，拖动期间不切页。详见 [docs/0.16.md](docs/0.16.md) 和更新后的协议。完整套件 202 项报告、0 失败，186 项实际通过，16 项真实 IT 未配置未执行；APK 构建成功，签名仍为 d985fcaf…db1dc7，SHA256 ba393c1e99db2b52de956bddbb53a30f724c2e816f390dd12ae09585ac727328。没有 adb 设备，真机手势和折射未验证。交付 APK/ZIP/双语说明在 /workspace/shared/downloads，完整验证和源码补丁在 /workspace/hermes-cloud/releases/0.16.0-dev；源码保存于 dev 分支，尚未创建开发版 Release。
+- 0.15 基线 **0.15.0-dev.2 / code 34**：按用户在「设置 hermes」会话确认的范围，提前开发通知助手（授权、白名单、本地加密队列、固定连接 / Bot / 会话、周期批量摘要和到达提醒）。入口在「设置 → 通知助手 · 开发版」，默认关闭，0.16 继续保留。实现细节及限制见 [docs/notification-assistant.md](docs/notification-assistant.md)。Termux、其它扩展和长期记忆未开发；验证结果见该文档末尾。
+- 首个 0.15.0-dev 验证：174 项实际执行测试通过，另 16 项真实 IT 未执行；浅 / 深色截图已检查，App 和 Android 自检 APK 已构建，adb 无设备。开发版尚未推送或创建 Release。Gradle 属性 hermesDebugKeystore 可显式选择原调试签名，当前云环境 env.sh 已指定原文件；证书与既有 d985fcaf…db1dc7 一致。安装包和 ZIP 位于 /workspace/shared/downloads，验证报告与源码补丁保留于 /workspace/hermes-cloud/releases/0.15.0-dev。
 - 0.11.6 / code 32：修复电脑创建的中文项目不能新建 / 继续对话。原因是把 Unicode 目录直接放进 `X-Hermes-Workspace` 被 OkHttp 拒绝；中文目录保留在 JSON `instructions`，仅合法 ASCII 目录保留兼容请求头，不修改目录、不要求改名。发送准备参数异常也会恢复空闲，失败消息不再阻塞下一条发送。新增 `WorkspaceChatTest` 覆盖真实 HTTP、项目草稿、旧会话、非 ASCII 路径与异常恢复；编码环境仍无手机，设备效果需复测。 本次标准套件报告 175 项、0 失败，实际执行 159 项通过，另 16 项真实 IT 无环境未执行；App 与 Android 自检 APK 构建成功。
 - SSH 隧道修复：用户已反馈本轮改动可行。修复仅 SSH 本地入口使用 IPv4 与直连代理、单通道拒绝误重置整个 SSH 会话、HTTP 错误被覆盖成网络不可达；补全双向半关闭、正文 / SSE 取消、匿名阶段和字节诊断。设置里「导出诊断信息」可查看安全记录。设备自检已加入，但编码环境没有 adb 设备，尚未在设备上执行。SSH 修复提交时主线为 0.11.0 / code 26；用户随后授权创建 Release，发布准备版本为 0.11.5 / code 31，保证可覆盖 code 30 的测试包。此前 0.11.4 测试 APK 来自会话工作区。本次提交范围为 SSH 修复、配套隐私诊断、测试与文档，详见 [docs/ssh-fix-report.md](docs/ssh-fix-report.md)。 本次独立提交验证：标准套件 170 项报告、0 失败，实际执行 154 项通过，另 16 项真实 IT 因缺少环境直接返回；App 与 Android 自检 APK 构建成功。
 - 当前发布准备版本 **0.11.6**（`app/build.gradle.kts`：`versionCode = 32`），包含 SSH 与中文项目修复，用户已授权创建 GitHub Release。0.11.5 的代码和标签已推送，但发布 API 被云环境网络策略拦截（CONNECT 403），Release 尚未创建；已保存仅开放 `api.github.com` / `uploads.github.com` 的配置草稿，需要用户在环境设置保存并发布后再继续。发布结果以 GitHub Release 实际存在并附上 APK 为准。
@@ -125,7 +147,7 @@ gradle test                        # 单元 + 界面 + 集成测试（没设 HER
 ## 接下来的计划
 
 用户定的方向（2026-10）：集成 Termux 一键安装本地 Hermes，然后做可选扩展（智能家居、ADB 操作手机、本地 Chromium、读取通知）和“越用越懂你”。
-版本拆分、做法、风险、验证方式见 [docs/roadmap.md](docs/roadmap.md)。都还没开始。
+版本已重新安排，拆分、做法、风险、验证方式见 [docs/roadmap.md](docs/roadmap.md)。通知助手及工作过程已纳入 0.12；0.13 仅有隔离工作区内的运行模块草稿，其它阶段仍属计划。
 
 ## 没做完 / 待确认
 

@@ -17,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.Security
 
@@ -33,6 +34,23 @@ class HermesApplication : Application() {
 
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + unexpected)
 
+    val localRuntime by lazy {
+        com.hermes.mobile.data.local.LocalRuntimeManager(appScope,
+            com.hermes.mobile.data.local.TermuxRuntimeBackend(
+                com.hermes.mobile.platform.AndroidTermuxTransport(this),
+                assets.open("runtime/manager.py").bufferedReader().use { it.readText() }),
+            com.hermes.mobile.data.local.RepositoryLocalConnection { repository })
+    }
+
+    val notificationAssistant by lazy {
+        com.hermes.mobile.data.notifications.NotificationAssistant(
+            store = com.hermes.mobile.platform.NotificationFileStore(this),
+            changed = { com.hermes.mobile.platform.NotificationScheduling.configure(this, it) },
+            completed = { com.hermes.mobile.platform.notifyNotificationSummary(this) },
+            sender = { batch, checkpoint -> repository.sendNotificationSummary(batch, checkpoint) },
+        )
+    }
+
     val repository: RemoteHermesRepository by lazy {
         RemoteHermesRepository(
             scope = appScope,
@@ -41,6 +59,8 @@ class HermesApplication : Application() {
             mediaDir = mediaDirectory(this),
             cacheDir = java.io.File(filesDir, "chat-cache"),
             localFileExporter = { path, name, mime -> AttachmentImporter.exportForTermux(this, path, name, mime) },
+            notificationAssistant = notificationAssistant,
+            localRuntime = localRuntime,
         )
     }
 
@@ -56,11 +76,12 @@ class HermesApplication : Application() {
         // Android 自带的 BouncyCastle（名字也叫 "BC"）是阉割版，没有 Ed25519 等 SSH 要用的算法：换成打包进来的完整版
         Security.removeProvider("BC")
         Security.addProvider(BouncyCastleProvider())
+        com.hermes.mobile.platform.NotificationScheduling.configure(this, notificationAssistant.state.value.config)
         val notifier = ReplyNotifier(this)
         appScope.launch { repository.notices.collect(notifier::show) }
         appScope.launch {
-            repository.activeRuns.collect { runs ->
-                if (runs.isEmpty()) RunService.stop(this@HermesApplication) else RunService.start(this@HermesApplication, runs.size)
+            combine(repository.activeRuns, localRuntime.state) { runs, runtime -> runs.size + if (runtime.busy) 1 else 0 }.collect { count ->
+                if (count == 0) RunService.stop(this@HermesApplication) else RunService.start(this@HermesApplication, count)
             }
         }
         // 网络一恢复就重连，不用等退避时间

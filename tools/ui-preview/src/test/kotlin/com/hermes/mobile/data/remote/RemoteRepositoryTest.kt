@@ -244,7 +244,9 @@ class RemoteRepositoryTest {
 
         repo.setArchived("s1", true)
         assertTrue(repo.sessions.value.none { it.id == "s1" }, "界面上立刻从列表里拿掉")
-        assertEquals(listOf("s1"), repo.archivedSessions.value.map { it.id }, "归档列表里能找到")
+        // archivedSessions 由 combine/stateIn 派生，允许调度器先发布本地归档变更。
+        val archived = runBlocking { withTimeout(5_000) { repo.archivedSessions.first { list -> list.any { it.id == "s1" } } } }
+        assertEquals(listOf("s1"), archived.map { it.id }, "归档列表里能找到")
         Thread.sleep(500)
         assertEquals("""{"archived":true}""", s.requests.last { it.method == "PATCH" }.body.readUtf8())
 
@@ -253,7 +255,7 @@ class RemoteRepositoryTest {
         assertEquals(listOf("s1"), repo.archivedSessions.value.map { it.id })
 
         repo.setArchived("s1", false)
-        assertTrue(repo.archivedSessions.value.isEmpty())
+        runBlocking { withTimeout(5_000) { repo.archivedSessions.first { it.isEmpty() } } }
         runBlocking { withTimeout(5_000) { repo.sessions.first { list -> list.any { it.id == "s1" } } } }
         assertEquals("""{"archived":false}""", s.requests.last { it.method == "PATCH" }.body.readUtf8())
 

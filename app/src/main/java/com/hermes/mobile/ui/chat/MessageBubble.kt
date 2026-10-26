@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -87,10 +88,12 @@ fun MessageBubble(
     onQuoteClick: (messageId: String) -> Unit = {},
     onMore: () -> Unit = {},
     showMeta: Boolean = true,
+    workStyle: Boolean = false,
 ) {
     val colors = LocalHermesColors.current
     val isUser = message.role == Role.User
-    val container = if (isUser) colors.userBubble else colors.assistantBubble
+    val plain = workStyle && !isUser
+    val container = if (isUser) colors.userBubble else if (plain) Color.Transparent else colors.assistantBubble
     val content = if (isUser) colors.onUserBubble else colors.onAssistantBubble
 
     // 长按文字进入选中；选中的内容实时上报给聊天页，由它显示“追问/复制”操作栏
@@ -121,7 +124,7 @@ fun MessageBubble(
             horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
-                if (!isUser) {
+                if (!isUser && !plain) {
                     if (last) HermesAvatar() else Spacer(Modifier.width(28.dp))
                     Spacer(Modifier.width(8.dp))
                 }
@@ -131,7 +134,7 @@ fun MessageBubble(
                     contentColor = content,
                     shape = shape,
                     modifier = Modifier
-                        .widthIn(max = if (isUser) maxWidth * 0.8f else maxWidth - AVATAR_GAP.dp - 24.dp)
+                        .widthIn(max = if (isUser) maxWidth * 0.8f else if (plain) maxWidth - 24.dp else maxWidth - AVATAR_GAP.dp - 24.dp)
                         .clip(shape)
                         .then(
                             if (message.status == DeliveryStatus.Failed) Modifier.clickable(onClick = onRetry) else Modifier,
@@ -170,7 +173,7 @@ fun MessageBubble(
                 }
             }
             if (showMeta && (last || message.status != DeliveryStatus.Sent)) {
-                MessageMeta(message, onRetry, Modifier.padding(start = if (isUser) 0.dp else AVATAR_GAP.dp))
+                MessageMeta(message, onRetry, Modifier.padding(start = if (isUser || plain) 0.dp else AVATAR_GAP.dp))
             }
         }
     }
@@ -249,6 +252,7 @@ fun TypingRow() {
     Row(
         Modifier
             .fillMaxWidth()
+            .testTag("chat-typing")
             .padding(start = 12.dp, end = 12.dp, top = 6.dp),
         verticalAlignment = Alignment.Bottom,
     ) {
@@ -260,7 +264,7 @@ fun TypingRow() {
 
 /** 打开“逐字显示回复”时，正在生成的那条回复。 */
 @Composable
-fun StreamingRow(text: String, maxWidth: Dp) {
+fun StreamingRow(text: String, maxWidth: Dp, workStyle: Boolean = false) {
     // 生成中的回复不能引用也不能选中追问（status 是 Sending，quotable 为 false）
     MessageBubble(
         message = ChatItem.Message("streaming", 0, Role.Assistant, text, status = DeliveryStatus.Sending),
@@ -270,6 +274,7 @@ fun StreamingRow(text: String, maxWidth: Dp) {
         onRetry = {},
         onCopyCode = {},
         showMeta = false,
+        workStyle = workStyle,
     )
 }
 

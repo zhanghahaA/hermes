@@ -136,10 +136,8 @@ private fun buildRows(items: List<ChatItem>, phase: RunPhase, streaming: String?
                 kotlin.math.abs(a.time - b.time) < GROUP_WINDOW_MS && sameDay(a.time, b.time)
         rows += ChatRow.Item(item, first = !sameGroup(prev, item), last = !sameGroup(item, next))
     }
-    when {
-        streaming != null -> rows += ChatRow.Streaming(streaming)
-        phase == RunPhase.Working && showTyping -> rows += ChatRow.Typing
-    }
+    if (streaming != null) rows += ChatRow.Streaming(streaming)
+    if (phase == RunPhase.Working && showTyping) rows += ChatRow.Typing
     return rows
 }
 
@@ -190,8 +188,9 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    val rows = remember(items, phase, streaming, settings.showTyping) {
-        buildRows(items, phase, streaming, settings.showTyping).asReversed()
+    val rows = remember(items, phase, streaming, settings) {
+        val visible = items.filter { it !is ChatItem.Activity || settings.showWorkProcess || it.earlierReply.isNotBlank() }
+        buildRows(visible, phase, streaming, settings.showTyping).asReversed()
     }
 
     // 会话内搜索：匹配的行号（列表是倒着的，0 是最新的），从最新的一条往前翻
@@ -323,6 +322,7 @@ fun ChatScreen(
                     rows = rows,
                     listState = listState,
                     maxWidth = bubbleWidth,
+                    workStyle = settings.showWorkProcess,
                     contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = bottomBarSpace + 12.dp),
                     highlightId = highlightId,
                     onSelectionChange = { id, sel ->
@@ -541,6 +541,7 @@ private fun MessageList(
     rows: List<ChatRow>,
     listState: LazyListState,
     maxWidth: Dp,
+    workStyle: Boolean,
     contentPadding: PaddingValues,
     highlightId: String?,
     onSelectionChange: (String, MessageSelection?) -> Unit,
@@ -566,8 +567,9 @@ private fun MessageList(
                     when (row) {
                         is ChatRow.Date -> DateSeparator(row.label)
                         is ChatRow.Typing -> TypingRow()
-                        is ChatRow.Streaming -> StreamingRow(row.text, maxWidth)
+                        is ChatRow.Streaming -> StreamingRow(row.text, maxWidth, workStyle)
                         is ChatRow.Item -> when (val item = row.item) {
+                            is ChatItem.Activity -> WorkActivityRow(item, maxWidth, workStyle)
                             is ChatItem.Message -> MessageBubble(
                                 message = item,
                                 first = row.first,
@@ -580,6 +582,7 @@ private fun MessageList(
                                 onQuote = onQuote,
                                 onQuoteClick = onQuoteClick,
                                 onMore = { onMore(item) },
+                                workStyle = workStyle,
                             )
                             is ChatItem.Approval -> ApprovalCard(item) { onApprove(item, it) }
                             is ChatItem.Clarify -> ClarifyCard(item) { onAnswer(item, it) }
@@ -611,7 +614,7 @@ private fun NewChatHint(modifier: Modifier = Modifier) {
     EmptyState(
         Icons.Rounded.AutoAwesome,
         "开始新对话",
-        "像发消息一样告诉 Hermes 你要做什么。\n它只会把结果发给你，需要你确认时会弹出卡片。",
+        "告诉 Hermes 你要做什么。\n需要你确认时会弹出卡片，回复方式可在设置里调整。",
         modifier = modifier,
     )
 }
