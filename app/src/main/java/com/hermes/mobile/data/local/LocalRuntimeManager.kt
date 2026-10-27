@@ -21,6 +21,7 @@ data class LocalRuntimeState(
     val message: String = "先检查运行环境",
     val output: String = "",
     val failed: Boolean = false,
+    val probe: RuntimeProbe = RuntimeProbe.NotChecked,
 )
 
 /** 随 App 进程保留状态。更换为内置后端时，界面、操作串行化和连接存储都可以保留。 */
@@ -34,7 +35,14 @@ class LocalRuntimeManager(
     val state = mutable.asStateFlow()
     private val mutex = Mutex()
 
-    fun refreshEnvironment() { mutable.update { it.copy(environment = backend.environment()) } }
+    fun refreshEnvironment() {
+        val environment = backend.environment()
+        mutable.update {
+            val changed = it.environment.copy(freeBytes = environment.freeBytes) != environment
+            it.copy(environment = environment, checked = if (changed) false else it.checked,
+                probe = if (changed) RuntimeProbe.NotChecked else it.probe)
+        }
+    }
 
     /** 只在明确选择 App 管理的本机连接时自动恢复，不影响远程连接。 */
     suspend fun ensureRunning() = mutex.withLock {
@@ -55,12 +63,15 @@ class LocalRuntimeManager(
             check(state.value.environment.blockers.isEmpty()) { state.value.environment.blockers.joinToString("\n") }
             withTimeout(timeoutMillis) { block() }
         } catch (_: TimeoutCancellationException) {
-            mutable.update { it.copy(checked = false, failed = true, message = "等待超时。Termux 中的任务可能仍在执行，请先检查状态，不要重复安装。") }
+            mutable.update { it.copy(checked = false, failed = true, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.TimedOut else it.probe,
+                message = "等待超时。Termux 中的任务可能仍在执行，请先检查状态，不要重复安装。") }
         } catch (e: CancellationException) {
-            mutable.update { it.copy(checked = false, failed = true, message = "等待已结束，请重新检查后台任务状态") }
+            mutable.update { it.copy(checked = false, failed = true, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.NotChecked else it.probe,
+                message = "等待已结束，请重新检查后台任务状态") }
             throw e
         } catch (e: Exception) {
-            mutable.update { it.copy(failed = true, checked = false, message = DiagnosticRedactor.redact(e.message ?: "操作未完成")) }
+            mutable.update { it.copy(failed = true, checked = false, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.Failed else it.probe,
+                message = DiagnosticRedactor.redact(e.message ?: "操作未完成")) }
         } finally {
             mutable.update { it.copy(busy = false) }
             mutex.unlock()
@@ -70,11 +81,13 @@ class LocalRuntimeManager(
     private suspend fun execute(request: RuntimeRequest) {
         val response = backend.execute(request) { step -> mutable.update { it.copy(message = step) } }
         response.connectionKey?.let(connection::save)
-        mutable.update { it.copy(snapshot = response.snapshot, checked = true, output = response.output) }
+        mutable.update { it.copy(snapshot = response.snapshot, checked = true, output = response.output, probe = RuntimeProbe.Passed) }
     }
 
     fun inspect() = operation("正在检查运行环境") {
+        mutable.update { it.copy(probe = RuntimeProbe.Checking) }
         withTimeout(25_000) { execute(RuntimeRequest(RuntimeAction.Inspect)) }
+        mutable.update { it.copy(probe = RuntimeProbe.Passed) }
         mutable.update { it.copy(message = "环境检查完成") }
     }
 

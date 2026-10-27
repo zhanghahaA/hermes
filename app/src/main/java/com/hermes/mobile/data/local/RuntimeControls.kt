@@ -8,4 +8,5 @@ class RuntimeControls(
     val downloadViewer: () -> Unit,
     val batterySettings: () -> Unit,
     val permissionSettings: () -> Unit = {},
+    val storageSettings: () -> Unit = {},
 )
