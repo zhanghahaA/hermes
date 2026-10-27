@@ -88,7 +88,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                             RuntimeSetupStep.Check -> manager.inspect()
                             RuntimeSetupStep.Recover, RuntimeSetupStep.Pending -> controls.openTermux()
                             RuntimeSetupStep.Storage -> controls.storageSettings()
-                            RuntimeSetupStep.Install, RuntimeSetupStep.Configure -> install()
+                            RuntimeSetupStep.Install, RuntimeSetupStep.Configure, RuntimeSetupStep.SourceUnavailable -> install()
                             RuntimeSetupStep.Repair -> install(repairEnvironment = true)
                             RuntimeSetupStep.Connect -> connect()
                             else -> Unit

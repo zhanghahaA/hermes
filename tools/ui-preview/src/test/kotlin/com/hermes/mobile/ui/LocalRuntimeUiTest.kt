@@ -54,8 +54,8 @@ class LocalRuntimeUiTest {
             onNodeWithText("可选 · 自己的服务").assertDoesNotExist()
             onNodeWithText("安装 Hermes").assertIsDisplayed().performClick()
             waitUntil(timeoutMillis = 5000) { models }
-            assertEquals(listOf(RuntimeAction.Inspect, RuntimeAction.Inspect, RuntimeAction.Prepare,
-                RuntimeAction.InstallHermes, RuntimeAction.ConfigureHermes), f.calls.toList())
+            assertEquals(listOf(RuntimeAction.Inspect, RuntimeAction.Inspect, RuntimeAction.InstallHermes,
+                RuntimeAction.Prepare, RuntimeAction.ConfigureHermes), f.calls.toList())
             onNodeWithText("确认并继续").assertDoesNotExist()
         } finally { f.scope.cancel() }
     }
@@ -166,7 +166,25 @@ class LocalRuntimeUiTest {
             onNodeWithText("修复并继续安装").assertIsDisplayed().performClick()
             waitUntil(timeoutMillis = 5000) { models }
             assertEquals(listOf(RuntimeAction.Inspect, RuntimeAction.RepairEnvironment, RuntimeAction.Inspect,
-                RuntimeAction.Prepare, RuntimeAction.InstallHermes, RuntimeAction.ConfigureHermes), f.calls.toList())
+                RuntimeAction.InstallHermes, RuntimeAction.Prepare, RuntimeAction.ConfigureHermes), f.calls.toList())
         } finally { f.scope.cancel() }
     }
+    @Test fun unavailableRepositoryExplainsCauseAndRetriesInstallation() = runComposeUiTest {
+        val f = Fixture(environment)
+        f.failure = RuntimeCommandException(RuntimeIssue.RepositoryUnavailable, 44)
+        var models = false
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}, onConfigureModels = { models = true }) } }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.failed && !f.manager.state.value.busy }
+            onNodeWithText("官方安装源暂不可用").assertIsDisplayed()
+            onNodeWithText("无需重新初始化", substring = true).assertIsDisplayed()
+            onNodeWithText("复制命令并打开 Termux").assertDoesNotExist()
+            f.failure = null
+            onNodeWithText("重试安装").performClick()
+            waitUntil(timeoutMillis = 5000) { models }
+            assertTrue(f.calls.contains(RuntimeAction.InstallHermes))
+            assertTrue(f.calls.indexOf(RuntimeAction.InstallHermes) < f.calls.indexOf(RuntimeAction.Prepare))
+        } finally { f.scope.cancel() }
+    }
+
 }

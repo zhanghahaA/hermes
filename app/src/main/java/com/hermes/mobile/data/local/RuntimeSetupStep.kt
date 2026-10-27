@@ -11,6 +11,7 @@ enum class RuntimeSetupStep(val title: String, val button: String, val detail: S
     Check("检查连接是否可用", "重新检查", "返回 App 后自动检查；也可点下面的按钮重试。"),
     Recover("没有收到检查结果", "打开 Termux 后重试", "只读检查已结束等待，不必重新初始化。打开 Termux 后返回，会重新检查。"),
     Pending("等待上一项操作完成", "打开 Termux 查看进度", "安装或配置尚未返回结果，请先查看进度，避免重复执行。"),
+    SourceUnavailable("官方安装源暂不可用", "重试安装", "Termux 已能执行命令，无需重新初始化。重试会检查当前通道，恢复后继续安装；不会自动切换到预览版。"),
     Repair("运行环境需要更新", "修复并继续安装", "将更新 Termux 中已安装的软件包，保留配置和文件；需要移除已有软件包时会停止。更新成功后自动继续安装 Hermes。"),
     Storage("安装空间不足", "释放存储空间", "安装需要至少 2 GB 可用空间，已有数据不会删除。"),
     Install("准备好安装了", "安装 Hermes", "自动检查、准备依赖、安装并配置手机连接。完成后直接选择模型。"),
@@ -27,6 +28,7 @@ fun LocalRuntimeState.setupStep(): RuntimeSetupStep = when {
     issue == RuntimeIssue.ExternalApps -> RuntimeSetupStep.Initialize
     issue == RuntimeIssue.InspectionTimeout -> RuntimeSetupStep.Recover
     issue == RuntimeIssue.CommandPending -> RuntimeSetupStep.Pending
+    issue == RuntimeIssue.RepositoryUnavailable -> RuntimeSetupStep.SourceUnavailable
     issue == RuntimeIssue.PackageMismatch && !environment.enoughSpace -> RuntimeSetupStep.Storage
     issue == RuntimeIssue.PackageMismatch -> RuntimeSetupStep.Repair
     !checked || probe != RuntimeProbe.Passed -> RuntimeSetupStep.Check

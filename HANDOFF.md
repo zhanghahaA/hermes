@@ -5,7 +5,14 @@
 
 ## 现状
 
-- 当前开发包 **0.13.6-dev / code 43**，继续 `codex/simple-install` 与 PR #5。用户新截图已收到 shell 错误：curl 找不到 OpenSSL 符号，说明命令回包已送达，但 Termux 软件包版本冲突；镜像选择提示不是此链接错误的根因，不要求重新初始化或卸载。
+- 当前开发包 **0.13.7-dev / code 44**，继续 `codex/simple-install` 和草稿 PR #5。用户截图 curl 已恢复，安装在下载官方公钥时返回 404。已实测 stable/key.asc、stable/dists/hermes-stable/InRelease 均为 404；canary 两项 200，nightly 两项 404。上游文档 `69f73ec5f11f5a945cc864f29c4e2ad2307eaec3/website/docs/getting-started/termux.md` 明确警告 Termux 包当前不能运行。不能把 App 改进说成已经解决官方发布问题，也不能把 canary HTTP 200 说成手机可用。
+- 安装先获取所选通道公钥和 InRelease，再安装 GnuPG 并验证固定主公钥指纹、通过签名 APT 安装 Hermes，最后补齐 App 管理所需 Python。curl 缺失时只先补 curl。404／410 使用固定标记和退出码 44 映射 RepositoryUnavailable，界面说明「官方安装源暂不可用」，明确重试是继续安装。失败不写软件源、不切通道、不要求重新初始化；其它 HTTP／签名失败仍停止。
+- 验证：完整桌面套件 **272 项报告、256 项实际通过、0 失败**；16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 4 项安装源脚本／后端回归和 1 项界面重试回归，覆盖 key/index 404、410、503、明确选择通道、错误指纹拒绝及失败不安装 Python。
+- APK SHA-256：`7b296d19e33963a5ebb7aa31944d6db6dfd9f7102f836b511f1282967cb377b6`；签名沿用 `d985fcaf…db1dc7`。App 与 Android 自检 APK 构建通过；真实 Termux 安装仍未验证，官方 stable 目前仍不可安装。交付 `/workspace/shared/downloads/hermes-mobile-0.13.7-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.7-dev`，包含 HTTP 核实证据。
+
+### 0.13.6-dev 软件包冲突修复记录
+
+- 当时开发包 **0.13.6-dev / code 43**，继续 `codex/simple-install` 与 PR #5。用户新截图已收到 shell 错误：curl 找不到 OpenSSL 符号，说明命令回包已送达，但 Termux 软件包版本冲突；镜像选择提示不是此链接错误的根因，不要求重新初始化或卸载。
 - 新增安装前只读 curl 本地检查与 PackageMismatch 分类；主按钮「修复并继续安装」说明将更新 Termux 现有软件包，用户点击才执行。直接 APT 避开 pkg 对 curl 的依赖，update 使用 Error-Mode=any；dist-upgrade 使用 --no-remove 和 --force-confold，保留配置、禁止移除包、不绕过签名。curl 恢复后连续安装，任一步失败停止。已有可用 Hermes 不因安装工具探测阻断聊天。
 - 验证：完整桌面套件 **267 项报告、251 项实际通过、0 失败**；另 16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 5 项包冲突／真实修复脚本（替代命令）回归和 1 项界面修复连续安装回归；App 与 Android 自检 APK 构建通过。无手机执行证据，真实 Termux 软件包更新与原生安装仍未实测。
 - APK SHA-256：`0cac7e99a68c9e602c4b03889c396ed0cd4c77d0151d27af341f449bc3cd037b`；签名仍为 `d985fcaf…db1dc7`。留档 `/workspace/hermes-cloud/releases/0.13.6-dev`，下载 `/workspace/shared/downloads/hermes-mobile-0.13.6-dev.apk`。仅更新草稿 PR，不发布 Release。

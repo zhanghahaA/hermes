@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.6-dev (Android versionCode 43).** Detects Termux curl/library version conflicts and offers an explicit repair-and-install action. Repair updates Termux packages through APT, preserves existing configuration, refuses package removals, and continues installation only after success. Includes single-action setup and recovery from timed-out read-only checks. See [deployment and model settings](docs/model-settings.md). Actual phone package repair and native installation remain unverified.
+**Current development build: 0.13.7-dev (Android versionCode 44).** Checks the selected official channel before installing further dependencies and clearly reports missing repository files (HTTP 404/410), without asking users to initialize Termux again or silently switching channels. The official stable key and index currently return 404, and upstream warns that its Termux package is broken. This app update does not repair upstream publishing or establish that canary runs on a phone. See [deployment and model settings](docs/model-settings.md).
 
 English | [中文](README.zh-CN.md)
 

@@ -1,6 +1,6 @@
 # Hermes 移动版（Android）
 
-当前开发包 **0.13.6-dev / Android versionCode 43**：识别 Termux 的 curl／加密库版本冲突，提供「修复并继续安装」。点击后直接通过 APT 更新 Termux 软件包，保留已有配置，禁止移除已有软件包；修复成功后自动继续安装。沿用单按钮安装、只读检查超时恢复和模型保存后进入聊天。见 [部署与模型设置](docs/model-settings.md)。真实手机上的软件包更新及原生安装仍需验证。
+当前开发包 **0.13.7-dev / Android versionCode 44**：安装前检查所选官方通道的公钥与索引，404／410 时明确显示「官方安装源暂不可用」，停止后续依赖安装，不再误导用户重新初始化 Termux。保留单按钮安装和软件包冲突修复。当前官方 stable 文件实测返回 404，上游也明确提示 Termux 包暂不可用；本版本不能修复上游发布，不能保证预览版可运行。见 [部署与模型设置](docs/model-settings.md)。
 
 在手机上使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：默认像发消息一样收到最终回复，可在设置中开启逐字回复或思考与工作过程；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 

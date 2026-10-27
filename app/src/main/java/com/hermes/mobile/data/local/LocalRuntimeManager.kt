@@ -121,10 +121,11 @@ class LocalRuntimeManager(
         if (!state.value.snapshot.toolsReady || !state.value.snapshot.hermesInstalled) {
             check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
         }
-        if (!state.value.snapshot.toolsReady) execute(RuntimeRequest(RuntimeAction.Prepare))
         if (!state.value.snapshot.hermesInstalled) {
             execute(RuntimeRequest(RuntimeAction.InstallHermes, channel = channel, acceptExperimental = true))
         }
+        // Hermes 的原生包自带运行时；先确认其安装源可用，再准备 App 的 Python 管理环境。
+        if (!state.value.snapshot.toolsReady) execute(RuntimeRequest(RuntimeAction.Prepare))
         execute(RuntimeRequest(RuntimeAction.ConfigureHermes))
         mutable.update { it.copy(message = "Hermes 已安装。下一步配置模型提供方，再启动并连接。") }
     }

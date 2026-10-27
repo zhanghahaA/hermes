@@ -87,6 +87,10 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
         val result = transport.run(script, input, readOnly)
         result.issue?.let { throw RuntimeCommandException(it, result.resultCode) }
         if (result.exitCode != 0) {
+            if (input.isEmpty() && result.exitCode == 44 &&
+                result.stderr.lineSequence().any { it == "HM_REPOSITORY_UNAVAILABLE" }) {
+                throw RuntimeCommandException(RuntimeIssue.RepositoryUnavailable, result.exitCode)
+            }
             val raw = result.stderr + "\n" + result.stdout
             if (input.isEmpty() && raw.contains("CANNOT LINK EXECUTABLE", ignoreCase = true) &&
                 raw.contains("curl", ignoreCase = true) && raw.contains("cannot locate symbol", ignoreCase = true)) {
@@ -139,10 +143,22 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
                 esac
             """.trimIndent().replace('§', '$') else "hm_channel=" + channel.id) + "\n" + """
             [ "§(uname -m)" = aarch64 ] || exit 22
-            pkg install -y curl gnupg
+            # 先检查选中通道，再安装其它依赖；不因稳定版缺失而自动切换预览版。
+            command -v curl >/dev/null 2>&1 || pkg install -y curl
+            hm_fetch() {
+                hm_status=§(curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 120 -w '%{http_code}' "§1" -o "§2") || {
+                    hm_result=§?
+                    case "§hm_status" in
+                        404|410) echo HM_REPOSITORY_UNAVAILABLE >&2; exit 44 ;;
+                        *) exit "§hm_result" ;;
+                    esac
+                }
+            }
             hm_key=§(mktemp)
             trap 'rm -f "§hm_key"' EXIT
-            curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --max-time 120 "https://hermes-assets.nousresearch.com/releases/termux/§hm_channel/key.asc" -o "§hm_key"
+            hm_fetch "https://hermes-assets.nousresearch.com/releases/termux/§hm_channel/key.asc" "§hm_key"
+            hm_fetch "https://hermes-assets.nousresearch.com/releases/termux/§hm_channel/dists/hermes-§hm_channel/InRelease" /dev/null
+            pkg install -y gnupg
             hm_fingerprint=§(gpg --batch --with-colons --show-keys "§hm_key" | awk -F: '§1 == "fpr" {print §10; exit}')
             hm_primary_count=§(gpg --batch --with-colons --show-keys "§hm_key" | awk -F: '§1 == "pub" {n++} END {print n+0}')
             [ "§hm_primary_count" = 1 ] || { echo '仓库公钥数量异常，已停止' >&2; exit 23; }

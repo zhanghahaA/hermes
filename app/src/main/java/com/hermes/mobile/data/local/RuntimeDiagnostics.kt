@@ -54,13 +54,14 @@ fun RuntimeEnvironment.checks(): List<RuntimeCheck> = buildList {
 fun LocalRuntimeState.diagnosticChecks(): List<RuntimeCheck> = environment.checks() + listOf(
     RuntimeCheck("command", "Termux 命令连通", when {
         environment.blockers.isNotEmpty() -> RuntimeCheckStatus.Pending
-        issue == RuntimeIssue.PackageMismatch -> RuntimeCheckStatus.Passed
+        issue in setOf(RuntimeIssue.PackageMismatch, RuntimeIssue.RepositoryUnavailable) -> RuntimeCheckStatus.Passed
         probe == RuntimeProbe.Checking -> RuntimeCheckStatus.Checking
         probe == RuntimeProbe.Passed -> RuntimeCheckStatus.Passed
         probe in setOf(RuntimeProbe.Failed, RuntimeProbe.TimedOut) -> RuntimeCheckStatus.Blocked
         else -> RuntimeCheckStatus.Pending
     }, when {
         environment.blockers.isNotEmpty() -> "先处理上面的必要条件，再测试外部调用与命令回包。"
+        issue == RuntimeIssue.RepositoryUnavailable -> "已收到 Termux 的命令结果；官方当前通道缺少安装文件，无需重新授权或初始化。"
         issue == RuntimeIssue.PackageMismatch -> "已收到 Termux 的命令结果；安装工具存在版本冲突，请按主按钮修复。"
         probe == RuntimeProbe.Checking -> "正在请求 Termux 执行只读检查，等待回包。"
         probe == RuntimeProbe.Passed -> "已收到 Termux 的检查结果，外部调用与命令回包可用。"
