@@ -1,6 +1,6 @@
 # Hermes 移动版（Android）
 
-当前开发包 **0.13.5-dev / Android versionCode 42**：修复 Termux 检查超时后永久提示上一条任务未返回的问题，只读检查可以重新发起，旧回包不会干扰新检查；安装和配置仍保留防重复保护。沿用单按钮安装、返回自动重查和模型保存后进入聊天。见 [部署与模型设置](docs/model-settings.md)。手机端回包丢失原因与原生安装仍需真机验证。
+当前开发包 **0.13.6-dev / Android versionCode 43**：识别 Termux 的 curl／加密库版本冲突，提供「修复并继续安装」。点击后直接通过 APT 更新 Termux 软件包，保留已有配置，禁止移除已有软件包；修复成功后自动继续安装。沿用单按钮安装、只读检查超时恢复和模型保存后进入聊天。见 [部署与模型设置](docs/model-settings.md)。真实手机上的软件包更新及原生安装仍需验证。
 
 在手机上使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：默认像发消息一样收到最终回复，可在设置中开启逐字回复或思考与工作过程；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 

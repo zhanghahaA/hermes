@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.5-dev (Android versionCode 42).** Read-only Termux checks now release their pending slot after timeout or cancellation, allowing real retries. Late callbacks cannot complete or unlock a newer command. Installation and configuration retain protection until their actual result arrives. Includes single-action setup and automatic checking on return. See [deployment and model settings](docs/model-settings.md). Actual device callback delivery and native installation still require phone validation.
+**Current development build: 0.13.6-dev (Android versionCode 43).** Detects Termux curl/library version conflicts and offers an explicit repair-and-install action. Repair updates Termux packages through APT, preserves existing configuration, refuses package removals, and continues installation only after success. Includes single-action setup and recovery from timed-out read-only checks. See [deployment and model settings](docs/model-settings.md). Actual phone package repair and native installation remain unverified.
 
 English | [中文](README.zh-CN.md)
 

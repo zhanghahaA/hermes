@@ -10,6 +10,7 @@ enum class RuntimeIssue(val explanation: String) {
     LaunchFailed("无法打开 Termux 命令服务，请打开 Termux 后返回重试。"),
     InspectionTimeout("没有收到 Termux 的检查结果。本次只读检查已结束等待，可以打开 Termux 后返回重试，不必重复初始化。"),
     CommandPending("上一项 Termux 操作尚未返回。请打开 Termux 查看进度，安装或配置完成前不要重复执行。"),
+    PackageMismatch("Termux 的 curl 与加密库版本不匹配，需要先更新运行环境，再继续安装。"),
 }
 
 class RuntimeCommandException(val issue: RuntimeIssue, val resultCode: Int? = null, detail: String? = null) :

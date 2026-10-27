@@ -366,3 +366,7 @@ App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cl
 - `RuntimeResultReceiver` 将实际 Bundle 字段交给共享 `decodeTermuxResult`，桌面测试直接验证同一解析器。`err=0` 是拒绝／取消，不当作成功。依据：[Termux v0.118.3 Errno](https://github.com/termux/termux-app/blob/v0.118.3/termux-shared/src/main/java/com/termux/shared/models/errors/Errno.java)、[回包字段](https://github.com/termux/termux-app/blob/v0.118.3/termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java)。
 - 回包错误只保留固定分类及数字码。包含 `allow-external-apps` 的拒绝显示一次初始化入口，其它失败不要求盲目重复粘贴命令。原始 `errmsg` 可能含命令／凭据，不写到界面或复制报告；shell 失败继续按原有脱敏规则展示，结构化输入操作不回显原始输出。
 - 页面进入／从 Termux 或权限设置返回时只执行检查，不自动安装。安装主按钮旁说明修改范围；一次点击连续检查、准备缺失依赖、安装缺失程序并配置连接。失败重试重新探测状态，已完成的软件安装复用。0.13.5 起，只读检查超时／取消会注销回调并释放自己的占位，新检查使用新的标识；迟到旧回包不能完成或释放新命令。安装、配置、模型设置等修改操作超时仍保留“后台任务状态未知”的保护，直到实际回包，不靠重试强制解除。
+
+### Termux 软件包版本冲突（0.13.6）
+
+未安装 Hermes 时，Inspect 额外运行本地 `curl --version`（只读、无网络）。只有无结构化输入的失败命令同时出现 curl、`CANNOT LINK EXECUTABLE` 和 `cannot locate symbol` 才映射为 PackageMismatch；显示固定说明，诊断承认命令回包已送达。用户点击明确说明更新范围的修复按钮后，执行 `apt-get -o APT::Update::Error-Mode=any update` 与 `apt-get -y --no-remove -o Dpkg::Options::=--force-confold dist-upgrade`，再检查 curl。保留配置并拒绝移除包，不绕过签名，不自动切源；任一步失败就停止，不继续安装。修复属于修改操作，保留等待实际回包的防重入保护。脚本测试使用替代 APT/curl 程序，不能作为真实 Termux 包升级已验证的依据。

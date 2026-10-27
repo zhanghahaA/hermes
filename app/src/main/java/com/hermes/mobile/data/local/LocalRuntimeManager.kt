@@ -102,7 +102,7 @@ class LocalRuntimeManager(
     }
 
     fun perform(request: RuntimeRequest) = operation(label(request.action)) {
-        if (request.action in setOf(RuntimeAction.Prepare, RuntimeAction.InstallHermes, RuntimeAction.InstallBrowser, RuntimeAction.InstallService, RuntimeAction.InstallProxy)) {
+        if (request.action in setOf(RuntimeAction.Prepare, RuntimeAction.RepairEnvironment, RuntimeAction.InstallHermes, RuntimeAction.InstallBrowser, RuntimeAction.InstallService, RuntimeAction.InstallProxy)) {
             check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
         }
         if (request.action == RuntimeAction.InstallBrowser && !state.value.snapshot.toolsReady) execute(RuntimeRequest(RuntimeAction.Prepare))
@@ -111,7 +111,11 @@ class LocalRuntimeManager(
     }
 
     /** 安装不再依赖模型 Key；先完成安装与手机接口配置，再由设置页配置提供方。 */
-    fun install(channel: ReleaseChannel = ReleaseChannel.Stable) = operation("正在安装本机 Hermes") {
+    fun install(channel: ReleaseChannel = ReleaseChannel.Stable, repairEnvironment: Boolean = false) = operation("正在安装本机 Hermes") {
+        if (repairEnvironment) {
+            check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
+            execute(RuntimeRequest(RuntimeAction.RepairEnvironment))
+        }
         mutable.update { it.copy(probe = RuntimeProbe.Checking) }
         withTimeout(25_000) { execute(RuntimeRequest(RuntimeAction.Inspect)) }
         if (!state.value.snapshot.toolsReady || !state.value.snapshot.hermesInstalled) {
@@ -155,6 +159,7 @@ class LocalRuntimeManager(
         fun label(action: RuntimeAction): String = when (action) {
             RuntimeAction.Inspect -> "检查环境"
             RuntimeAction.Prepare -> "准备 Python 服务环境"
+            RuntimeAction.RepairEnvironment -> "修复 Termux 运行环境"
             RuntimeAction.InstallHermes -> "安装本机 Hermes"
             RuntimeAction.UpgradeHermes -> "升级本机 Hermes"
             RuntimeAction.ConfigureHermes -> "配置本机连接"

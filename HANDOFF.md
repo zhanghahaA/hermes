@@ -5,8 +5,15 @@
 
 ## 现状
 
+- 当前开发包 **0.13.6-dev / code 43**，继续 `codex/simple-install` 与 PR #5。用户新截图已收到 shell 错误：curl 找不到 OpenSSL 符号，说明命令回包已送达，但 Termux 软件包版本冲突；镜像选择提示不是此链接错误的根因，不要求重新初始化或卸载。
+- 新增安装前只读 curl 本地检查与 PackageMismatch 分类；主按钮「修复并继续安装」说明将更新 Termux 现有软件包，用户点击才执行。直接 APT 避开 pkg 对 curl 的依赖，update 使用 Error-Mode=any；dist-upgrade 使用 --no-remove 和 --force-confold，保留配置、禁止移除包、不绕过签名。curl 恢复后连续安装，任一步失败停止。已有可用 Hermes 不因安装工具探测阻断聊天。
+- 验证：完整桌面套件 **267 项报告、251 项实际通过、0 失败**；另 16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 5 项包冲突／真实修复脚本（替代命令）回归和 1 项界面修复连续安装回归；App 与 Android 自检 APK 构建通过。无手机执行证据，真实 Termux 软件包更新与原生安装仍未实测。
+- APK SHA-256：`0cac7e99a68c9e602c4b03889c396ed0cd4c77d0151d27af341f449bc3cd037b`；签名仍为 `d985fcaf…db1dc7`。留档 `/workspace/hermes-cloud/releases/0.13.6-dev`，下载 `/workspace/shared/downloads/hermes-mobile-0.13.6-dev.apk`。仅更新草稿 PR，不发布 Release。
 
-- 当前开发包 **0.13.5-dev / code 42**，继续 `/workspace/hermes` 的 `codex/simple-install`，更新 PR #5。用户截图已显示初始化命令执行完成，App 报「上一次 Termux 任务还未返回」；这是进程内命令占位在检查超时后仍保留，造成后续检查被拒绝。截图不能证明回包为何丢失，不把此修复说成已经验证用户手机链路正常。
+### 0.13.5-dev 检查超时恢复记录
+
+
+- 当时开发包 **0.13.5-dev / code 42**，继续 `/workspace/hermes` 的 `codex/simple-install`，更新 PR #5。用户截图已显示初始化命令执行完成，App 报「上一次 Termux 任务还未返回」；这是进程内命令占位在检查超时后仍保留，造成后续检查被拒绝。截图不能证明回包为何丢失，不把此修复说成已经验证用户手机链路正常。
 - 提取 Android 真正使用的 `TermuxCommandTracker`：只读检查等待超时／取消时注销自己的 PendingIntent、释放自己的占位；安装、配置和模型设置默认不可重入，等待取消后仍保留到实际回包。每次命令独立标识，迟到／重复旧回包不能完成或解锁新命令。PendingIntent 创建或启动服务失败也完成回包并清理占位；不开放导出的广播入口，不落盘回包或凭据。
 - 后端显式标记只读的 Python／Hermes 可用性探测和 Inspect 状态读取；软件包安装、配置、模型设置默认保持修改操作保护。安装页对检查超时显示「打开 Termux 后重试」，并提供「重新发送检查」与后台设置；返回会重新检查，不再要求盲目重复初始化。未知安装结果仍提示先查看 Termux 进度。
 - 验证：完整桌面套件 **261 项报告，245 项实际通过，0 失败**，16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 7 项共享回调登记回归（丢失回包、迟到旧回包、安装超时保护、创建／启动失败、取消清理、真实后端只读分类、manager 重试恢复）和 1 项界面超时恢复回归；App 与 Android 自检 APK 构建通过。浅／深色检查超时及安装等待截图已检查。adb 仍无设备，用户 vivo 的回包送达原因、真实后台限制及原生安装未实测。

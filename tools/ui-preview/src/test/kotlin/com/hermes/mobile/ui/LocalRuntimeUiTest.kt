@@ -19,6 +19,7 @@ class LocalRuntimeUiTest {
         val calls = CopyOnWriteArrayList<RuntimeAction>()
         var snapshot = RuntimeSnapshot()
         var failure: RuntimeCommandException? = null
+        var clearFailureOnRepair = false
         var hold: CompletableDeferred<Unit>? = null
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = LocalRuntimeManager(scope, this, object : LocalConnectionAccess {
@@ -29,6 +30,7 @@ class LocalRuntimeUiTest {
         override suspend fun execute(request: RuntimeRequest, progress: (String) -> Unit): RuntimeResponse {
             calls += request.action
             hold?.await()
+            if (clearFailureOnRepair && request.action == RuntimeAction.RepairEnvironment) failure = null
             failure?.let { throw it }
             snapshot = when(request.action) {
                 RuntimeAction.Prepare -> snapshot.copy(toolsReady = true)
@@ -148,6 +150,23 @@ class LocalRuntimeUiTest {
             waitUntil(timeoutMillis = 5000) { f.manager.state.value.probe == RuntimeProbe.Passed && !f.manager.state.value.busy }
             onNodeWithText("安装 Hermes").assertIsEnabled()
             assertTrue(f.calls.all { it == RuntimeAction.Inspect })
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun packageConflictOffersExplicitRepairAndThenContinuesInstallation() = runComposeUiTest {
+        val f = Fixture(environment)
+        f.failure = RuntimeCommandException(RuntimeIssue.PackageMismatch, 1)
+        f.clearFailureOnRepair = true
+        var models = false
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}, onConfigureModels = { models = true }) } }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.issue == RuntimeIssue.PackageMismatch }
+            assertTrue(f.calls.all { it == RuntimeAction.Inspect }, "进入页面不能自动升级已有 Termux 软件包")
+            onNodeWithText("将更新 Termux 中已安装的软件包", substring = true).assertIsDisplayed()
+            onNodeWithText("修复并继续安装").assertIsDisplayed().performClick()
+            waitUntil(timeoutMillis = 5000) { models }
+            assertEquals(listOf(RuntimeAction.Inspect, RuntimeAction.RepairEnvironment, RuntimeAction.Inspect,
+                RuntimeAction.Prepare, RuntimeAction.InstallHermes, RuntimeAction.ConfigureHermes), f.calls.toList())
         } finally { f.scope.cancel() }
     }
 }

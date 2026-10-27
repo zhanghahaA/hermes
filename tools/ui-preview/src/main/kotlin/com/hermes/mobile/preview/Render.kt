@@ -95,6 +95,8 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("57-repair-packages", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.PackageMismatch) },
+    Scene("57b-repair-packages-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.PackageMismatch) },
     Scene("56-check-timeout", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.InspectionTimeout) },
     Scene("56b-check-timeout-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.InspectionTimeout) },
     Scene("56c-install-pending", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.CommandPending) },

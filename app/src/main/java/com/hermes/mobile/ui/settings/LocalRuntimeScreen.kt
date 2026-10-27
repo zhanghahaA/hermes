@@ -38,9 +38,9 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
     val ready = env.blockers.isEmpty() && !state.busy && !openingChat
     val installReady = ready && env.enoughSpace
     val step = state.setupStep()
-    fun install() {
+    fun install(repairEnvironment: Boolean = false) {
         scope.launch {
-            manager.install(channel).join()
+            manager.install(channel, repairEnvironment).join()
             if (!manager.state.value.failed && manager.state.value.snapshot.configured) onConfigureModels()
         }
     }
@@ -89,6 +89,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                             RuntimeSetupStep.Recover, RuntimeSetupStep.Pending -> controls.openTermux()
                             RuntimeSetupStep.Storage -> controls.storageSettings()
                             RuntimeSetupStep.Install, RuntimeSetupStep.Configure -> install()
+                            RuntimeSetupStep.Repair -> install(repairEnvironment = true)
                             RuntimeSetupStep.Connect -> connect()
                             else -> Unit
                         }

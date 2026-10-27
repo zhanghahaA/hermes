@@ -124,6 +124,6 @@ class TermuxCommandTrackerTest {
         assertEquals(RuntimeProbe.Passed, manager.state.value.probe)
         assertEquals(RuntimeSetupStep.Install, manager.state.value.setupStep())
         assertFalse(manager.state.value.failed)
-        assertEquals(3, sent)
+        assertEquals(4, sent)
     }
 }

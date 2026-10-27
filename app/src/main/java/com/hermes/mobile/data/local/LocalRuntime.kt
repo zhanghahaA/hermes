@@ -42,7 +42,7 @@ data class RuntimeEnvironment(
 
 @Serializable
 enum class RuntimeAction {
-    Inspect, Prepare, InstallHermes, UpgradeHermes, ConfigureHermes,
+    Inspect, Prepare, RepairEnvironment, InstallHermes, UpgradeHermes, ConfigureHermes,
     StartHermes, StopHermes, RestartHermes, HermesLogs, RemoveHermes,
     InstallService, InstallProxy, StartService, StopService, ServiceLogs, RemoveService,
     InstallBrowser, StartBrowser, StopBrowser,
