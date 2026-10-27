@@ -27,7 +27,7 @@ class TermuxResultTest {
         val backend = TermuxRuntimeBackend(object : TermuxTransport {
             override fun environment() = env
             override fun openViewer() = Unit
-            override suspend fun run(script: String, input: String) = result
+            override suspend fun run(script: String, input: String, readOnly: Boolean) = result
         }, "pass")
         val manager = LocalRuntimeManager(this, backend, object : LocalConnectionAccess {
             override fun save(apiKey: String) = Unit
@@ -45,7 +45,7 @@ class TermuxResultTest {
         val backend = TermuxRuntimeBackend(object : TermuxTransport {
             override fun environment() = env
             override fun openViewer() = Unit
-            override suspend fun run(script: String, input: String) = decodeTermuxResult(-1, 0,
+            override suspend fun run(script: String, input: String, readOnly: Boolean) = decodeTermuxResult(-1, 0,
                 if (script.contains("HM_PYTHON_MISSING")) "HM_PYTHON_MISSING\n" else "", "", "")
         }, "pass")
         val result = backend.execute(RuntimeRequest(RuntimeAction.Inspect)) {}

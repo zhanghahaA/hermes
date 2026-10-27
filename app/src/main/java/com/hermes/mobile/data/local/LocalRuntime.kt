@@ -132,7 +132,7 @@ interface LocalConnectionAccess {
 /** Android Intent 桥是外部后端的私有实现；业务和界面不直接发任意 shell 命令。 */
 interface TermuxTransport {
     fun environment(): RuntimeEnvironment
-    suspend fun run(script: String, input: String = ""): TermuxCommandResult
+    suspend fun run(script: String, input: String = "", readOnly: Boolean = false): TermuxCommandResult
     fun openViewer()
 }
 

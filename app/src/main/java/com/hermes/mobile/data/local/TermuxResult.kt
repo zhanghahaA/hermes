@@ -8,6 +8,8 @@ enum class RuntimeIssue(val explanation: String) {
     InvalidResult("Termux 返回的结果不完整，请重新检查。"),
     CommandFailed("命令已经返回，但执行失败。请展开检查详情查看运行状态。"),
     LaunchFailed("无法打开 Termux 命令服务，请打开 Termux 后返回重试。"),
+    InspectionTimeout("没有收到 Termux 的检查结果。本次只读检查已结束等待，可以打开 Termux 后返回重试，不必重复初始化。"),
+    CommandPending("上一项 Termux 操作尚未返回。请打开 Termux 查看进度，安装或配置完成前不要重复执行。"),
 }
 
 class RuntimeCommandException(val issue: RuntimeIssue, val resultCode: Int? = null, detail: String? = null) :

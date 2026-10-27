@@ -62,7 +62,8 @@ fun LocalRuntimeState.diagnosticChecks(): List<RuntimeCheck> = environment.check
         environment.blockers.isNotEmpty() -> "先处理上面的必要条件，再测试外部调用与命令回包。"
         probe == RuntimeProbe.Checking -> "正在请求 Termux 执行只读检查，等待回包。"
         probe == RuntimeProbe.Passed -> "已收到 Termux 的检查结果，外部调用与命令回包可用。"
-        probe == RuntimeProbe.TimedOut -> "没有及时收到回包，不能确定后台任务是否结束。打开 Termux 查看状态，确认初始化命令已执行，并查看后台与电池限制；不要重复安装。"
+        probe == RuntimeProbe.TimedOut -> if (issue == RuntimeIssue.InspectionTimeout) issue.explanation
+            else "没有及时收到回包，不能确定后台任务是否结束。打开 Termux 查看状态，并查看后台与电池限制；不要重复安装。"
         probe == RuntimeProbe.Failed -> issue?.explanation ?: "命令测试没有通过，请查看主按钮旁的错误说明；本次检查没有安装软件。"
         else -> "尚未收到实际命令结果；点「检查环境」测试。复制过初始化命令不等于已经执行成功。"
     }, if (issue == RuntimeIssue.ExternalApps) RuntimeRemedy.Initialize else if (probe in setOf(RuntimeProbe.Failed, RuntimeProbe.TimedOut)) RuntimeRemedy.OpenTermux else null),

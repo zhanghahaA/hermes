@@ -66,8 +66,13 @@ class LocalRuntimeManager(
             check(state.value.environment.blockers.isEmpty()) { state.value.environment.blockers.joinToString("\n") }
             withTimeout(timeoutMillis) { block() }
         } catch (_: TimeoutCancellationException) {
-            mutable.update { it.copy(checked = false, failed = true, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.TimedOut else it.probe,
-                message = "等待超时。Termux 中的任务可能仍在执行，请先检查状态，不要重复安装。") }
+            mutable.update {
+                val inspecting = it.probe == RuntimeProbe.Checking
+                it.copy(checked = false, failed = true, probe = if (inspecting) RuntimeProbe.TimedOut else it.probe,
+                    issue = if (inspecting) RuntimeIssue.InspectionTimeout else RuntimeIssue.CommandPending,
+                    message = if (inspecting) RuntimeIssue.InspectionTimeout.explanation
+                        else "等待超时。Termux 中的任务可能仍在执行，请先检查状态，不要重复安装。")
+            }
         } catch (e: CancellationException) {
             mutable.update { it.copy(checked = false, failed = true, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.NotChecked else it.probe,
                 message = "等待已结束，请重新检查后台任务状态") }

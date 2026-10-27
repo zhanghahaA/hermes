@@ -23,21 +23,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.hermes.mobile.data.local.*
-import kotlinx.coroutines.CompletableDeferred
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
-import java.util.UUID
 
 private object RuntimeCallbacks {
-    data class Pending(val result: CompletableDeferred<TermuxCommandResult>, val intent: PendingIntent)
-    val active = AtomicReference<String?>(null)
-    val pending = ConcurrentHashMap<String, Pending>()
-    fun finish(id: String, result: TermuxCommandResult) {
-        val call = pending.remove(id) ?: return
-        active.compareAndSet(id, null)
-        call.intent.cancel()
-        call.result.complete(result)
-    }
+    val commands = TermuxCommandTracker()
 }
 
 /** 仅 PendingIntent 持有者可以送达；不导出广播入口，不将回包写日志或磁盘。 */
@@ -49,7 +37,7 @@ class RuntimeResultReceiver : BroadcastReceiver() {
         val code = (result?.get("exitCode") as? Number)?.toInt()
         @Suppress("DEPRECATION")
         val error = (result?.get("err") as? Number)?.toInt()
-        RuntimeCallbacks.finish(id, decodeTermuxResult(error, code,
+        RuntimeCallbacks.commands.finish(id, decodeTermuxResult(error, code,
             result?.getString("stdout").orEmpty(), result?.getString("stderr").orEmpty(),
             result?.getString("errmsg").orEmpty()))
     }
@@ -90,15 +78,13 @@ class AndroidTermuxTransport(context: Context) : TermuxTransport {
         )
     }
 
-    override suspend fun run(script: String, input: String): TermuxCommandResult {
-        val id = UUID.randomUUID().toString()
-        check(RuntimeCallbacks.active.compareAndSet(null, id)) { "上一次 Termux 任务还未返回，请打开 Termux 检查，勿重复安装" }
-        val callback = PendingIntent.getBroadcast(context, 0,
-            Intent(context, RuntimeResultReceiver::class.java).setData(Uri.parse("hermes-runtime://result/$id")),
-            PendingIntent.FLAG_ONE_SHOT or if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-        val result = CompletableDeferred<TermuxCommandResult>()
-        RuntimeCallbacks.pending[id] = RuntimeCallbacks.Pending(result, callback)
+    override suspend fun run(script: String, input: String, readOnly: Boolean): TermuxCommandResult {
+        val call = RuntimeCallbacks.commands.begin(readOnly)
         try {
+            val callback = PendingIntent.getBroadcast(context, 0,
+                Intent(context, RuntimeResultReceiver::class.java).setData(Uri.parse("hermes-runtime://result/${call.id}")),
+                PendingIntent.FLAG_ONE_SHOT or if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            RuntimeCallbacks.commands.registerCallback(call, callback::cancel)
             val command = Intent("com.termux.RUN_COMMAND")
                 .setComponent(ComponentName("com.termux", "com.termux.app.RunCommandService"))
                 .putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
@@ -108,12 +94,11 @@ class AndroidTermuxTransport(context: Context) : TermuxTransport {
                 .putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
                 .putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", callback)
                 .putExtra("com.termux.RUN_COMMAND_BACKGROUND_CUSTOM_LOG_LEVEL", "0")
-            ContextCompat.startForegroundService(context, command)
+            checkNotNull(ContextCompat.startForegroundService(context, command))
         } catch (_: Exception) {
-            RuntimeCallbacks.finish(id, TermuxCommandResult(-1, issue = RuntimeIssue.LaunchFailed))
+            RuntimeCallbacks.commands.finish(call.id, TermuxCommandResult(-1, issue = RuntimeIssue.LaunchFailed))
         }
-        // 取消等待不等于远端命令停止。保留回调和并发锁直到 Termux 真正结束。
-        return result.await()
+        return RuntimeCallbacks.commands.await(call)
     }
 
     override fun openViewer() {

@@ -38,16 +38,16 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
         val operation = if (request.action in setOf(RuntimeAction.Prepare, RuntimeAction.InstallHermes, RuntimeAction.UpgradeHermes, RuntimeAction.InstallBrowser))
             RuntimeRequest(RuntimeAction.Inspect) else request
         if (operation.action == RuntimeAction.StartBrowser) check(env.viewerInstalled) { "请先安装并打开独立的 Termux:X11 应用" }
-        val probe = checkedRun(Header + "\nif command -v python3 >/dev/null 2>&1; then echo HM_PYTHON_READY; else echo HM_PYTHON_MISSING; fi")
+        val probe = checkedRun(Header + "\nif command -v python3 >/dev/null 2>&1; then echo HM_PYTHON_READY; else echo HM_PYTHON_MISSING; fi", readOnly = true)
         if ("HM_PYTHON_MISSING" in probe.stdout.lines()) {
             check(operation.action == RuntimeAction.Inspect) { "请先准备 Python 服务环境" }
-            val basic = checkedRun(Header + "\ncommand -v hermes >/dev/null 2>&1 && echo HM_HERMES_READY || true")
+            val basic = checkedRun(Header + "\ncommand -v hermes >/dev/null 2>&1 && echo HM_HERMES_READY || true", readOnly = true)
             return RuntimeResponse(RuntimeSnapshot(hermesInstalled = "HM_HERMES_READY" in basic.stdout.lines()))
         }
         val encoded = Base64.getEncoder().encodeToString(program.toByteArray(Charsets.UTF_8))
         val loader = "import base64;exec(compile(base64.b64decode('$encoded'),'hermes-runtime','exec'))"
         val script = Header + "\npython3 -c " + quote(loader)
-        val result = checkedRun(script, json.encodeToString(RuntimeRequest.serializer(), operation))
+        val result = checkedRun(script, json.encodeToString(RuntimeRequest.serializer(), operation), readOnly = operation.action == RuntimeAction.Inspect)
         val receipts = result.stdout.lineSequence().filter { it.startsWith(Receipt) }.toList()
         check(receipts.size == 1) { "运行组件返回的状态不完整，请重新检查" }
         val receipt: JsonObject = try { json.parseToJsonElement(receipts.single().removePrefix(Receipt)).jsonObject }
@@ -73,8 +73,8 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
     private fun safe(value: String): String = DiagnosticRedactor.redact(value, privateValues)
         .replace(Regex("(?i)\\bsk-[a-z0-9_-]{10,}\\b"), "[已隐藏]").takeLast(12_000)
 
-    private suspend fun checkedRun(script: String, input: String = ""): TermuxCommandResult {
-        val result = transport.run(script, input)
+    private suspend fun checkedRun(script: String, input: String = "", readOnly: Boolean = false): TermuxCommandResult {
+        val result = transport.run(script, input, readOnly)
         result.issue?.let { throw RuntimeCommandException(it, result.resultCode) }
         if (result.exitCode != 0) {
             // 有结构化输入的操作不显示原始回包：失败时也不能把 Key 或导入的程序泄露给界面。

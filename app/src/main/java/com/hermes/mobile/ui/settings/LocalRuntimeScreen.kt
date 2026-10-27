@@ -69,7 +69,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(if (openingChat) "正在连接" else step.title, style = MaterialTheme.typography.headlineSmall)
                 if (step.detail.isNotBlank()) Text(step.detail)
-                if (state.failed && step != RuntimeSetupStep.Initialize) Text(state.message, color = MaterialTheme.colorScheme.error)
+                if (state.failed && step !in setOf(RuntimeSetupStep.Initialize, RuntimeSetupStep.Recover, RuntimeSetupStep.Pending)) Text(state.message, color = MaterialTheme.colorScheme.error)
                 else if (state.busy || openingChat) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                     Text(if (openingChat) "正在启动并连接本机 Hermes…" else state.message)
@@ -86,6 +86,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                                 controls.openTermux()
                             }
                             RuntimeSetupStep.Check -> manager.inspect()
+                            RuntimeSetupStep.Recover, RuntimeSetupStep.Pending -> controls.openTermux()
                             RuntimeSetupStep.Storage -> controls.storageSettings()
                             RuntimeSetupStep.Install, RuntimeSetupStep.Configure -> install()
                             RuntimeSetupStep.Connect -> connect()
@@ -100,6 +101,10 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                 }
                 if (step == RuntimeSetupStep.Connect) {
                     TextButton(onClick = onConfigureModels, enabled = ready) { Text("选择或更换模型") }
+                }
+                if (step == RuntimeSetupStep.Recover) {
+                    TextButton(onClick = { manager.inspect() }, enabled = ready) { Text("重新发送检查") }
+                    TextButton(onClick = controls.batterySettings) { Text("允许后台运行") }
                 }
             } }
             TextButton(onClick = { diagnostics = !diagnostics }) { Text(if (diagnostics) "收起检查详情" else "查看检查详情") }

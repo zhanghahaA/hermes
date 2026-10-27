@@ -12,21 +12,23 @@ import kotlin.test.*
 @OptIn(ExperimentalTestApi::class)
 class LocalRuntimeUiTest {
     private val environment = RuntimeEnvironment(true, true, true, true, 4L * 1024 * 1024 * 1024, true, "0.118.3")
-    private class Fixture(var env: RuntimeEnvironment) : LocalRuntimeBackend {
+    private class Fixture(var env: RuntimeEnvironment, timeoutMillis: Long = 30 * 60_000L) : LocalRuntimeBackend {
         override val name = "Termux"
         override val externalApps = true
         override val initializationCommand = "test initialization"
         val calls = CopyOnWriteArrayList<RuntimeAction>()
         var snapshot = RuntimeSnapshot()
         var failure: RuntimeCommandException? = null
+        var hold: CompletableDeferred<Unit>? = null
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = LocalRuntimeManager(scope, this, object : LocalConnectionAccess {
             override fun save(apiKey: String) = Unit
             override suspend fun verifyAndActivate() = Unit
-        })
+        }, timeoutMillis = timeoutMillis)
         override fun environment() = env
         override suspend fun execute(request: RuntimeRequest, progress: (String) -> Unit): RuntimeResponse {
             calls += request.action
+            hold?.await()
             failure?.let { throw it }
             snapshot = when(request.action) {
                 RuntimeAction.Prepare -> snapshot.copy(toolsReady = true)
@@ -128,6 +130,24 @@ class LocalRuntimeUiTest {
             assertFalse(f.calls.contains(RuntimeAction.InstallHermes))
             onNodeWithText("高级功能").performClick()
             onNodeWithText("停止 Hermes").performScrollTo().assertIsEnabled()
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun lostCheckOffersReturnAndRetryWithoutAskingToInitializeAgain() = runComposeUiTest {
+        val f = Fixture(environment, timeoutMillis = 40)
+        f.hold = CompletableDeferred()
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}) } }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.issue == RuntimeIssue.InspectionTimeout }
+            onNodeWithText("打开 Termux 后重试").assertIsEnabled().performClick()
+            assertEquals("termux", DesktopRuntimeActions.lastAction)
+            onNodeWithText("复制命令并打开 Termux").assertDoesNotExist()
+            onNodeWithText("重新发送检查").assertIsEnabled()
+            f.hold = null
+            runOnIdle { DesktopRuntimeActions.resume() }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.probe == RuntimeProbe.Passed && !f.manager.state.value.busy }
+            onNodeWithText("安装 Hermes").assertIsEnabled()
+            assertTrue(f.calls.all { it == RuntimeAction.Inspect })
         } finally { f.scope.cancel() }
     }
 }

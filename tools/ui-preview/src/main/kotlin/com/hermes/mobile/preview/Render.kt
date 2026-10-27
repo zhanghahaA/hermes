@@ -95,6 +95,9 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("56-check-timeout", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.InspectionTimeout) },
+    Scene("56b-check-timeout-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.InspectionTimeout) },
+    Scene("56c-install-pending", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.CommandPending) },
     Scene("55-simple-install", frames = 16) { _, _ -> RuntimePreview(true) },
     Scene("55b-simple-install-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true) },
     Scene("55c-simple-permission", frames = 16) { _, _ -> RuntimePreview(true, permission = false) },
@@ -469,7 +472,7 @@ fun main(args: Array<String>) {
 
 /** 独立假后端，只展示运行中心布局，不执行 Android 命令。 */
 @Composable
-private fun RuntimePreview(ready: Boolean, permission: Boolean = ready, initialize: Boolean = false, installed: Boolean = false) {
+private fun RuntimePreview(ready: Boolean, permission: Boolean = ready, initialize: Boolean = false, installed: Boolean = false, issue: com.hermes.mobile.data.local.RuntimeIssue? = null) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val manager = remember {
         com.hermes.mobile.data.local.LocalRuntimeManager(scope, object : com.hermes.mobile.data.local.LocalRuntimeBackend {
@@ -482,6 +485,7 @@ private fun RuntimePreview(ready: Boolean, permission: Boolean = ready, initiali
                 freeBytes = 4L * 1024 * 1024 * 1024, viewerInstalled = ready, version = if (ready) "0.118.3" else "",
             )
             override suspend fun execute(request: com.hermes.mobile.data.local.RuntimeRequest, progress: (String) -> Unit): com.hermes.mobile.data.local.RuntimeResponse {
+                issue?.let { throw com.hermes.mobile.data.local.RuntimeCommandException(it) }
                 if (initialize) throw com.hermes.mobile.data.local.RuntimeCommandException(com.hermes.mobile.data.local.RuntimeIssue.ExternalApps, 1500)
                 return com.hermes.mobile.data.local.RuntimeResponse(com.hermes.mobile.data.local.RuntimeSnapshot(
                     toolsReady = true, hermesInstalled = installed, configured = installed))

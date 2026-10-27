@@ -70,14 +70,15 @@ class LocalRuntimeTest {
         assertFalse(manager.state.value.busy)
     }
 
-    @Test fun timeoutIsReportedAsUnknownBackgroundState() = runBlocking {
+    @Test fun inspectionTimeoutAllowsRetryWithoutRepeatingInitialization() = runBlocking {
         val backend = Backend(environment)
         backend.delayUntil = CompletableDeferred()
         val manager = LocalRuntimeManager(this, backend, Access(), timeoutMillis = 10)
         manager.inspect().join()
         assertTrue(manager.state.value.failed)
         assertFalse(manager.state.value.checked)
-        assertTrue(manager.state.value.message.contains("可能仍在执行"))
+        assertEquals(RuntimeIssue.InspectionTimeout, manager.state.value.issue)
+        assertEquals(RuntimeSetupStep.Recover, manager.state.value.setupStep())
     }
 
     @Test fun unsafeServiceArgumentsAreRejectedBeforeExecution() {
@@ -94,7 +95,7 @@ class LocalRuntimeTest {
             override fun environment() = this@LocalRuntimeTest.environment
             override fun openViewer() = Unit
             var count = 0
-            override suspend fun run(script: String, input: String): TermuxCommandResult = if (count++ == 0)
+            override suspend fun run(script: String, input: String, readOnly: Boolean): TermuxCommandResult = if (count++ == 0)
                 TermuxCommandResult(0, "HM_PYTHON_READY") else TermuxCommandResult(0, "HMRUNTIME$secret")
         }
         val failure = assertFailsWith<IllegalStateException> { TermuxRuntimeBackend(transport, "pass").execute(RuntimeRequest(RuntimeAction.Inspect)) {} }

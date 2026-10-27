@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.4-dev (Android versionCode 41).** Local setup presents one next action: once Termux is ready, one install click prepares dependencies, installs Hermes, and configures the connection. Saving local model settings starts and connects to chat. Fixes successful Termux callbacks being treated as failures, rechecks on return, and collapses diagnostics and optional services. See [deployment and model settings](docs/model-settings.md). Real Android permissions, arm64 installation, and account authorization still require device validation.
+**Current development build: 0.13.5-dev (Android versionCode 42).** Read-only Termux checks now release their pending slot after timeout or cancellation, allowing real retries. Late callbacks cannot complete or unlock a newer command. Installation and configuration retain protection until their actual result arrives. Includes single-action setup and automatic checking on return. See [deployment and model settings](docs/model-settings.md). Actual device callback delivery and native installation still require phone validation.
 
 English | [中文](README.zh-CN.md)
 

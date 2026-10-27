@@ -1,6 +1,6 @@
 # Hermes 移动版（Android）
 
-当前开发包 **0.13.4-dev / Android versionCode 41**：本机安装页只展示当前下一步，环境就绪后点一次「安装 Hermes」自动完成准备、安装和连接配置；模型保存后自动进入聊天。修复 Termux 成功回包被误判为失败，返回 App 自动重查；诊断和可选服务收进折叠区域。见 [部署与模型设置](docs/model-settings.md)。真实手机权限、arm64 安装和账号授权仍需设备验证。
+当前开发包 **0.13.5-dev / Android versionCode 42**：修复 Termux 检查超时后永久提示上一条任务未返回的问题，只读检查可以重新发起，旧回包不会干扰新检查；安装和配置仍保留防重复保护。沿用单按钮安装、返回自动重查和模型保存后进入聊天。见 [部署与模型设置](docs/model-settings.md)。手机端回包丢失原因与原生安装仍需真机验证。
 
 在手机上使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：默认像发消息一样收到最终回复，可在设置中开启逐字回复或思考与工作过程；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 
