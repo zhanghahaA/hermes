@@ -95,6 +95,8 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("54-runtime-diagnostics") { _, _ -> RuntimePreview(true, permission = false) },
+    Scene("54b-runtime-diagnostics-dark", dark = true) { _, _ -> RuntimePreview(true, permission = false) },
     Scene("53-model-providers", frames = 16) { _, _ -> ModelSettingsPreview("openrouter") },
     Scene("53b-model-local-dark", dark = true, frames = 16) { _, _ -> ModelSettingsPreview("local") },
     Scene("53c-model-account", frames = 16) { _, _ -> ModelSettingsPreview("openai-codex") },

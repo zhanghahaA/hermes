@@ -5,6 +5,13 @@
 
 ## 现状
 
+- 当前为 **0.13.3-dev / code 40**，工作区 `/workspace/hermes-easy-setup`、分支 `codex/runtime-diagnostics`，基于已合并 PR #3 的 main 5aa6883。本机运行页新增逐项环境检查：安装、版本与命令入口、执行权限是否登记／授予、arm64、空间、实际命令回包和 Python 服务环境。失败项默认展开，提供对应授权、下载、存储、初始化入口；灰色准备／安装按钮旁直接说明原因。空间不足仅限制安装，不限制只读检查。
+- Android 读取实际版本、权限登记和服务入口；版本解析移至共享函数并测试。只有实际收到后端回包才标记命令连通；检查失败、未检查、超时分开，超时保留“后台结果未知”的边界。权限等基础条件变化会使旧检查失效并重查，可用空间的正常浮动不会清除已通过的命令结果。「复制检查结果」仅包含 App 版本和白名单检查项，不复制原始日志、账号、地址、密钥或初始化命令。
+- 完整桌面套件报告 244 项，228 项实际通过、0 失败，16 项真实 Hermes／OpenSSH IT 无环境未执行；包含 5 项诊断数据／版本／状态测试和 2 项新界面流程回归。App 与 Android 自检 APK 构建成功。没有连接真实手机，Android 权限读取、Termux 包识别与用户手机实际阻塞原因仍需设备检查，不能宣称已修好该手机的所有部署问题。APK SHA-256 为 341b2a1fabcf548539cf321ce264e73400b8027437d24b7dd0b6437fe3a70e03，签名沿用 d985fcaf…db1dc7。
+- 浅／深色缺权限、未安装和环境已就绪截图已检查；留档 `/workspace/hermes-cloud/releases/0.13.3-dev`，覆盖安装包 `/workspace/shared/downloads/hermes-mobile-0.13.3-dev.apk`。本轮未改 Python 服务脚本，未重复宣称运行此前的真实上游 Python 账号集成。GitHub 发布状态以实际 PR／Release 为准，0.13.2 的附件上传此前返回 401，当前安装包直接在云端交付。
+
+### 0.13.2 部署与模型设置记录
+
 - 当前开发为 **0.13.2-dev / code 39**，在 `/workspace/hermes-easy-setup`、`codex/easy-setup` 继续，目标 PR #3 → main。通知页应用扫描改为仅打开选择器时在 IO 线程执行、短时缓存及懒列表；“检查环境”在缺执行权限时仍可点击，拒绝或不弹窗时提供系统 App 权限入口，返回自动重查。
 - 一键安装不再提前要求模型 Key；自动准备 Python、安装或复用原生 Hermes、配置手机接口，再进入模型设置。模型设置支持目标 Hermes 的 API Key 服务、订阅账号（复用设备码流程或带 HERMES_HOME 的 CLI 登录）、命名自定义端点及已有 Ollama／LM Studio／llama.cpp 接口。本机保存后启动、验连并等待正式连接完成才进入聊天，等待不持有运行锁，避免与自动恢复互相等待。不同连接不会自动复制密钥，同一配置目录／外部 CLI 全局账号的共享边界需如实说明。
 - `assets/providers/settings.py` 在 Hermes 自带 Python 下运行；API Key 通过 SSH stdin 或 Termux 命令输入传入，现有 Key／token 不回到手机；修改前保留首次私有备份，损坏 YAML 不覆盖。账号授权的后台工作进程脱离命令桥，私有状态文件保存授权码和状态；不持有 stdout 或配置锁，具有取消检查。详见 [模型设置与部署](docs/model-settings.md)。

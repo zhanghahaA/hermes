@@ -21,12 +21,21 @@ data class RuntimeEnvironment(
     val freeBytes: Long = 0,
     val viewerInstalled: Boolean = false,
     val version: String = "",
+    val permissionRegistered: Boolean = true,
+    val commandServiceAvailable: Boolean = true,
+    val compatibilityIssue: String = "",
+    val architecture: String = "",
+    val installSource: String = "",
 ) {
     val blockers: List<String> get() = buildList {
         if (!installed) add("请安装并打开一次 Termux")
-        else if (!compatible) add("请使用 GitHub 或 F-Droid 的 Termux 0.118 或更新版本")
+        else {
+            if (!compatible) add(compatibilityIssue.ifBlank { "请使用 GitHub 或 F-Droid 的 Termux 0.118 或更新版本" })
+            if (!commandServiceAvailable) add("没有找到可用的 Termux 命令执行入口")
+            if (!permissionRegistered) add("系统尚未识别 Termux 执行权限")
+        }
         if (!arm64) add("本机运行包需要 arm64 手机")
-        if (!permission) add("请授权在 Termux 中执行命令")
+        if (!permission && (!installed || permissionRegistered)) add("请授权在 Termux 中执行命令")
     }
     val enoughSpace: Boolean get() = freeBytes >= 2L * 1024 * 1024 * 1024
 }

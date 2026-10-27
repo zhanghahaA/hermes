@@ -60,10 +60,16 @@ class AndroidTermuxTransport(context: Context) : TermuxTransport {
     override fun environment(): RuntimeEnvironment {
         val info = runCatching { context.packageManager.getPackageInfo("com.termux", 0) }.getOrNull()
         val version = info?.versionName.orEmpty()
-        val match = Regex("^(\\d+)\\.(\\d+)").find(version)
-        val supported = match?.let { it.groupValues[1].toInt() > 0 || it.groupValues[2].toInt() >= 118 } ?: false
+        val supported = supportsTermuxVersion(version)
         @Suppress("DEPRECATION")
         val installer = runCatching { context.packageManager.getInstallerPackageName("com.termux") }.getOrNull()
+        val registered = runCatching {
+            context.packageManager.getPermissionInfo("com.termux.permission.RUN_COMMAND", 0).packageName == "com.termux"
+        }.getOrDefault(false)
+        val commandService = runCatching {
+            context.packageManager.getServiceInfo(ComponentName("com.termux", "com.termux.app.RunCommandService"), 0)
+                .let { it.enabled && it.exported && it.applicationInfo.enabled }
+        }.getOrDefault(false)
         return RuntimeEnvironment(
             installed = info != null, compatible = supported && installer != "com.android.vending",
             permission = ContextCompat.checkSelfPermission(context, "com.termux.permission.RUN_COMMAND") == PackageManager.PERMISSION_GRANTED,
@@ -71,6 +77,16 @@ class AndroidTermuxTransport(context: Context) : TermuxTransport {
             freeBytes = StatFs(Environment.getDataDirectory().absolutePath).availableBytes,
             viewerInstalled = runCatching { context.packageManager.getPackageInfo("com.termux.x11", 0) }.isSuccess,
             version = version,
+            permissionRegistered = registered,
+            commandServiceAvailable = commandService,
+            compatibilityIssue = when {
+                installer == "com.android.vending" -> "当前为 Google Play 安装来源，本机部署需要 GitHub／F-Droid 兼容版。请先备份 Termux 数据，再按官方说明处理。"
+                !supported -> "未识别到兼容的 Termux 版本（${version.ifBlank { "版本未知" }}），需要 0.118 或更新版本。"
+                else -> ""
+            },
+            architecture = Build.SUPPORTED_ABIS.joinToString(" / "),
+            installSource = when (installer) { "com.android.vending" -> "Google Play"; "org.fdroid.fdroid" -> "F-Droid"
+                null -> "手动安装或来源未登记"; else -> "其他安装来源" },
         )
     }
 
@@ -134,5 +150,6 @@ fun rememberRuntimeControls(refresh: () -> Unit): RuntimeControls {
         downloadViewer = { open(Intent(Intent.ACTION_VIEW, Uri.parse(TermuxRuntimeBackend.DownloadX11))) },
         batterySettings = { open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) },
         permissionSettings = { open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName))) },
+        storageSettings = { open(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)) },
     )
 }

@@ -17,4 +17,5 @@ fun rememberRuntimeControls(refresh: () -> Unit) = RuntimeControls(
     downloadViewer = { DesktopRuntimeActions.record("download-x11") },
     batterySettings = { DesktopRuntimeActions.record("battery") },
     permissionSettings = { DesktopRuntimeActions.record("permission-settings") },
+    storageSettings = { DesktopRuntimeActions.record("storage-settings") },
 )

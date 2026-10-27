@@ -29,8 +29,10 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
     val env = state.environment
     val snapshot = state.snapshot
     val ready = env.blockers.isEmpty() && !state.busy && !openingChat
+    val installReady = ready && env.enoughSpace
+    val installBlockReason = state.installBlockReason() ?: if (openingChat) "正在连接本机，请稍候。" else null
     LaunchedEffect(manager) { manager.refreshEnvironment() }
-    LaunchedEffect(env.installed, env.permission) {
+    LaunchedEffect(env.installed, env.permission, env.compatible, env.commandServiceAvailable, env.permissionRegistered, env.arm64) {
         if (env.blockers.isEmpty() && !state.checked && !state.busy) manager.inspect()
     }
     Scaffold(topBar = { TopAppBar(title = { Text("本机运行与服务") }, navigationIcon = {
@@ -42,9 +44,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("1 · 准备运行环境", style = MaterialTheme.typography.titleMedium)
                 Text(manager.backend.name, style = MaterialTheme.typography.bodySmall)
-                Text(if (env.installed) "已安装 ${env.version}" else "尚未安装")
-                env.blockers.forEach { Text(it, color = MaterialTheme.colorScheme.error) }
-                if (!env.enoughSpace) Text("安装前请至少预留 2 GB 空间", color = MaterialTheme.colorScheme.error)
+                RuntimeChecksPanel(state, controls, manager.backend.initializationCommand)
                 if (manager.backend.externalApps) {
                     if (!env.installed) OutlinedButton(onClick = controls.downloadTermux) { Text("下载 Termux") }
                     else {
@@ -66,8 +66,9 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                     if (manager.state.value.environment.installed && !manager.state.value.environment.permission) controls.requestPermission()
                     else manager.inspect()
                 }, enabled = !state.busy) { Text("检查环境") }
-                if (!snapshot.toolsReady) OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.Prepare) }, enabled = ready) { Text("检查并准备环境") }
+                if (!snapshot.toolsReady) OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.Prepare) }, enabled = installReady) { Text("检查并准备环境") }
                 else Text("环境已就绪，继续下面的部署。", color = MaterialTheme.colorScheme.primary)
+                installBlockReason?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(state.message, color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             } }
@@ -75,7 +76,8 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                 Text("2 · 部署并连接 Hermes", style = MaterialTheme.typography.titleMedium)
                 Text(if (!state.checked) "尚未检查" else if (!snapshot.hermesInstalled) "尚未安装" else if (snapshot.hermesRunning) "进程运行中" else "已安装，进程未运行")
                 manager.backend.hermesInstallWarning?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                Button(onClick = { editing = RuntimeAction.InstallHermes }, enabled = ready) { Text("一键安装 Hermes") }
+                Button(onClick = { editing = RuntimeAction.InstallHermes }, enabled = installReady) { Text("一键安装 Hermes") }
+                installBlockReason?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 if (snapshot.hermesInstalled) {
                     OutlinedButton(onClick = onConfigureModels, enabled = ready && snapshot.toolsReady) { Text("配置模型与提供方") }
                     Text("安装完成后，在 App 内配置账号或模型密钥，再点「启动并连接聊天」。", style = MaterialTheme.typography.bodySmall)
@@ -98,8 +100,8 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("可选 · 自己的服务", style = MaterialTheme.typography.titleMedium)
                 Text("导入你信任的 Python 程序，或添加只监听本机的反向代理。服务共享 Termux 的数据访问权限，虚拟环境不是安全沙箱。", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { editing = RuntimeAction.InstallService }, enabled = ready && snapshot.toolsReady) { Text("导入 Python 服务") }
-                OutlinedButton(onClick = { editing = RuntimeAction.InstallProxy }, enabled = ready && snapshot.toolsReady) { Text("添加本机反向代理") }
+                OutlinedButton(onClick = { editing = RuntimeAction.InstallService }, enabled = installReady && snapshot.toolsReady) { Text("导入 Python 服务") }
+                OutlinedButton(onClick = { editing = RuntimeAction.InstallProxy }, enabled = installReady && snapshot.toolsReady) { Text("添加本机反向代理") }
                 snapshot.services.forEach { service ->
                     HorizontalDivider()
                     Text(service.name + if (service.running) " · 运行中" else " · 已停止")
@@ -113,7 +115,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                 Text("可选 · 桌面浏览器", style = MaterialTheme.typography.titleMedium)
                 Text("使用独立的 Termux:X11 显示窗口；只有打开浏览器时才启动。当前是浏览器启动与显示，尚不包含 Hermes 自动操作网页。", style = MaterialTheme.typography.bodySmall)
                 if (!env.viewerInstalled && manager.backend.externalApps) OutlinedButton(onClick = controls.downloadViewer) { Text("下载 Termux:X11") }
-                OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.InstallBrowser) }, enabled = ready) { Text("安装浏览器配套包") }
+                OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.InstallBrowser) }, enabled = installReady) { Text("安装浏览器配套包") }
                 RuntimeButton(manager, RuntimeAction.StartBrowser, ready && snapshot.toolsReady && snapshot.browserInstalled && env.viewerInstalled)
                 RuntimeButton(manager, RuntimeAction.StopBrowser, ready && snapshot.toolsReady)
             } }
