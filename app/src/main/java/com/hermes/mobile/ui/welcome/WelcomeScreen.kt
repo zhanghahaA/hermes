@@ -40,7 +40,7 @@ private data class Option(val type: ConnectionType, val title: String, val subti
 
 private val options = listOf(
     Option(ConnectionType.Ssh, "连接电脑或服务器", "推荐 · 帮你生成密钥和配置命令，SSH 加密连接"),
-    Option(ConnectionType.Local, "直接在这台手机运行", "按步骤安装、授权和部署，无需自己写代码"),
+    Option(ConnectionType.Local, "直接在这台手机运行", "准备好 Termux 后，一次点击完成安装"),
     Option(ConnectionType.Direct, "已有局域网或 VPN 地址", "Hermes 已配置好，填入地址和连接密钥即可"),
     Option(ConnectionType.Https, "已有 HTTPS 网址", "已有反向代理，直接填写网址"),
 )

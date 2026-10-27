@@ -63,9 +63,9 @@ fun LocalRuntimeState.diagnosticChecks(): List<RuntimeCheck> = environment.check
         probe == RuntimeProbe.Checking -> "正在请求 Termux 执行只读检查，等待回包。"
         probe == RuntimeProbe.Passed -> "已收到 Termux 的检查结果，外部调用与命令回包可用。"
         probe == RuntimeProbe.TimedOut -> "没有及时收到回包，不能确定后台任务是否结束。打开 Termux 查看状态，确认初始化命令已执行，并查看后台与电池限制；不要重复安装。"
-        probe == RuntimeProbe.Failed -> "命令测试没有通过。请查看下方错误，确认初始化命令已执行，并打开 Termux 检查；本次没有安装软件。"
+        probe == RuntimeProbe.Failed -> issue?.explanation ?: "命令测试没有通过，请查看主按钮旁的错误说明；本次检查没有安装软件。"
         else -> "尚未收到实际命令结果；点「检查环境」测试。复制过初始化命令不等于已经执行成功。"
-    }, if (environment.blockers.isEmpty() && probe in setOf(RuntimeProbe.Failed, RuntimeProbe.TimedOut)) RuntimeRemedy.Initialize else null),
+    }, if (issue == RuntimeIssue.ExternalApps) RuntimeRemedy.Initialize else if (probe in setOf(RuntimeProbe.Failed, RuntimeProbe.TimedOut)) RuntimeRemedy.OpenTermux else null),
     RuntimeCheck("python", "Python 服务环境", when {
         probe != RuntimeProbe.Passed || environment.blockers.isNotEmpty() -> RuntimeCheckStatus.Pending
         snapshot.toolsReady -> RuntimeCheckStatus.Passed
@@ -78,6 +78,8 @@ fun LocalRuntimeState.diagnosticChecks(): List<RuntimeCheck> = environment.check
 fun LocalRuntimeState.diagnosticReport(): String = buildString {
     appendLine("Hermes 本机环境检查")
     diagnosticChecks().forEach { appendLine("${it.title}：${it.status.label}\n${it.detail}") }
+    issue?.let { appendLine("失败原因：${it.explanation}") }
+    resultCode?.let { appendLine("Termux 返回代码：$it") }
 }
 
 fun LocalRuntimeState.installBlockReason(): String? = when {

@@ -359,3 +359,10 @@ App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cl
 - 显示：`message.user` / `message.member` 是消息；`turn.failed` / `turn.cancelled` / `turn.deferred` / `room.activity`（`status: bounded`）等显示成一行提示；其它事件不显示。
 - 每个 bot 在自己的 Profile 里有一个隐藏会话（标题 `Group: <room_id>`，来源 `bot_room`）跑它的回合。
 
+
+## Termux 命令回包（0.13.4）
+
+- `RUN_COMMAND_PENDING_INTENT` 返回 `result` Bundle。`err` 使用 Android 的结果码：`-1`（`Activity.RESULT_OK`）表示调用成功；shell 自身的 `exitCode=0` 才表示命令成功。两者不能混用。缺失 `err` 或成功回包缺失 `exitCode` 视为不完整结果。
+- `RuntimeResultReceiver` 将实际 Bundle 字段交给共享 `decodeTermuxResult`，桌面测试直接验证同一解析器。`err=0` 是拒绝／取消，不当作成功。依据：[Termux v0.118.3 Errno](https://github.com/termux/termux-app/blob/v0.118.3/termux-shared/src/main/java/com/termux/shared/models/errors/Errno.java)、[回包字段](https://github.com/termux/termux-app/blob/v0.118.3/termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java)。
+- 回包错误只保留固定分类及数字码。包含 `allow-external-apps` 的拒绝显示一次初始化入口，其它失败不要求盲目重复粘贴命令。原始 `errmsg` 可能含命令／凭据，不写到界面或复制报告；shell 失败继续按原有脱敏规则展示，结构化输入操作不回显原始输出。
+- 页面进入／从 Termux 或权限设置返回时只执行检查，不自动安装。安装主按钮旁说明修改范围；一次点击连续检查、准备缺失依赖、安装缺失程序并配置连接。失败重试重新探测状态，已完成的软件安装复用。超时继续保留“后台任务状态未知”的限制，不强行解除尚未完成的命令锁。

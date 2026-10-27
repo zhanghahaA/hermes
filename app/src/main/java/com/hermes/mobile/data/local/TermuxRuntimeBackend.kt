@@ -75,11 +75,13 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
 
     private suspend fun checkedRun(script: String, input: String = ""): TermuxCommandResult {
         val result = transport.run(script, input)
-        check(result.exitCode == 0) {
+        result.issue?.let { throw RuntimeCommandException(it, result.resultCode) }
+        if (result.exitCode != 0) {
             // 有结构化输入的操作不显示原始回包：失败时也不能把 Key 或导入的程序泄露给界面。
-            if (input.isNotEmpty()) "运行操作未完成，请检查配置、依赖或日志；已有数据已保留"
+            val detail = if (input.isNotEmpty()) "运行操作未完成，请检查配置、依赖或日志；已有数据已保留"
             else safe((result.stderr + "\n" + result.stdout).lineSequence().filterNot { it.startsWith(Receipt) }.joinToString("\n"))
                 .ifBlank { "Termux 命令未完成，请检查执行授权和后台状态" }
+            throw RuntimeCommandException(RuntimeIssue.CommandFailed, result.exitCode, detail)
         }
         return result
     }

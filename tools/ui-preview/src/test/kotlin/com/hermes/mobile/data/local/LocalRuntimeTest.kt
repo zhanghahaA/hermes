@@ -100,4 +100,65 @@ class LocalRuntimeTest {
         val failure = assertFailsWith<IllegalStateException> { TermuxRuntimeBackend(transport, "pass").execute(RuntimeRequest(RuntimeAction.Inspect)) {} }
         assertFalse(failure.message.orEmpty().contains(secret))
     }
+
+    @Test fun installationStopsAtFailureAndRetryReusesCompletedPackages() = runBlocking {
+        var snapshot = RuntimeSnapshot()
+        var failConfigure = true
+        val calls = mutableListOf<RuntimeAction>()
+        val access = Access()
+        val manager = LocalRuntimeManager(this, object : LocalRuntimeBackend {
+            override val name = "test"
+            override val externalApps = false
+            override fun environment() = this@LocalRuntimeTest.environment
+            override suspend fun execute(request: RuntimeRequest, progress: (String) -> Unit): RuntimeResponse {
+                calls += request.action
+                snapshot = when (request.action) {
+                    RuntimeAction.Prepare -> snapshot.copy(toolsReady = true)
+                    RuntimeAction.InstallHermes -> snapshot.copy(hermesInstalled = true)
+                    RuntimeAction.ConfigureHermes -> {
+                        if (failConfigure) error("fixture configuration failed")
+                        snapshot.copy(configured = true)
+                    }
+                    else -> snapshot
+                }
+                return RuntimeResponse(snapshot, connectionKey = "test-local-key".takeIf { request.action == RuntimeAction.ConfigureHermes })
+            }
+        }, access)
+        manager.install().join()
+        assertTrue(manager.state.value.failed)
+        assertTrue(snapshot.hermesInstalled)
+        assertNull(access.saved)
+        assertFalse(access.activated)
+        calls.clear()
+        failConfigure = false
+        manager.install().join()
+        assertEquals(listOf(RuntimeAction.Inspect, RuntimeAction.ConfigureHermes), calls)
+        assertFalse(manager.state.value.failed)
+        assertEquals("test-local-key", access.saved)
+    }
+
+    @Test fun failedPreflightDoesNotStartPackageInstallation() = runBlocking {
+        val calls = mutableListOf<RuntimeAction>()
+        val manager = LocalRuntimeManager(this, object : LocalRuntimeBackend {
+            override val name = "test"
+            override val externalApps = false
+            override fun environment() = this@LocalRuntimeTest.environment
+            override suspend fun execute(request: RuntimeRequest, progress: (String) -> Unit): RuntimeResponse {
+                calls += request.action
+                throw RuntimeCommandException(RuntimeIssue.ExternalApps, 1500)
+            }
+        }, Access())
+        manager.install().join()
+        assertEquals(listOf(RuntimeAction.Inspect), calls)
+        assertTrue(manager.state.value.failed)
+        assertEquals(RuntimeSetupStep.Initialize, manager.state.value.setupStep())
+    }
+
+    @Test fun installedRuntimeCanConnectEvenWithLowStorage() {
+        val state = LocalRuntimeState(environment.copy(freeBytes = 0),
+            snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true),
+            checked = true, probe = RuntimeProbe.Passed)
+        assertEquals(RuntimeSetupStep.Connect, state.setupStep())
+        assertEquals(RuntimeSetupStep.Storage, state.copy(snapshot = RuntimeSnapshot()).setupStep())
+    }
 }

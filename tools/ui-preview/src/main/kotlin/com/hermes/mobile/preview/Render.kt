@@ -95,6 +95,12 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("55-simple-install", frames = 16) { _, _ -> RuntimePreview(true) },
+    Scene("55b-simple-install-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true) },
+    Scene("55c-simple-permission", frames = 16) { _, _ -> RuntimePreview(true, permission = false) },
+    Scene("55d-simple-initialize", frames = 16) { _, _ -> RuntimePreview(true, initialize = true) },
+    Scene("55e-simple-installed", frames = 16) { _, _ -> RuntimePreview(true, installed = true) },
+    Scene("55f-simple-missing", frames = 16) { _, _ -> RuntimePreview(false) },
     Scene("54-runtime-diagnostics") { _, _ -> RuntimePreview(true, permission = false) },
     Scene("54b-runtime-diagnostics-dark", dark = true) { _, _ -> RuntimePreview(true, permission = false) },
     Scene("53-model-providers", frames = 16) { _, _ -> ModelSettingsPreview("openrouter") },
@@ -463,7 +469,7 @@ fun main(args: Array<String>) {
 
 /** 独立假后端，只展示运行中心布局，不执行 Android 命令。 */
 @Composable
-private fun RuntimePreview(ready: Boolean, permission: Boolean = ready) {
+private fun RuntimePreview(ready: Boolean, permission: Boolean = ready, initialize: Boolean = false, installed: Boolean = false) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val manager = remember {
         com.hermes.mobile.data.local.LocalRuntimeManager(scope, object : com.hermes.mobile.data.local.LocalRuntimeBackend {
@@ -475,8 +481,11 @@ private fun RuntimePreview(ready: Boolean, permission: Boolean = ready) {
                 installed = ready, compatible = ready, permission = permission, arm64 = true,
                 freeBytes = 4L * 1024 * 1024 * 1024, viewerInstalled = ready, version = if (ready) "0.118.3" else "",
             )
-            override suspend fun execute(request: com.hermes.mobile.data.local.RuntimeRequest, progress: (String) -> Unit) =
-                com.hermes.mobile.data.local.RuntimeResponse(com.hermes.mobile.data.local.RuntimeSnapshot(toolsReady = true))
+            override suspend fun execute(request: com.hermes.mobile.data.local.RuntimeRequest, progress: (String) -> Unit): com.hermes.mobile.data.local.RuntimeResponse {
+                if (initialize) throw com.hermes.mobile.data.local.RuntimeCommandException(com.hermes.mobile.data.local.RuntimeIssue.ExternalApps, 1500)
+                return com.hermes.mobile.data.local.RuntimeResponse(com.hermes.mobile.data.local.RuntimeSnapshot(
+                    toolsReady = true, hermesInstalled = installed, configured = installed))
+            }
         }, object : com.hermes.mobile.data.local.LocalConnectionAccess {
             override fun save(apiKey: String) = Unit
             override suspend fun verifyAndActivate() = Unit

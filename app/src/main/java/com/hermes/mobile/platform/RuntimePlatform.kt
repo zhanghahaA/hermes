@@ -48,10 +48,10 @@ class RuntimeResultReceiver : BroadcastReceiver() {
         @Suppress("DEPRECATION")
         val code = (result?.get("exitCode") as? Number)?.toInt()
         @Suppress("DEPRECATION")
-        val error = (result?.get("err") as? Number)?.toInt() ?: 0
-        RuntimeCallbacks.finish(id, TermuxCommandResult(if (error != 0) -1 else code ?: -1,
-            result?.getString("stdout").orEmpty(),
-            if (error != 0) "Termux 拒绝执行，请检查外部命令授权和初始化状态" else result?.getString("stderr").orEmpty()))
+        val error = (result?.get("err") as? Number)?.toInt()
+        RuntimeCallbacks.finish(id, decodeTermuxResult(error, code,
+            result?.getString("stdout").orEmpty(), result?.getString("stderr").orEmpty(),
+            result?.getString("errmsg").orEmpty()))
     }
 }
 
@@ -110,7 +110,7 @@ class AndroidTermuxTransport(context: Context) : TermuxTransport {
                 .putExtra("com.termux.RUN_COMMAND_BACKGROUND_CUSTOM_LOG_LEVEL", "0")
             ContextCompat.startForegroundService(context, command)
         } catch (_: Exception) {
-            RuntimeCallbacks.finish(id, TermuxCommandResult(-1, stderr = "无法唤起 Termux，请检查安装、执行权限和后台限制"))
+            RuntimeCallbacks.finish(id, TermuxCommandResult(-1, issue = RuntimeIssue.LaunchFailed))
         }
         // 取消等待不等于远端命令停止。保留回调和并发锁直到 Termux 真正结束。
         return result.await()

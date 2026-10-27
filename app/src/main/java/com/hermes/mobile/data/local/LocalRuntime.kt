@@ -136,6 +136,7 @@ interface TermuxTransport {
     fun openViewer()
 }
 
-class TermuxCommandResult(val exitCode: Int, val stdout: String = "", val stderr: String = "") {
+class TermuxCommandResult(val exitCode: Int, val stdout: String = "", val stderr: String = "",
+                         val issue: RuntimeIssue? = null, val resultCode: Int? = null) {
     override fun toString() = "TermuxCommandResult(exitCode=$exitCode, output=[已隐藏])"
 }

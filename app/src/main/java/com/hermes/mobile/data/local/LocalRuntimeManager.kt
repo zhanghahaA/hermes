@@ -3,6 +3,7 @@ package com.hermes.mobile.data.local
 import com.hermes.mobile.data.store.DiagnosticRedactor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,8 @@ data class LocalRuntimeState(
     val output: String = "",
     val failed: Boolean = false,
     val probe: RuntimeProbe = RuntimeProbe.NotChecked,
+    val issue: RuntimeIssue? = null,
+    val resultCode: Int? = null,
 )
 
 /** 随 App 进程保留状态。更换为内置后端时，界面、操作串行化和连接存储都可以保留。 */
@@ -55,9 +58,9 @@ class LocalRuntimeManager(
         }
     }
 
-    private fun operation(label: String, block: suspend () -> Unit): Job = scope.launch {
+    private fun operation(label: String, block: suspend () -> Unit): Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
         if (!mutex.tryLock()) return@launch
-        mutable.update { it.copy(busy = true, message = label, output = "", failed = false) }
+        mutable.update { it.copy(busy = true, message = label, output = "", failed = false, issue = null, resultCode = null) }
         try {
             refreshEnvironment()
             check(state.value.environment.blockers.isEmpty()) { state.value.environment.blockers.joinToString("\n") }
@@ -71,6 +74,8 @@ class LocalRuntimeManager(
             throw e
         } catch (e: Exception) {
             mutable.update { it.copy(failed = true, checked = false, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.Failed else it.probe,
+                issue = (e as? RuntimeCommandException)?.issue,
+                resultCode = (e as? RuntimeCommandException)?.resultCode,
                 message = DiagnosticRedactor.redact(e.message ?: "操作未完成")) }
         } finally {
             mutable.update { it.copy(busy = false) }
@@ -102,9 +107,15 @@ class LocalRuntimeManager(
 
     /** 安装不再依赖模型 Key；先完成安装与手机接口配置，再由设置页配置提供方。 */
     fun install(channel: ReleaseChannel = ReleaseChannel.Stable) = operation("正在安装本机 Hermes") {
-        check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
-        execute(RuntimeRequest(RuntimeAction.Prepare))
-        execute(RuntimeRequest(RuntimeAction.InstallHermes, channel = channel, acceptExperimental = true))
+        mutable.update { it.copy(probe = RuntimeProbe.Checking) }
+        withTimeout(25_000) { execute(RuntimeRequest(RuntimeAction.Inspect)) }
+        if (!state.value.snapshot.toolsReady || !state.value.snapshot.hermesInstalled) {
+            check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
+        }
+        if (!state.value.snapshot.toolsReady) execute(RuntimeRequest(RuntimeAction.Prepare))
+        if (!state.value.snapshot.hermesInstalled) {
+            execute(RuntimeRequest(RuntimeAction.InstallHermes, channel = channel, acceptExperimental = true))
+        }
         execute(RuntimeRequest(RuntimeAction.ConfigureHermes))
         mutable.update { it.copy(message = "Hermes 已安装。下一步配置模型提供方，再启动并连接。") }
     }

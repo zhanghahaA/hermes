@@ -188,7 +188,12 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                     OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     if (selection.models.isNotEmpty()) TextButton(onClick = { chooseModel = true }) { Text("从模型列表选择") }
                     TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("models", provider)) }) { Text("读取可选模型列表") }
-                    Button(enabled = !busy && model.isNotBlank(), onClick = { confirmSave = true }) { Text(if (saveAndConnect) "保存并开始聊天" else "保存模型配置") }
+                    if (saveAndConnect) Text("保存到这台手机，保留原配置备份，然后自动启动并连接聊天。", style = MaterialTheme.typography.bodySmall)
+                    Button(enabled = !busy && model.isNotBlank(), onClick = {
+                        if (saveAndConnect) {
+                            manager.submit(ModelSettingsRequest("save", provider, model.trim(), key.trim().takeIf(String::isNotEmpty), url.trim(), apiMode = apiMode)) { key = ""; onModelSaved() }
+                        } else confirmSave = true
+                    }) { Text(if (saveAndConnect) "保存并开始聊天" else "保存模型配置") }
                 } }
                 TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("inspect")) }) { Text("刷新配置") }
             }
