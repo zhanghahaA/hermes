@@ -89,7 +89,7 @@ class TermuxCommandTrackerTest {
         assertTrue(requests.isNotEmpty() && requests.all { it.second })
         requests.clear()
         backend.execute(RuntimeRequest(RuntimeAction.Prepare)) {}
-        assertFalse(requests.single { it.first.contains("pkg install") }.second)
+        assertFalse(requests.single { it.first.contains("hm_apt install -y python") }.second)
         assertTrue(requests.last().second)
         requests.clear()
         backend.execute(RuntimeRequest(RuntimeAction.ConfigureHermes)) {}

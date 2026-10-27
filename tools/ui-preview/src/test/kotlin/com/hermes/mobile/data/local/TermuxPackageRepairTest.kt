@@ -115,7 +115,9 @@ class TermuxPackageRepairTest {
             check(curl.setExecutable(true))
             val builder = ProcessBuilder("/bin/bash", "-c", "set -eu\n" + TermuxRuntimeBackend.RepairPackages)
             builder.environment().apply {
-                put("PATH", folder.absolutePath)
+                put("PATH", folder.absolutePath + ":/usr/bin:/bin")
+                put("HERMES_MOBILE_ROOT", folder.resolve("runtime").absolutePath)
+                put("PREFIX", folder.resolve("prefix").absolutePath)
                 put("TEST_LOG", log.absolutePath)
                 put("FAIL_STEP", fail)
             }

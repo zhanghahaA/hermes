@@ -376,3 +376,9 @@ App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cl
 安装脚本先获取当前通道的 key.asc 和 InRelease（仅检查可下载，不将 HTTP 200 视为签名或运行通过）。curl 的明确 404／410 映射为退出码 44 与固定标记 HM_REPOSITORY_UNAVAILABLE；后端同时核对码与 stderr 整行标记，再映射为 RepositoryUnavailable。普通 HTTP 失败、超时和其它程序的 404 不套用此分类。失败前不安装 GnuPG、不写入软件源、不切换通道；仅 curl 本身缺失时需先补齐。manager 先安装自带运行时的 Hermes，再准备 App 的 Python 管理环境，避免源不可用时先做无效准备。
 
 可下载后仍验证单一主公钥及固定指纹，再由 APT 验签安装。不会绕过签名或自动切换到 canary。重试入口明确是「重试安装」，成功后可继续修改环境，不把它伪装成只读检查。上游 stable 当前返回 404，且文档警告 Termux 包暂时无法运行；文件可下载及脚本替代命令测试都不等于真机安装成功。
+
+### 国内依赖镜像（0.13.8）
+
+`DomesticPackageSources` 为 App 的包安装命令生成独立 `~/.hermes-mobile/apt/sources.list` 和 `lists` 缓存；显式传递 `Dir::Etc::sourcelist`、`Dir::Etc::sourceparts=-`、`Dir::State::lists`，避免读取全局其它源与旧缓存。清华 Termux main/root/x11 来源已与 Termux 官方 mirrors/chinese_mainland 名单核对。安装 Python、GnuPG、Chromium、Caddy 与包冲突修复全部通过该 APT 入口，源更新使用 Error-Mode=any，失败不继续安装，不使用 pkg 自动选择镜像。Hermes 自身仍使用经过指纹校验的官方签名源；下载其公钥和索引前的镜像初始化不纳入已有 Hermes 源，避免旧通道影响前置工具下载。
+
+原全局 Termux／pip 源配置不覆盖。独立列表只加入三类 Termux 源及既有 Hermes 源，不自动复制未知第三方源；因此不能宣称会升级所有第三方软件。Python 服务的 pip 子进程清除继承的 PIP_* 参数，设置 PIP_CONFIG_FILE=/dev/null、清华 PIP_INDEX_URL 及禁用版本检查；构建子进程继承相同设置，不污染服务器、模型端点或服务运行环境。没有添加 trusted=yes、allow-unauthenticated 或关闭 TLS 验证。镜像可访问和假命令脚本测试不等于真实手机安装已验证。

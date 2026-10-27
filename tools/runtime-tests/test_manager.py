@@ -154,14 +154,36 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse((self.root / "mobile-api-key").exists())
 
     def test_proxy_is_configured_with_loopback_listener(self):
-        self.fake("pkg", "import sys\nsys.exit(0)\n")
+        self.fake("apt-get", "import json,os,sys\nfrom pathlib import Path\nPath(os.environ['HERMES_MOBILE_ROOT'],'apt-args.json').write_text(json.dumps(sys.argv[1:]))\n")
         self.fake("caddy", "import json,sys,time\nfrom pathlib import Path\nPath('argv.json').write_text(json.dumps(sys.argv))\ntime.sleep(60)\n")
         self.call("InstallProxy", proxy={"id": "test-proxy", "name": "proxy", "port": 8081, "target": "https://example.invalid"})
+        apt_args = json.loads((self.root / "apt-args.json").read_text())
+        self.assertIn("Dir::Etc::sourcelist=" + str(self.root / "apt/sources.list"), apt_args)
+        self.assertIn("Dir::Etc::sourceparts=-", apt_args)
+        self.assertEqual(apt_args[-3:], ["install", "-y", "caddy"])
         self.call("StartService", serviceId="test-proxy")
         self.track("service-test-proxy")
         args = json.loads((self.root / "services/test-proxy/argv.json").read_text())
         self.assertIn("http://127.0.0.1:8081", args)
         self.call("StopService", serviceId="test-proxy")
+
+    def test_service_dependencies_use_domestic_pip_without_inherited_extra_indexes(self):
+        venv = self.root / "services/test-service/venv/bin"
+        venv.mkdir(parents=True)
+        python = venv / "python"
+        python.write_text("#!" + sys.executable + "\nimport os,json,sys\nfrom pathlib import Path\n"
+                          "Path(os.environ['HERMES_MOBILE_ROOT'],'pip-call.json').write_text(json.dumps({"
+                          "'args':sys.argv[1:], 'env':{k:v for k,v in os.environ.items() if k.startswith('PIP_')}}))\n")
+        python.chmod(0o700)
+        self.env.update(PIP_EXTRA_INDEX_URL="https://example.invalid/simple", PIP_TRUSTED_HOST="example.invalid",
+                        PIP_CONFIG_FILE="/fixture/old-pip.conf", PIP_INDEX_URL="https://example.invalid/simple")
+        self.call("InstallService", service={"id": "test-service", "name": "fixture", "source": "print('ok')",
+                                             "requirements": ["requests==2.32.3"]})
+        result = json.loads((self.root / "pip-call.json").read_text())
+        self.assertEqual(result["args"], ["-m", "pip", "install", "--", "requests==2.32.3"])
+        self.assertEqual(result["env"], {"PIP_CONFIG_FILE": os.devnull,
+            "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
+        self.assertEqual(self.env["PIP_EXTRA_INDEX_URL"], "https://example.invalid/simple")
 
     def test_browser_processes_are_owned_and_stopped_together(self):
         self.fake("termux-x11")

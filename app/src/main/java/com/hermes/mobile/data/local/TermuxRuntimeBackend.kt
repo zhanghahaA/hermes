@@ -33,10 +33,13 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
             checkedRun(Header + "\n" + RepairPackages)
         } else if (request.action == RuntimeAction.Prepare) {
             progress("正在准备 Python 服务环境，可能需要几分钟")
-            checkedRun(Header + "\npkg install -y python")
+            checkedRun(Header + "\n" + DomesticPackageSources.setup() + "\n" + DomesticPackageSources.Update + "\nhm_apt install -y python")
         } else if (request.action == RuntimeAction.InstallBrowser) {
             progress("正在安装 Chromium 与 X11 配套包，可能需要较长时间")
-            checkedRun(Header + "\npkg install -y x11-repo\npkg update -y\npkg install -y termux-x11-nightly chromium")
+            checkedRun(Header + "\n" + DomesticPackageSources.setup() + "\n" + DomesticPackageSources.Update + "\nhm_apt install -y termux-x11-nightly chromium")
+        } else if (request.action == RuntimeAction.InstallProxy) {
+            progress("正在通过清华镜像准备代理软件源")
+            checkedRun(Header + "\n" + DomesticPackageSources.setup() + "\n" + DomesticPackageSources.Update)
         }
         val operation = if (request.action in setOf(RuntimeAction.Prepare, RuntimeAction.RepairEnvironment, RuntimeAction.InstallHermes, RuntimeAction.UpgradeHermes, RuntimeAction.InstallBrowser))
             RuntimeRequest(RuntimeAction.Inspect) else request
@@ -126,10 +129,10 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
 
         // pkg 的镜像探测依赖 curl；curl 本身损坏时直接使用 APT 修复。
         // 拒绝移除已有软件包，保留已有配置文件；更新失败或 curl 仍不可运行时停止。
-        internal val RepairPackages = """
+        internal val RepairPackages = DomesticPackageSources.setup() + "\n" + """
             export DEBIAN_FRONTEND=noninteractive
-            apt-get -o APT::Update::Error-Mode=any update
-            apt-get -y --no-remove -o Dpkg::Options::=--force-confold dist-upgrade
+            hm_apt -o APT::Update::Error-Mode=any update
+            hm_apt -y --no-remove -o Dpkg::Options::=--force-confold dist-upgrade
             curl --version >/dev/null
         """.trimIndent()
 
@@ -144,7 +147,11 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
             """.trimIndent().replace('§', '$') else "hm_channel=" + channel.id) + "\n" + """
             [ "§(uname -m)" = aarch64 ] || exit 22
             # 先检查选中通道，再安装其它依赖；不因稳定版缺失而自动切换预览版。
-            command -v curl >/dev/null 2>&1 || pkg install -y curl
+            @@DOMESTIC_ONLY@@
+            if ! command -v curl >/dev/null 2>&1; then
+                hm_apt -o APT::Update::Error-Mode=any update
+                hm_apt install -y curl
+            fi
             hm_fetch() {
                 hm_status=§(curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --connect-timeout 20 --max-time 120 -w '%{http_code}' "§1" -o "§2") || {
                     hm_result=§?
@@ -158,7 +165,8 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
             trap 'rm -f "§hm_key"' EXIT
             hm_fetch "https://hermes-assets.nousresearch.com/releases/termux/§hm_channel/key.asc" "§hm_key"
             hm_fetch "https://hermes-assets.nousresearch.com/releases/termux/§hm_channel/dists/hermes-§hm_channel/InRelease" /dev/null
-            pkg install -y gnupg
+            hm_apt -o APT::Update::Error-Mode=any update
+            hm_apt install -y gnupg
             hm_fingerprint=§(gpg --batch --with-colons --show-keys "§hm_key" | awk -F: '§1 == "fpr" {print §10; exit}')
             hm_primary_count=§(gpg --batch --with-colons --show-keys "§hm_key" | awk -F: '§1 == "pub" {n++} END {print n+0}')
             [ "§hm_primary_count" = 1 ] || { echo '仓库公钥数量异常，已停止' >&2; exit 23; }
@@ -166,10 +174,13 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
             mkdir -p "§PREFIX/etc/apt/keyrings" "§PREFIX/etc/apt/sources.list.d"
             cp "§hm_key" "§PREFIX/etc/apt/keyrings/hermes-agent.asc"
             printf '%s\n' "deb [signed-by=§PREFIX/etc/apt/keyrings/hermes-agent.asc] https://hermes-assets.nousresearch.com/releases/termux/§hm_channel hermes-§hm_channel main" > "§PREFIX/etc/apt/sources.list.d/hermes-agent.list"
-            pkg update -y
-            pkg @@OPERATION@@ -y hermes-agent
+            @@DOMESTIC_HERMES@@
+            hm_apt -o APT::Update::Error-Mode=any update
+            hm_apt @@OPERATION@@ -y hermes-agent
             hermes --version
         """.trimIndent().replace('§', '$')
-            .replace("@@FINGERPRINT@@", Fingerprint).replace("@@OPERATION@@", if (upgrade) "upgrade" else "install")
+            .replace("@@DOMESTIC_ONLY@@", DomesticPackageSources.setup(false))
+            .replace("@@DOMESTIC_HERMES@@", DomesticPackageSources.setup())
+            .replace("@@FINGERPRINT@@", Fingerprint).replace("@@OPERATION@@", if (upgrade) "install --only-upgrade" else "install")
     }
 }

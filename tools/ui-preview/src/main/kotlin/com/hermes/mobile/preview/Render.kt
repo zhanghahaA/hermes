@@ -95,6 +95,9 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("59-domestic-install", frames = 16) { _, _ -> RuntimePreview(true) },
+    Scene("59b-domestic-install-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true) },
+    Scene("59c-domestic-repair", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.PackageMismatch) },
     Scene("58-source-unavailable", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.RepositoryUnavailable) },
     Scene("58b-source-unavailable-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.RepositoryUnavailable) },
     Scene("57-repair-packages", frames = 16) { _, _ -> RuntimePreview(true, issue = com.hermes.mobile.data.local.RuntimeIssue.PackageMismatch) },

@@ -1,6 +1,6 @@
 # Hermes 移动版（Android）
 
-当前开发包 **0.13.7-dev / Android versionCode 44**：安装前检查所选官方通道的公钥与索引，404／410 时明确显示「官方安装源暂不可用」，停止后续依赖安装，不再误导用户重新初始化 Termux。保留单按钮安装和软件包冲突修复。当前官方 stable 文件实测返回 404，上游也明确提示 Termux 包暂不可用；本版本不能修复上游发布，不能保证预览版可运行。见 [部署与模型设置](docs/model-settings.md)。
+当前开发包 **0.13.8-dev / Android versionCode 45**：App 安装的 Termux 依赖（含 Python、浏览器及代理）和环境修复使用清华国内镜像；Python 服务依赖使用清华 PyPI。独立源列表与索引缓存保留用户全局源配置，不增加安装点击。Hermes 安装包、Termux／X11 应用下载仍用官方源，未实现全程国内下载；官方 Hermes stable 的 404 不因切换依赖源而消失。见 [部署与模型设置](docs/model-settings.md)。
 
 在手机上使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：默认像发消息一样收到最终回复，可在设置中开启逐字回复或思考与工作过程；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 

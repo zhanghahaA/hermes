@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.7-dev (Android versionCode 44).** Checks the selected official channel before installing further dependencies and clearly reports missing repository files (HTTP 404/410), without asking users to initialize Termux again or silently switching channels. The official stable key and index currently return 404, and upstream warns that its Termux package is broken. This app update does not repair upstream publishing or establish that canary runs on a phone. See [deployment and model settings](docs/model-settings.md).
+**Current development build: 0.13.8-dev (Android versionCode 45).** App-managed Termux dependency installation and environment repair use the Tsinghua mainland China mirrors. Python service dependencies use Tsinghua PyPI. Separate APT source/index files preserve global source settings and add no setup clicks. Hermes packages and Termux/X11 app downloads still use official origins; this is not an entirely domestic download path and does not fix upstream stable HTTP 404. See [deployment and model settings](docs/model-settings.md).
 
 English | [中文](README.zh-CN.md)
 

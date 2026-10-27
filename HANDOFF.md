@@ -5,7 +5,16 @@
 
 ## 现状
 
-- 当前开发包 **0.13.7-dev / code 44**，继续 `codex/simple-install` 和草稿 PR #5。用户截图 curl 已恢复，安装在下载官方公钥时返回 404。已实测 stable/key.asc、stable/dists/hermes-stable/InRelease 均为 404；canary 两项 200，nightly 两项 404。上游文档 `69f73ec5f11f5a945cc864f29c4e2ad2307eaec3/website/docs/getting-started/termux.md` 明确警告 Termux 包当前不能运行。不能把 App 改进说成已经解决官方发布问题，也不能把 canary HTTP 200 说成手机可用。
+- 当前开发包 **0.13.8-dev / code 45**，继续 `codex/simple-install` 与草稿 PR #5。用户要求面向国内客户使用国内软件源，并确认暂时没有国内存储／CDN，先接入现有国内镜像；不擅自创建镜像服务器、费用或替代 Hermes 签名。
+- 新增 `DomesticPackageSources`：App 的 APT 安装、修复、Python 管理环境、浏览器与代理依赖使用清华 Termux main/root/x11 镜像；显式使用 `~/.hermes-mobile/apt` 独立源列表及索引缓存，保留原全局源配置，不读其它源旧索引、不在失败后自动回退海外。Hermes 已验证的官方源独立纳入；未知第三方源不导入，不能承诺通过该流程升级第三方包。升级 Hermes 使用 install --only-upgrade 限定目标包。
+- Python 服务依赖改用清华 PyPI，只设置当前 pip／构建子进程环境，清理旧 PIP_* 和 pip 配置影响，不覆盖全局 pip 配置。保持 TLS、Termux 签名和 Hermes 固定公钥验证。页面在安装／修复前说明来源，无额外确认点击；APK 下载和 Hermes 包仍用官方海外地址，不能宣传为全程国内。
+- 清华源已通过 Termux 官方镜像名单核对，3 个 APT InRelease 均 HTTP 200 且为签名文档，PyPI 索引 200；此为云环境连通证据，不代表国内手机速度或实际包安装验证。Hermes 官方 stable 的 404 仍未解决。
+- 桌面完整套件 **273 项报告、257 项实际通过、0 失败**；16 项真实 Hermes／OpenSSH IT 未配置未执行。新增国内源隔离／失败停止脚本回归，更新真实安装、修复和命令占位回归；第一次发现旧测试仍匹配 pkg，改为验证实际 hm_apt 修改命令，最终完整套件重跑通过。
+- App 与 Android 自检 APK 构建通过；Python 完整套件 29 项，其中 25 项执行通过、4 项真实上游集成未配置跳过。最初默认沙箱不允许本机假 HTTP 服务打开套接字，允许后重跑通过；不将其误报为产品错误。APK SHA-256：`b9385815b34ef6e631f3473eac36005f690dd9031e871ab5c31a29d0ec196344`，签名仍为 `d985fcaf…db1dc7`。交付 `/workspace/shared/downloads/hermes-mobile-0.13.8-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.8-dev`。
+
+### 0.13.7-dev 官方源诊断记录
+
+- 当时开发包 **0.13.7-dev / code 44**，继续 `codex/simple-install` 和草稿 PR #5。用户截图 curl 已恢复，安装在下载官方公钥时返回 404。已实测 stable/key.asc、stable/dists/hermes-stable/InRelease 均为 404；canary 两项 200，nightly 两项 404。上游文档 `69f73ec5f11f5a945cc864f29c4e2ad2307eaec3/website/docs/getting-started/termux.md` 明确警告 Termux 包当前不能运行。不能把 App 改进说成已经解决官方发布问题，也不能把 canary HTTP 200 说成手机可用。
 - 安装先获取所选通道公钥和 InRelease，再安装 GnuPG 并验证固定主公钥指纹、通过签名 APT 安装 Hermes，最后补齐 App 管理所需 Python。curl 缺失时只先补 curl。404／410 使用固定标记和退出码 44 映射 RepositoryUnavailable，界面说明「官方安装源暂不可用」，明确重试是继续安装。失败不写软件源、不切通道、不要求重新初始化；其它 HTTP／签名失败仍停止。
 - 验证：完整桌面套件 **272 项报告、256 项实际通过、0 失败**；16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 4 项安装源脚本／后端回归和 1 项界面重试回归，覆盖 key/index 404、410、503、明确选择通道、错误指纹拒绝及失败不安装 Python。
 - APK SHA-256：`7b296d19e33963a5ebb7aa31944d6db6dfd9f7102f836b511f1282967cb377b6`；签名沿用 `d985fcaf…db1dc7`。App 与 Android 自检 APK 构建通过；真实 Termux 安装仍未验证，官方 stable 目前仍不可安装。交付 `/workspace/shared/downloads/hermes-mobile-0.13.7-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.7-dev`，包含 HTTP 核实证据。

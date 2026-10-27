@@ -207,6 +207,20 @@ def configure(model):
     return key
 
 
+def domestic_apt(*args):
+    # 显式覆盖 APT 的源列表和索引目录，不读取其它源的缓存，不改用户全局设置。
+    return ["apt-get", "-o", "Dir::Etc::sourcelist=" + str(ROOT / "apt/sources.list"),
+            "-o", "Dir::Etc::sourceparts=-", "-o", "Dir::State::lists=" + str(ROOT / "apt/lists"), *args]
+
+
+def domestic_pip_environment():
+    # 只影响本次依赖安装及其构建子进程，避免已有 extra-index-url 绕回其它源。
+    values = {key: value for key, value in os.environ.items() if not key.startswith("PIP_")}
+    values.update(PIP_CONFIG_FILE=os.devnull, PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple",
+                  PIP_DISABLE_PIP_VERSION_CHECK="1")
+    return values
+
+
 def install_service(service):
     folder = service_dir(service["id"])
     if alive("service-" + service["id"]):
@@ -227,7 +241,7 @@ def install_service(service):
         subprocess.run([sys.executable, "-m", "venv", str(venv)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if requirements:
         subprocess.run([str(venv / "bin/python"), "-m", "pip", "install", "--", *requirements], check=True,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200, env=domestic_pip_environment())
     atomic(folder / "main.py", source)
     atomic(folder / "service.json", json.dumps({"name": service["name"], "kind": "python"}))
 
@@ -244,7 +258,7 @@ def install_proxy(proxy):
         raise ValueError("代理名称无效")
     if alive("service-" + proxy["id"]):
         raise ValueError("请先停止该代理")
-    subprocess.run(["pkg", "install", "-y", "caddy"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
+    subprocess.run(domestic_apt("install", "-y", "caddy"), check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1200)
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     atomic(folder / "service.json", json.dumps({"name": proxy["name"], "kind": "proxy", "port": port, "target": proxy["target"]}))
 

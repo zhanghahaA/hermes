@@ -52,6 +52,7 @@ class LocalRuntimeUiTest {
             assertEquals(listOf(RuntimeAction.Inspect), f.calls.toList())
             onNodeWithText("检查并准备环境").assertDoesNotExist()
             onNodeWithText("可选 · 自己的服务").assertDoesNotExist()
+            onNodeWithText("安装依赖使用清华国内镜像", substring = true).assertIsDisplayed()
             onNodeWithText("安装 Hermes").assertIsDisplayed().performClick()
             waitUntil(timeoutMillis = 5000) { models }
             assertEquals(listOf(RuntimeAction.Inspect, RuntimeAction.Inspect, RuntimeAction.InstallHermes,

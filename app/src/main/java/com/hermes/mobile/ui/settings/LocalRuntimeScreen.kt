@@ -69,6 +69,9 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(if (openingChat) "正在连接" else step.title, style = MaterialTheme.typography.headlineSmall)
                 if (step.detail.isNotBlank()) Text(step.detail)
+                if (step in setOf(RuntimeSetupStep.Install, RuntimeSetupStep.Configure, RuntimeSetupStep.Repair, RuntimeSetupStep.SourceUnavailable)) {
+                    Text(DomesticPackageSources.Notice, style = MaterialTheme.typography.bodySmall)
+                }
                 if (state.failed && step !in setOf(RuntimeSetupStep.Initialize, RuntimeSetupStep.Recover, RuntimeSetupStep.Pending)) Text(state.message, color = MaterialTheme.colorScheme.error)
                 else if (state.busy || openingChat) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -136,6 +139,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                 }
                 ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("可选 · 自己的服务", style = MaterialTheme.typography.titleMedium)
+                    Text("Python 依赖和代理软件使用清华国内镜像。", style = MaterialTheme.typography.bodySmall)
                     Text("导入你信任的 Python 程序，或添加只监听本机的反向代理。服务共享 Termux 的数据访问权限，虚拟环境不是安全沙箱。", style = MaterialTheme.typography.bodySmall)
                     OutlinedButton(onClick = { editing = RuntimeAction.InstallService }, enabled = installReady && snapshot.toolsReady) { Text("导入 Python 服务") }
                     OutlinedButton(onClick = { editing = RuntimeAction.InstallProxy }, enabled = installReady && snapshot.toolsReady) { Text("添加本机反向代理") }
@@ -167,7 +171,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
             RuntimeAction.RemoveService -> "停止并移除选定服务的程序与元数据，保留它生成的数据。"
             RuntimeAction.RemoveHermes -> "卸载 Hermes 软件包并停止 App 管理的 Hermes 进程，保留配置、会话和记忆。其它软件若使用同一 Hermes 软件包也会受影响。"
             RuntimeAction.UpgradeHermes -> manager.backend.hermesInstallWarning.orEmpty() + " 将通过签名软件源升级软件包，不自动重启当前进程。"
-            RuntimeAction.InstallBrowser -> "将安装 Python 服务环境和 Chromium／X11 配套包，需要网络和较多空间；独立 X11 应用仍需在系统中确认安装。"
+            RuntimeAction.InstallBrowser -> "将通过清华国内镜像安装 Python 服务环境和 Chromium／X11 配套包，需要网络和较多空间；独立 X11 应用仍需在系统中确认安装。"
             else -> "将安装 Python 运行包以管理本机服务，已有 Hermes 配置与连接不会删除。"
         }) },
         confirmButton = { TextButton(onClick = { manager.perform(request); confirmation = null }) { Text("确认并继续") } },

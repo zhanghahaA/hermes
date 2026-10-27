@@ -12,7 +12,7 @@ class TermuxRepositoryTest {
             val result = runInstaller(missing, 404)
             assertEquals(44, result.code)
             assertTrue(result.output.contains("HM_REPOSITORY_UNAVAILABLE"))
-            assertFalse(result.calls.any { it.startsWith("pkg ") || it == "hermes" })
+            assertFalse(result.calls.any { it.startsWith("apt ") || it == "hermes" })
             assertTrue(result.calls.filter { it.startsWith("curl ") }.all { it.contains("/stable/") })
             assertFalse(result.wroteRepository)
         }
@@ -31,7 +31,8 @@ class TermuxRepositoryTest {
             val result = runInstaller(channel = channel)
             assertEquals(0, result.code, result.output)
             assertTrue(result.calls.take(2).all { it.startsWith("curl ") && it.contains("/${channel.id}/") })
-            assertEquals("pkg install -y gnupg", result.calls[2])
+            assertTrue(result.calls[2].endsWith("update"))
+            assertTrue(result.calls[3].endsWith("install -y gnupg"))
             assertTrue(result.wroteRepository)
             assertTrue(result.source.contains("/${channel.id} hermes-${channel.id} main"))
             assertEquals("hermes", result.calls.last())
@@ -39,7 +40,7 @@ class TermuxRepositoryTest {
         val badKey = runInstaller(fingerprint = "INVALID_FIXTURE_FINGERPRINT")
         assertEquals(23, badKey.code)
         assertFalse(badKey.wroteRepository)
-        assertFalse(badKey.calls.contains("pkg install -y hermes-agent"))
+        assertFalse(badKey.calls.any { it.endsWith("install -y hermes-agent") })
     }
 
     @Test fun backendMapsOnlyExplicitRepositoryFailureAndManagerStopsBeforePython() = runBlocking {
@@ -63,7 +64,7 @@ class TermuxRepositoryTest {
         manager.install().join()
         assertEquals(RuntimeIssue.RepositoryUnavailable, manager.state.value.issue)
         assertEquals(RuntimeSetupStep.SourceUnavailable, manager.state.value.setupStep())
-        assertFalse(scripts.any { it.contains("pkg install -y python") })
+        assertFalse(scripts.any { it.contains("hm_apt install -y python") })
         assertEquals(RuntimeCheckStatus.Passed, manager.state.value.diagnosticChecks().single { it.id == "command" }.status)
         assertFalse(manager.state.value.diagnosticReport().contains("HM_REPOSITORY"))
     }
@@ -101,7 +102,7 @@ class TermuxRepositoryTest {
                 printf fixture > "§target"
                 printf 200
             """.trimIndent())
-            stub("pkg", "printf 'pkg %s\\n' \"§*\" >> \"§TEST_LOG\"")
+            stub("apt-get", "printf 'apt %s\\n' \"§*\" >> \"§TEST_LOG\"")
             stub("gpg", "printf 'pub:::::::::\\nfpr:::::::::%s:\\n' \"§FINGERPRINT\"")
             stub("hermes", "echo hermes >> \"§TEST_LOG\"")
             // 仅去掉 Android 路径限制前缀，安装脚本正文原样执行，写入目录限制在临时测试目录。
@@ -110,6 +111,7 @@ class TermuxRepositoryTest {
             val log = folder.resolve("calls")
             builder.environment().apply {
                 put("PREFIX", folder.resolve("prefix").absolutePath)
+                put("HERMES_MOBILE_ROOT", folder.resolve("runtime").absolutePath)
                 put("PATH", "${bin.absolutePath}:/usr/bin:/bin")
                 put("TMPDIR", folder.absolutePath)
                 put("TEST_LOG", log.absolutePath)
