@@ -70,6 +70,7 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                     "approval.request",
                     "\"kind\":\"approval\",\"prompt_id\":\"p1\",\"execution_generation\":3,\"command\":\"rm -rf /tmp/x\",\"description\":\"删除临时目录\",\"choices\":[\"once\",\"session\",\"always\",\"deny\"]",
                 )
+                "选项" in input -> add("clarify.request", "\"kind\":\"clarify\",\"prompt_id\":\"q1\",\"execution_generation\":3,\"question\":\"选择颜色\",\"choices\":[\"蓝色\",\"绿色\"]")
                 "慢" in input -> add("message.delta", "\"delta\":\"正在\"")
                 "断线" in input -> add("message.delta", "\"delta\":\"我先查一下。\"")
                 else -> {
@@ -119,6 +120,11 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                 }
                 add("""{"id":${size + 100},"role":"assistant","content":"$reply","reasoning_content":"SECRET-THINKING","finish_reason":"stop","timestamp":1760009002}""")
             }
+        }
+
+        fun clarify(answer: String) {
+            add("clarify.settled", "\"prompt_id\":\"q1\",\"answer\":${kotlinx.serialization.json.JsonPrimitive(answer)}")
+            complete()
         }
 
         fun approve(choice: String) {
@@ -322,6 +328,11 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
                     "" -> json(run.statusJson())
                     "events" -> MockResponse().setHeader("Content-Type", "text/event-stream")
                         .setBody(run.stream(request.getHeader("Last-Event-ID")?.toInt() ?: -1))
+                    "clarify" -> {
+                        val obj = HermesJson.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+                        run.clarify((obj["answer"] as kotlinx.serialization.json.JsonPrimitive).content)
+                        json("""{"status":"resolved"}""")
+                    }
                     "approval" -> {
                         val choice = Regex("\"choice\":\"(\\w+)\"").find(body)!!.groupValues[1]
                         run.approve(choice)

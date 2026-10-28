@@ -41,7 +41,7 @@ data class ModelSettingsRequest(
     override fun toString() = "ModelSettingsRequest(action=$action, contents=[已隐藏])"
 
     fun validate() {
-        require(action in setOf("inspect", "save", "login", "poll", "cancel", "models")) { "未知模型配置操作" }
+        require(action in setOf("inspect", "save", "login", "poll", "cancel", "models", "enable_clarify")) { "未知模型配置操作" }
         if (action in setOf("save", "login", "models")) require(Regex("[a-zA-Z0-9][a-zA-Z0-9:_-]{0,79}").matches(provider)) { "请选择提供方" }
         if (action == "save") {
             require(model.isNotBlank() && model.length <= 200 && model.none { it.isISOControl() }) { "请填写模型名称" }
@@ -106,6 +106,7 @@ class ModelSettingsManager(
             }
             mutable.update { it.copy(snapshot = response.snapshot ?: it.snapshot, login = response.login ?: it.login,
                 message = when (request.action) {
+                    "enable_clarify" -> "已启用手机互动选项。请新建会话尝试；若旧进程尚未读取配置，请在空闲时重启 Hermes。"
                     "save" -> "模型设置已保存。新会话将使用此配置；已锁定模型的旧会话需单独切换。"
                     "login", "poll" -> when (response.login?.status) {
                         "approved" -> "账号授权成功，选择模型后点保存即可。"
@@ -134,7 +135,8 @@ class ModelSettingsManager(
         const val Receipt = "HMMODELS"
         private val SafeErrors = setOf("请选择提供方", "请填写模型名称", "模型密钥格式无效", "请填写模型端点", "接口格式无效",
             "云端端点使用 HTTPS；Hermes 所在机器的本地模型可使用本机 HTTP 地址", "没有收到模型配置结果，请检查 Hermes 是否安装完整",
-            "当前 Hermes 不支持浏览器授权，请升级 Hermes 或使用下方登录命令。", "请先在设置中为该连接配置 SSH，并连接成功后重试。",
+            "当前 Hermes 不支持浏览器授权，请升级 Hermes 或使用下方登录命令。",
+            "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。", "请先在设置中为该连接配置 SSH，并连接成功后重试。",
             "模型设置未完成：请检查模型、密钥和端点，修改前的配置备份已保留。", "请先安装 Hermes，再配置模型提供方。",
             "请先完成 Termux 执行授权", "模型配置文件无法读取，请先修复，已有配置未覆盖。")
     }

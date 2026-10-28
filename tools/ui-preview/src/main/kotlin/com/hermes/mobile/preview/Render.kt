@@ -95,6 +95,8 @@ private fun mainScreen(repo: HermesRepository, tab: MainTab) = @Composable {
 }
 
 private val scenes = listOf(
+    Scene("61-interactive-settings", frames = 16) { _, _ -> ModelSettingsPreview("") },
+    Scene("61b-interactive-settings-dark", dark = true, frames = 16) { _, _ -> ModelSettingsPreview("") },
     Scene("60-configure-local", frames = 16) { _, _ -> RuntimePreview(true, installed = true, modelConfigured = false) },
     Scene("60b-configure-local-dark", dark = true, frames = 16) { _, _ -> RuntimePreview(true, installed = true, modelConfigured = false) },
     Scene("60c-local-connect-failed", frames = 16) { _, _ -> RuntimePreview(true, installed = true, issue = com.hermes.mobile.data.local.RuntimeIssue.LocalApiNotReady) },

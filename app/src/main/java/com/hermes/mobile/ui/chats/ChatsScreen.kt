@@ -226,10 +226,12 @@ fun ChatsScreen(
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = {
-                scope.launch {
+                if (!refreshing) {
                     refreshing = true
-                    repository.refreshSessions()
-                    refreshing = false
+                    scope.launch {
+                        try { repository.refreshSessions() }
+                        finally { refreshing = false }
+                    }
                 }
             },
             state = pullState,

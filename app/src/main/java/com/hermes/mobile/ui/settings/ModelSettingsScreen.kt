@@ -197,6 +197,10 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                 } }
                 TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("inspect")) }) { Text("刷新配置") }
             }
+            if (ready) {
+                Text("手机互动选项：Hermes 的 API 工具集可能默认关闭 clarify。下面只添加这个追问工具，保留其它工具与模型设置，不自动重启服务。", style = MaterialTheme.typography.bodySmall)
+                TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("enable_clarify")) }) { Text("启用手机互动选项") }
+            }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (externalMessage.isNotBlank()) {
                 Text(externalMessage)

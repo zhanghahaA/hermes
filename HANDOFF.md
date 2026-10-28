@@ -3,6 +3,16 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.13.11-dev 互动与后台恢复
+
+- 当前开发包 **0.13.11-dev / code 48**，继续 `codex/simple-install` 与草稿 PR #5。用户报告手机／电脑发起的互动卡片都收不到、后台久置后下拉刷新转圈而切换同一连接马上恢复、模型页错误提示不支持浏览器授权。
+- 确认 SSH 支持 API 的 SSE 卡片；旧客户端缺少桌面共享会话订阅。新增 SessionControlFeed，复用认证的 Gateway RPC 桥，打开当前会话时 snapshot prompts + events.since 游标／epoch 回放，回答保留 Profile／session／prompt／generation，关闭页面 detach。按 prompt+generation 合并 API 和 Gateway 卡片，电脑处理后同步状态。仅当前打开会话；纯 HTTP 无 SSH 不含桌面 Gateway 共享通道，独立终端进程也不能保证共享。不能宣称各连接方式功能完全一致。
+- 刷新主动 reset SSH + 清理 HTTP 空闲连接，健康探测后读列表，不清空任务和待发送消息；30 秒上限，UI finally 结束转圈且阻止重复下拉。保留切换连接原行为。
+- 模型桥原先所有 ImportError 都报 OAuth 不支持，现按 inspect/login 区分；缺少可选模型目录函数时回退注册提供方与 Key 存在性摘要。未连接用户手机，不能确认截图具体缺失模块。新增显式「启用手机互动选项」：只向当前 Profile 的 API 工具集补 clarify，保留其它工具、模型与密钥，备份且检查 managed；不自动重启。服务未重读时需空闲时重启。
+- 协议按上游 ee7e0f517232fb619c72e49d7e648436bddc598e 的 gateway-contract.generated.ts 与 session_pending_controls.py 核对。详细原因、文件与连接方式边界见 [互动恢复说明](docs/interactive-recovery.md)。
+- 最终完整桌面 **290 项报告、274 项实际通过、0 失败**；16 项真实 Hermes/OpenSSH IT 未配置。Python **43 项报告、39 项通过、4 项真实上游跳过**。新增真实本机 MINA SSH → 假 Hermes 的刷新重登录／互动卡片与回答、HTTP 直连卡片／回答；共享 Gateway 快照、他处处理、响应身份、取消订阅使用替代 RPC，非真实桌面端到端。新测试第一次 JUnit 返回类型声明不正确，修正后整套通过。
+- App／Android 自检 APK 构建通过；已检查新互动入口和提供方设置浅／深色截图。APK SHA-256：`d4b061f1545cd35986d853ff270d7f976f1c683659541b00b0e3f28444b460ed`，签名仍为 `d985fcaf…db1dc7`。下载 `/workspace/shared/downloads/hermes-mobile-0.13.11-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.11-dev`。没有用户手机长期后台、真实桌面共享卡片或用户 Termux 版本验证；覆盖安装无需迁移，不能声称用户设备所有问题已经实测修复。
+
 ## 0.13.10-dev 配对优化
 
 - 当前开发包 **0.13.10-dev / code 47**，继续 `codex/simple-install` 与草稿 PR #5。按用户要求直接在安卓 dev 实施，不要求另给服务端仓库。完整行为与局限见 [配对优化说明](docs/mobile-pairing-review.md)。

@@ -43,6 +43,25 @@ class ModelSettingsUiTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun enablingInteractiveToolsIsExplicitAndDoesNotSubmitModelCredentials() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val requests = CopyOnWriteArrayList<ModelSettingsRequest>()
+        val manager = ModelSettingsManager(scope, "fixture") { _, body ->
+            requests += Json.decodeFromString(ModelSettingsRequest.serializer(), body)
+            "HMMODELS" + Json.encodeToString(ModelSettingsResponse.serializer(), ModelSettingsResponse(snapshot = ModelSettingsSnapshot()))
+        }
+        try {
+            setContent { HermesTheme { ModelSettingsContent(manager, "测试连接", {}) } }
+            waitUntil(timeoutMillis = 5000) { manager.state.value.snapshot != null }
+            assertFalse(requests.any { it.action == "enable_clarify" })
+            onNodeWithText("启用手机互动选项").performScrollTo().performClick()
+            waitUntil(timeoutMillis = 5000) { requests.any { it.action == "enable_clarify" } }
+            val request = requests.single { it.action == "enable_clarify" }
+            assertNull(request.apiKey)
+            assertEquals("", request.model)
+        } finally { scope.cancel() }
+    }
+
     @Test fun directConnectionExplainsHowToEnableRemoteManagement() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = ModelSettingsManager(scope, "fixture") { _, _ -> error("没有 SSH 不应执行") }

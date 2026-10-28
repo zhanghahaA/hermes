@@ -396,3 +396,9 @@ App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cl
 配对配置按差异写入，保留已有 API_SERVER_KEY（非法值拒绝而不替换）和模型凭据。配置未变且健康／认证通过时不重启，必要时通过当前 Profile 的官方 gateway restart 恢复并等待接口；手机最终连接仍由已有完整验连流程确认。SSH 回执仍为旧格式、0600 私有文件，但默认不打印终端；直连旧协议的安装命令仍属于敏感凭据，不是公开配对码。
 
 首次命令压缩并缓存带摘要的标准库助手；后续短重试只传参数并检查缓存摘要。公钥按算法和数据去重，新增授权禁用 agent／X11／PTY，指定公钥撤销不清空 authorized_keys。完整边界和测试见 [配对优化说明](mobile-pairing-review.md)。
+
+### 共享互动卡片与刷新（0.13.11）
+
+打开 SSH 会话时复用 Gateway JSON-RPC 桥读取 canonical `session.resume.prompts`，随后 `session.events.since` 回放 `approval/clarify.request` 与 settled/responded；按 prompt_id 与 execution_generation 合并，回答走对应 Gateway respond 方法并保留 Profile。关闭页面 detach 自己的订阅。不支持该协议时保留原 API run 事件流程；纯 HTTP 无 SSH 不具备此桌面共享通道。
+
+下拉刷新主动重建 SSH 传输及 HTTP 空闲连接，健康探测后读列表，保留任务和待发送内容；30 秒上限与 UI finally 避免无限转圈。模型桥的 ImportError 按操作分类，不再把 inspect 缺模块误报为 OAuth 不支持；缺少可选模型目录时可回退到注册提供方。用户明确点击「启用手机互动选项」才补充 API clarify 工具，不自动重启。详见 [互动与恢复](interactive-recovery.md)。
