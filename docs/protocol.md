@@ -382,3 +382,11 @@ App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cl
 `DomesticPackageSources` 为 App 的包安装命令生成独立 `~/.hermes-mobile/apt/sources.list` 和 `lists` 缓存；显式传递 `Dir::Etc::sourcelist`、`Dir::Etc::sourceparts=-`、`Dir::State::lists`，避免读取全局其它源与旧缓存。清华 Termux main/root/x11 来源已与 Termux 官方 mirrors/chinese_mainland 名单核对。安装 Python、GnuPG、Chromium、Caddy 与包冲突修复全部通过该 APT 入口，源更新使用 Error-Mode=any，失败不继续安装，不使用 pkg 自动选择镜像。Hermes 自身仍使用经过指纹校验的官方签名源；下载其公钥和索引前的镜像初始化不纳入已有 Hermes 源，避免旧通道影响前置工具下载。
 
 原全局 Termux／pip 源配置不覆盖。独立列表只加入三类 Termux 源及既有 Hermes 源，不自动复制未知第三方源；因此不能宣称会升级所有第三方软件。Python 服务的 pip 子进程清除继承的 PIP_* 参数，设置 PIP_CONFIG_FILE=/dev/null、清华 PIP_INDEX_URL 及禁用版本检查；构建子进程继承相同设置，不污染服务器、模型端点或服务运行环境。没有添加 trusted=yes、allow-unauthenticated 或关闭 TLS 验证。镜像可访问和假命令脚本测试不等于真实手机安装已验证。
+
+### 本机配置门槛与连接恢复（0.13.9）
+
+`RuntimeSnapshot.modelConfigured` 与手机接口的 `configured` 分开。Android 将 providers/settings.py 注入实际 Termux 后端，Inspect 在同一个 HERMES_HOME 下通过 Hermes 自带 Python 读取 HMMODELS 摘要，要求有效回包、提供方与模型，以及账号／Key 摘要（本地端点除外）；未知或不完整模型回包不标记就绪。模型 inspect/models 命令标为只读，可在超时后释放等待；save/login 仍是修改命令。未配置时 connect 不启动服务，页面进入配置步骤，不自动读取终端默认目录中的密钥。
+
+本机保存后 connect(restart=true) 依次 Inspect → StopHermes → ConfigureHermes → StartHermes → 验证并激活连接。只读前置检查 45 秒超时，接口冷启动重试最多 90 秒；鉴权与能力失败立即报告固定分类，不回显服务响应或凭据。取消／切换连接不强制切回本机。连接锁释放后才等待正式连接完成，避免 ensureRunning 重入死锁。已有未配置／不完整 Hermes 不会被当作可聊天状态。
+
+卸载入口从高级功能移到主页面，保留一次明确范围确认。Python 停止自己记录的 Hermes 进程，再执行 apt-get remove --no-auto-remove -y hermes-agent，不触网、不清理配置／会话／其它服务。manager 核对卸载后的程序检测结果，仍有其它 Hermes 安装时报告未完全移除；保留 App 的连接信息和缓存供重新安装后复用。

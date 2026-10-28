@@ -5,7 +5,18 @@
 
 ## 现状
 
-- 当前开发包 **0.13.8-dev / code 45**，继续 `codex/simple-install` 与草稿 PR #5。用户要求面向国内客户使用国内软件源，并确认暂时没有国内存储／CDN，先接入现有国内镜像；不擅自创建镜像服务器、费用或替代 Hermes 签名。
+- 当前开发包 **0.13.9-dev / code 46**，继续 `codex/simple-install` 与草稿 PR #5，包含已完成的国内源改动。用户新增要求：一键卸载；终端可进入 Hermes 配置但 App 开始聊天一直等待并提示本机接口未就绪，需要将配置纳入引导。截图不足以证明实际手机失败原因，不能宣称真机已修好。
+- 已确认旧逻辑只凭 mobile-api-key／.env 就认为配置完成，未要求模型配置；连接失败后退回检查步骤。新增 modelConfigured：Android 传入真实 providers/settings.py，由后端在 App 的 HERMES_HOME 下读取模型／账号摘要，只有完整回包和已选提供方、模型及凭据摘要（本地端点除外）才就绪。缺失时主按钮「配置模型并继续」，说明 App 与终端默认配置目录不同，不静默复制密钥。
+- 保存模型后执行 Inspect → StopHermes → ConfigureHermes → StartHermes → 验证／切换连接，同步手机接口配置及本地访问凭据，重启旧进程使新模型设置生效。只读前置检查 45 秒上限；本机 API 冷启动检查最多 90 秒，明确 401／403／缺 Key 和必需接口缺失立即固定分类，暂时超时／503 可重试。失败保持模型入口和「重启并重试」，不误标成 Termux 挂起；页面显示当前阶段。
+- 「卸载本机 Hermes」移至主页面，确认范围后停止自管 Hermes 并 apt-get remove --no-auto-remove -y hermes-agent；保留 Termux、配置、账号、聊天数据库、记忆、App 连接与缓存。其它同名安装仍存在时不假报已完全卸载，不删除未知目录或终端用户数据。
+- 国内源部分已在提交 962c7c7 保存（0.13.8-dev 留档），与本轮配置／卸载改动一起更新 PR。无真机连接，不能把本机假接口、脚本替代命令和编译通过当作用户设备的安装／启动验证。
+
+- 验证：完整桌面套件 **281 项报告、265 项实际通过、0 失败**；16 项真实 Hermes／OpenSSH IT 未配置未执行。Python 套件 **30 项报告、26 项通过、4 项真实上游集成跳过**。新增真实后端模型门槛、超过旧十次限制的慢启动、401／能力失败安全分类、接口超时及重启同步流程、配置引导／卸载确认／失败恢复 UI 回归，Python 实际脚本以替代 apt-get 验证停止进程和保留数据。最终 App 和 Android 自检 APK 构建通过；已检查浅／深色模型引导、直接卸载入口及连接失败恢复截图。
+- 最终 APK SHA-256：`5f41a601a91946e4faf663ab9bd6354aece291e9695ad75cf5134c83d41b9240`，版本 0.13.9-dev / code 46，签名仍为 `d985fcaf…db1dc7`。交付 `/workspace/shared/downloads/hermes-mobile-0.13.9-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.9-dev`。仅更新草稿 PR，不发布 Release；国内真机速度、实际账号配置／冷启动／卸载仍未验证。
+
+### 0.13.8-dev 国内镜像记录
+
+- 当时开发包 **0.13.8-dev / code 45**，继续 `codex/simple-install` 与草稿 PR #5。用户要求面向国内客户使用国内软件源，并确认暂时没有国内存储／CDN，先接入现有国内镜像；不擅自创建镜像服务器、费用或替代 Hermes 签名。
 - 新增 `DomesticPackageSources`：App 的 APT 安装、修复、Python 管理环境、浏览器与代理依赖使用清华 Termux main/root/x11 镜像；显式使用 `~/.hermes-mobile/apt` 独立源列表及索引缓存，保留原全局源配置，不读其它源旧索引、不在失败后自动回退海外。Hermes 已验证的官方源独立纳入；未知第三方源不导入，不能承诺通过该流程升级第三方包。升级 Hermes 使用 install --only-upgrade 限定目标包。
 - Python 服务依赖改用清华 PyPI，只设置当前 pip／构建子进程环境，清理旧 PIP_* 和 pip 配置影响，不覆盖全局 pip 配置。保持 TLS、Termux 签名和 Hermes 固定公钥验证。页面在安装／修复前说明来源，无额外确认点击；APK 下载和 Hermes 包仍用官方海外地址，不能宣传为全程国内。
 - 清华源已通过 Termux 官方镜像名单核对，3 个 APT InRelease 均 HTTP 200 且为签名文档，PyPI 索引 200；此为云环境连通证据，不代表国内手机速度或实际包安装验证。Hermes 官方 stable 的 404 仍未解决。

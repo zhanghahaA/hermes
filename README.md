@@ -1,6 +1,6 @@
 # Hermes Mobile (Android)
 
-**Current development build: 0.13.8-dev (Android versionCode 45).** App-managed Termux dependency installation and environment repair use the Tsinghua mainland China mirrors. Python service dependencies use Tsinghua PyPI. Separate APT source/index files preserve global source settings and add no setup clicks. Hermes packages and Termux/X11 app downloads still use official origins; this is not an entirely domestic download path and does not fix upstream stable HTTP 404. See [deployment and model settings](docs/model-settings.md).
+**Current development build: 0.13.9-dev (Android versionCode 46).** Local setup now requires model configuration before chat, synchronizes the phone interface and restarts after saving, and distinguishes startup, authentication, and compatibility failures. A visible uninstall action preserves configuration and chat data after confirmation. Includes mainland China dependency mirrors; Hermes and Termux/X11 app downloads retain official origins. See [deployment and model settings](docs/model-settings.md). Actual phone startup and connectivity remain unverified.
 
 English | [中文](README.zh-CN.md)
 

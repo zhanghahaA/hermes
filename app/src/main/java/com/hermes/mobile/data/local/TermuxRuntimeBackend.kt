@@ -8,7 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.util.Base64
 
 /** 外部 Termux 后端。固定路径、APT 和 Intent 都留在这里，供以后整体替换。 */
-class TermuxRuntimeBackend(private val transport: TermuxTransport, private val program: String) : LocalRuntimeBackend {
+class TermuxRuntimeBackend(private val transport: TermuxTransport, private val program: String, private val modelProgram: String? = null) : LocalRuntimeBackend {
     override val name = "Termux"
     override val externalApps = true
     override val hermesInstallWarning: String = PackageWarning
@@ -68,14 +68,31 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
         val output = safe(receipt["output"]?.jsonPrimitive?.content.orEmpty())
         if (operation.action == RuntimeAction.Inspect && !snapshot.hermesInstalled) checkInstaller()
         if (operation.action == RuntimeAction.StartBrowser) transport.openViewer()
-        return RuntimeResponse(snapshot, output, key)
+        val configuredSnapshot = if (operation.action == RuntimeAction.Inspect && snapshot.hermesInstalled && snapshot.configured && modelProgram != null) {
+            val raw = runModelSettings(modelProgram, """{"action":"inspect"}""", readOnly = true)
+            val line = raw.lineSequence().singleOrNull { it.startsWith("HMMODELS") }
+            val settings = runCatching {
+                json.decodeFromString(com.hermes.mobile.data.providers.ModelSettingsResponse.serializer(),
+                    checkNotNull(line).removePrefix("HMMODELS"))
+            }.getOrNull()
+            val model = settings?.snapshot
+            snapshot.copy(modelConfigured = settings?.ok == true && model != null &&
+                model.provider.isNotBlank() && model.model.isNotBlank() &&
+                (model.provider == "local" || model.hasKey || model.providers.any { it.id == model.provider && it.authenticated }))
+        } else snapshot
+        return RuntimeResponse(configuredSnapshot, output, key)
     }
 
     override suspend fun modelSettings(program: String, input: String): String {
+        val action = runCatching { json.parseToJsonElement(input).jsonObject["action"]?.jsonPrimitive?.content }.getOrNull()
+        return runModelSettings(program, input, readOnly = action in setOf("inspect", "models"))
+    }
+
+    private suspend fun runModelSettings(program: String, input: String, readOnly: Boolean): String {
         check(environment().blockers.isEmpty()) { "请先完成 Termux 执行授权" }
         val command = com.hermes.mobile.data.remote.HermesAdmin.runtimePython(
             "/data/data/com.termux/files/home/.hermes-mobile", program, emptyList())
-        return checkedRun(Header + "\n" + command, input).stdout
+        return checkedRun(Header + "\n" + command, input, readOnly).stdout
     }
 
     private fun safe(value: String): String = DiagnosticRedactor.redact(value, privateValues)

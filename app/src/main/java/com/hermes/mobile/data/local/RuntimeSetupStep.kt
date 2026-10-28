@@ -16,7 +16,9 @@ enum class RuntimeSetupStep(val title: String, val button: String, val detail: S
     Storage("安装空间不足", "释放存储空间", "安装需要至少 2 GB 可用空间，已有数据不会删除。"),
     Install("准备好安装了", "安装 Hermes", "自动检查、准备依赖、安装并配置手机连接。完成后直接选择模型。"),
     Configure("继续完成安装", "完成安装配置", "复用已经安装的 Hermes，补齐运行环境和手机连接，不重新下载安装包。"),
-    Connect("Hermes 已安装", "开始聊天", "选择好模型后，即可启动并连接。"),
+    Model("配置 Hermes", "配置模型并继续", "选择模型服务商，填写密钥或连接账号。保存后自动启动并验证本机聊天接口。"),
+    Reconnect("本机聊天尚未就绪", "重启并重试", "Hermes 已安装。请按下方原因处理，再重启验证；无需重复安装。"),
+    Connect("Hermes 已配置", "开始聊天", "启动本机服务并验证接口，通过后进入聊天。"),
 }
 
 fun LocalRuntimeState.setupStep(): RuntimeSetupStep = when {
@@ -31,9 +33,12 @@ fun LocalRuntimeState.setupStep(): RuntimeSetupStep = when {
     issue == RuntimeIssue.RepositoryUnavailable -> RuntimeSetupStep.SourceUnavailable
     issue == RuntimeIssue.PackageMismatch && !environment.enoughSpace -> RuntimeSetupStep.Storage
     issue == RuntimeIssue.PackageMismatch -> RuntimeSetupStep.Repair
+    issue == RuntimeIssue.ModelSetupRequired -> RuntimeSetupStep.Model
+    issue in setOf(RuntimeIssue.LocalApiNotReady, RuntimeIssue.LocalApiUnauthorized, RuntimeIssue.LocalApiUnsupported) -> RuntimeSetupStep.Reconnect
     !checked || probe != RuntimeProbe.Passed -> RuntimeSetupStep.Check
     (!snapshot.toolsReady || !snapshot.hermesInstalled) && !environment.enoughSpace -> RuntimeSetupStep.Storage
     !snapshot.hermesInstalled -> RuntimeSetupStep.Install
     !snapshot.configured || !snapshot.toolsReady -> RuntimeSetupStep.Configure
+    !snapshot.modelConfigured -> RuntimeSetupStep.Model
     else -> RuntimeSetupStep.Connect
 }

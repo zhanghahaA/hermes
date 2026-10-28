@@ -116,6 +116,7 @@ data class RuntimeSnapshot(
     val browserInstalled: Boolean = false,
     val browserRunning: Boolean = false,
     val services: List<ManagedService> = emptyList(),
+    val modelConfigured: Boolean = false,
 )
 
 /** 凭据只交给连接存储，不放进界面状态或通用诊断。 */

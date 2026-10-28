@@ -157,7 +157,7 @@ class LocalRuntimeTest {
 
     @Test fun installedRuntimeCanConnectEvenWithLowStorage() {
         val state = LocalRuntimeState(environment.copy(freeBytes = 0),
-            snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true),
+            snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true, modelConfigured = true),
             checked = true, probe = RuntimeProbe.Passed)
         assertEquals(RuntimeSetupStep.Connect, state.setupStep())
         assertEquals(RuntimeSetupStep.Storage, state.copy(snapshot = RuntimeSnapshot()).setupStep())

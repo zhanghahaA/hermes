@@ -185,6 +185,24 @@ class RuntimeTests(unittest.TestCase):
             "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple", "PIP_DISABLE_PIP_VERSION_CHECK": "1"})
         self.assertEqual(self.env["PIP_EXTRA_INDEX_URL"], "https://example.invalid/simple")
 
+    def test_uninstall_stops_managed_process_and_preserves_configuration_and_history(self):
+        self.configured()
+        (self.root / "state.db").write_bytes(b"fixture history")
+        before = {name: (self.root / name).read_bytes() for name in ("config.yaml", ".env", "mobile-api-key", "state.db")}
+        self.fake("apt-get", "import json,os,sys\nfrom pathlib import Path\n"
+                  "root=Path(os.environ['HERMES_MOBILE_ROOT'])\n"
+                  "(root/'remove-args.json').write_text(json.dumps(sys.argv[1:]))\n"
+                  "Path(sys.argv[0]).with_name('hermes').unlink()\n")
+        self.call("StartHermes")
+        self.track("hermes")
+        result = self.call("RemoveHermes")
+        self.assertFalse(result["snapshot"]["hermesInstalled"])
+        self.assertFalse(result["snapshot"]["hermesRunning"])
+        self.assertEqual(json.loads((self.root / "remove-args.json").read_text()),
+                         ["remove", "--no-auto-remove", "-y", "hermes-agent"])
+        for name, data in before.items():
+            self.assertEqual((self.root / name).read_bytes(), data)
+
     def test_browser_processes_are_owned_and_stopped_together(self):
         self.fake("termux-x11")
         self.fake("chromium")

@@ -10,6 +10,10 @@ enum class RuntimeIssue(val explanation: String) {
     LaunchFailed("无法打开 Termux 命令服务，请打开 Termux 后返回重试。"),
     InspectionTimeout("没有收到 Termux 的检查结果。本次只读检查已结束等待，可以打开 Termux 后返回重试，不必重复初始化。"),
     CommandPending("上一项 Termux 操作尚未返回。请打开 Termux 查看进度，安装或配置完成前不要重复执行。"),
+    ModelSetupRequired("请先配置 App 使用的模型与账号，再启动聊天。终端默认配置与 App 的配置分别保存。"),
+    LocalApiNotReady("本机聊天接口尚未就绪。可重启重试，或检查模型设置与启动日志。"),
+    LocalApiUnauthorized("本机接口鉴权未通过，请检查是否有其它 Hermes 服务占用端口，再重新配置手机连接。"),
+    LocalApiUnsupported("当前本机服务没有提供 App 所需的 Hermes 会话接口，请检查安装版本和启动日志。"),
     RepositoryUnavailable("官方当前通道的安装文件不存在或已撤下，请稍后重试。"),
     PackageMismatch("Termux 的 curl 与加密库版本不匹配，需要先更新运行环境，再继续安装。"),
 }

@@ -36,7 +36,8 @@ class LocalRuntimeUiTest {
                 RuntimeAction.Prepare -> snapshot.copy(toolsReady = true)
                 RuntimeAction.InstallHermes -> snapshot.copy(hermesInstalled = true)
                 RuntimeAction.ConfigureHermes -> snapshot.copy(configured = true)
-                RuntimeAction.StartHermes -> snapshot.copy(hermesRunning = true)
+                RuntimeAction.StartHermes, RuntimeAction.RestartHermes -> snapshot.copy(hermesRunning = true)
+                RuntimeAction.RemoveHermes -> snapshot.copy(hermesInstalled = false, hermesRunning = false)
                 else -> snapshot
             }
             return RuntimeResponse(snapshot, connectionKey = "fixture-key".takeIf { request.action == RuntimeAction.ConfigureHermes })
@@ -120,7 +121,7 @@ class LocalRuntimeUiTest {
 
     @Test fun installedRuntimeShowsChatAndKeepsManagementCollapsed() = runComposeUiTest {
         val f = Fixture(environment)
-        f.snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true)
+        f.snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true, modelConfigured = true)
         var connected = false
         try {
             setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}, onConnected = { connected = true }) } }
@@ -185,6 +186,51 @@ class LocalRuntimeUiTest {
             waitUntil(timeoutMillis = 5000) { models }
             assertTrue(f.calls.contains(RuntimeAction.InstallHermes))
             assertTrue(f.calls.indexOf(RuntimeAction.InstallHermes) < f.calls.indexOf(RuntimeAction.Prepare))
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun installedWithoutModelGuidesConfigurationInsteadOfStartingChat() = runComposeUiTest {
+        val f = Fixture(environment)
+        f.snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true)
+        var models = false
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}, onConfigureModels = { models = true }) } }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.checked }
+            onNodeWithText("配置模型并继续").assertIsDisplayed().performClick()
+            waitUntil { models }
+            assertFalse(f.calls.contains(RuntimeAction.StartHermes))
+            onNodeWithText("开始聊天").assertDoesNotExist()
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun uninstallIsVisibleWithoutAdvancedAndRunsOnlyAfterConfirmation() = runComposeUiTest {
+        val f = Fixture(environment)
+        f.snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true)
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}) } }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.checked }
+            onNodeWithText("卸载本机 Hermes").assertIsDisplayed().performClick()
+            onNodeWithText("保留配置、聊天记录和记忆", substring = true).assertIsDisplayed()
+            assertFalse(f.calls.contains(RuntimeAction.RemoveHermes))
+            onNodeWithText("卸载并保留数据").performClick()
+            waitUntil(timeoutMillis = 5000) { !f.manager.state.value.snapshot.hermesInstalled }
+            assertEquals(1, f.calls.count { it == RuntimeAction.RemoveHermes })
+            onNodeWithText("安装 Hermes").assertIsDisplayed()
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun connectionFailureKeepsConfigurationAndRetryActionsVisible() = runComposeUiTest {
+        val f = Fixture(environment)
+        f.snapshot = RuntimeSnapshot(toolsReady = true, hermesInstalled = true, configured = true, modelConfigured = true)
+        f.failure = RuntimeCommandException(RuntimeIssue.LocalApiNotReady)
+        var models = false
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}, onConfigureModels = { models = true }) } }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.failed }
+            onNodeWithText("重启并重试").assertIsDisplayed()
+            onNodeWithText("选择或更换模型").performClick()
+            waitUntil { models }
+            onNodeWithText("重新检查").assertDoesNotExist()
         } finally { f.scope.cancel() }
     }
 

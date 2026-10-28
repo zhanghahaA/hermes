@@ -53,12 +53,14 @@ class LocalRuntimeManager(
         check(state.value.environment.blockers.isEmpty()) { state.value.environment.blockers.joinToString("\n") }
         withTimeout(45_000) {
             execute(RuntimeRequest(RuntimeAction.Inspect))
+            check(state.value.snapshot.hermesInstalled) { "请先安装本机 Hermes" }
+            if (!state.value.snapshot.modelConfigured) throw RuntimeCommandException(RuntimeIssue.ModelSetupRequired)
             check(state.value.snapshot.configured) { "请先配置本机连接" }
             if (!state.value.snapshot.hermesRunning) execute(RuntimeRequest(RuntimeAction.StartHermes))
         }
     }
 
-    private fun operation(label: String, block: suspend () -> Unit): Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+    private fun operation(label: String, failureIssue: RuntimeIssue? = null, block: suspend () -> Unit): Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
         if (!mutex.tryLock()) return@launch
         mutable.update { it.copy(busy = true, message = label, output = "", failed = false, issue = null, resultCode = null) }
         try {
@@ -79,7 +81,7 @@ class LocalRuntimeManager(
             throw e
         } catch (e: Exception) {
             mutable.update { it.copy(failed = true, checked = false, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.Failed else it.probe,
-                issue = (e as? RuntimeCommandException)?.issue,
+                issue = (e as? RuntimeCommandException)?.issue ?: failureIssue,
                 resultCode = (e as? RuntimeCommandException)?.resultCode,
                 message = DiagnosticRedactor.redact(e.message ?: "操作未完成")) }
         } finally {
@@ -91,7 +93,11 @@ class LocalRuntimeManager(
     private suspend fun execute(request: RuntimeRequest) {
         val response = backend.execute(request) { step -> mutable.update { it.copy(message = step) } }
         response.connectionKey?.let(connection::save)
-        mutable.update { it.copy(snapshot = response.snapshot, checked = true, output = response.output, probe = RuntimeProbe.Passed) }
+        mutable.update {
+            val snapshot = if (request.action != RuntimeAction.Inspect && response.snapshot.hermesInstalled && response.snapshot.configured)
+                response.snapshot.copy(modelConfigured = it.snapshot.modelConfigured) else response.snapshot
+            it.copy(snapshot = snapshot, checked = true, output = response.output, probe = RuntimeProbe.Passed)
+        }
     }
 
     fun inspect() = operation("正在检查运行环境") {
@@ -107,6 +113,7 @@ class LocalRuntimeManager(
         }
         if (request.action == RuntimeAction.InstallBrowser && !state.value.snapshot.toolsReady) execute(RuntimeRequest(RuntimeAction.Prepare))
         execute(request)
+        if (request.action == RuntimeAction.RemoveHermes) check(!state.value.snapshot.hermesInstalled) { "软件包卸载后仍检测到其它 Hermes 安装，请在 Termux 检查安装方式。" }
         mutable.update { it.copy(message = "${label(request.action)}完成") }
     }
 
@@ -149,8 +156,15 @@ class LocalRuntimeManager(
     /** 切换后的连接恢复可能再次调用 ensureRunning；必须在操作锁释放后等待，避免互相等待。 */
     suspend fun awaitConnected() = connection.awaitActivated()
 
-    fun connect() = operation("正在检查本机连接") {
+    fun connect(restart: Boolean = false) = operation("正在检查本机配置", failureIssue = RuntimeIssue.LocalApiNotReady) {
+        mutable.update { it.copy(probe = RuntimeProbe.Checking) }
+        withTimeout(45_000) { execute(RuntimeRequest(RuntimeAction.Inspect)) }
+        if (!state.value.snapshot.modelConfigured) throw RuntimeCommandException(RuntimeIssue.ModelSetupRequired)
+        // 保存模型后的重启同时同步手机接口配置与本地凭据，避免沿用旧进程或旧 Key。
+        if (restart) execute(RuntimeRequest(RuntimeAction.StopHermes))
+        if (restart || !state.value.snapshot.hermesRunning) execute(RuntimeRequest(RuntimeAction.ConfigureHermes))
         execute(RuntimeRequest(RuntimeAction.StartHermes))
+        mutable.update { it.copy(message = "正在等待本机聊天接口，首次启动可能需要约一分钟…") }
         connection.verifyAndActivate()
         mutable.update { it.copy(message = "本机连接检查通过，已切换到「这台手机」") }
     }

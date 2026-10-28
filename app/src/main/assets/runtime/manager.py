@@ -280,7 +280,7 @@ def dispatch(request):
         elif action == "HermesLogs":
             output = tail("hermes")
         elif action == "RemoveHermes":
-            subprocess.run(["pkg", "uninstall", "-y", "hermes-agent"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
+            subprocess.run(["apt-get", "remove", "--no-auto-remove", "-y", "hermes-agent"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
     elif action == "InstallService":
         install_service(request["service"])
     elif action == "InstallProxy":

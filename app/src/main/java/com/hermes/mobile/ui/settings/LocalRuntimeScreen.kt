@@ -44,11 +44,11 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
             if (!manager.state.value.failed && manager.state.value.snapshot.configured) onConfigureModels()
         }
     }
-    fun connect() {
+    fun connect(restart: Boolean = false) {
         openingChat = true
         scope.launch {
             try {
-                manager.connect().join()
+                manager.connect(restart).join()
                 if (!manager.state.value.failed) { manager.awaitConnected(); onConnected() }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (_: Exception) { error = "本机连接尚未就绪，请检查模型设置后重试。" }
@@ -64,7 +64,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
     }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("准备环境 → 安装 Hermes → 选择模型", style = MaterialTheme.typography.labelLarge,
+            Text("安装 → 配置 Hermes → 验证连接", style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary)
             ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(if (openingChat) "正在连接" else step.title, style = MaterialTheme.typography.headlineSmall)
@@ -75,7 +75,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                 if (state.failed && step !in setOf(RuntimeSetupStep.Initialize, RuntimeSetupStep.Recover, RuntimeSetupStep.Pending)) Text(state.message, color = MaterialTheme.colorScheme.error)
                 else if (state.busy || openingChat) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Text(if (openingChat) "正在启动并连接本机 Hermes…" else state.message)
+                    Text(if (state.busy) state.message else "正在进入聊天…")
                 }
                 Button(modifier = Modifier.fillMaxWidth().testTag("runtime-primary"),
                     enabled = !state.busy && !openingChat && step != RuntimeSetupStep.Unsupported,
@@ -93,6 +93,8 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                             RuntimeSetupStep.Storage -> controls.storageSettings()
                             RuntimeSetupStep.Install, RuntimeSetupStep.Configure, RuntimeSetupStep.SourceUnavailable -> install()
                             RuntimeSetupStep.Repair -> install(repairEnvironment = true)
+                            RuntimeSetupStep.Model -> onConfigureModels()
+                            RuntimeSetupStep.Reconnect -> connect(restart = true)
                             RuntimeSetupStep.Connect -> connect()
                             else -> Unit
                         }
@@ -103,7 +105,7 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                 if (step == RuntimeSetupStep.Permission || step == RuntimeSetupStep.PermissionSettings) {
                     TextButton(onClick = controls.permissionSettings) { Text("没有弹窗？打开系统权限设置") }
                 }
-                if (step == RuntimeSetupStep.Connect) {
+                if (step in setOf(RuntimeSetupStep.Connect, RuntimeSetupStep.Reconnect)) {
                     TextButton(onClick = onConfigureModels, enabled = ready) { Text("选择或更换模型") }
                 }
                 if (step == RuntimeSetupStep.Recover) {
@@ -111,6 +113,11 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                     TextButton(onClick = controls.batterySettings) { Text("允许后台运行") }
                 }
             } }
+            if (snapshot.hermesInstalled) {
+                TextButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.RemoveHermes) }, enabled = ready && snapshot.toolsReady) {
+                    Text("卸载本机 Hermes")
+                }
+            }
             TextButton(onClick = { diagnostics = !diagnostics }) { Text(if (diagnostics) "收起检查详情" else "查看检查详情") }
             if (diagnostics) {
                 RuntimeChecksPanel(state, controls, manager.backend.initializationCommand)
@@ -135,7 +142,6 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                     RuntimeButton(manager, RuntimeAction.RestartHermes, ready && snapshot.configured)
                     RuntimeButton(manager, RuntimeAction.HermesLogs, ready && snapshot.toolsReady)
                     OutlinedButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.UpgradeHermes, acceptExperimental = true) }, enabled = ready) { Text("升级 Hermes") }
-                    TextButton(onClick = { confirmation = RuntimeRequest(RuntimeAction.RemoveHermes) }, enabled = ready && snapshot.toolsReady) { Text("卸载 Hermes 软件包") }
                 }
                 ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("可选 · 自己的服务", style = MaterialTheme.typography.titleMedium)
@@ -169,12 +175,12 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
         title = { Text(LocalRuntimeManager.label(request.action)) },
         text = { Text(when (request.action) {
             RuntimeAction.RemoveService -> "停止并移除选定服务的程序与元数据，保留它生成的数据。"
-            RuntimeAction.RemoveHermes -> "卸载 Hermes 软件包并停止 App 管理的 Hermes 进程，保留配置、会话和记忆。其它软件若使用同一 Hermes 软件包也会受影响。"
+            RuntimeAction.RemoveHermes -> "停止 App 管理的 Hermes 并卸载 Hermes 软件包，保留配置、聊天记录和记忆，不卸载 Termux。终端中的同一 Hermes 程序也会被卸载。"
             RuntimeAction.UpgradeHermes -> manager.backend.hermesInstallWarning.orEmpty() + " 将通过签名软件源升级软件包，不自动重启当前进程。"
             RuntimeAction.InstallBrowser -> "将通过清华国内镜像安装 Python 服务环境和 Chromium／X11 配套包，需要网络和较多空间；独立 X11 应用仍需在系统中确认安装。"
             else -> "将安装 Python 运行包以管理本机服务，已有 Hermes 配置与连接不会删除。"
         }) },
-        confirmButton = { TextButton(onClick = { manager.perform(request); confirmation = null }) { Text("确认并继续") } },
+        confirmButton = { TextButton(onClick = { manager.perform(request); confirmation = null }) { Text(if (request.action == RuntimeAction.RemoveHermes) "卸载并保留数据" else "确认并继续") } },
         dismissButton = { TextButton(onClick = { confirmation = null }) { Text("取消") } }) }
     editing?.let { action -> RuntimeEditor(action, manager, onClose = { editing = null }, onError = { error = it }) }
     error?.let { message -> AlertDialog(onDismissRequest = { error = null }, title = { Text("请检查输入") }, text = { Text(message) },
