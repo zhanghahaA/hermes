@@ -106,12 +106,19 @@ def config_read():
 
 def snapshot(include_models=False):
     from hermes_cli.auth import PROVIDER_REGISTRY
-    from hermes_cli.models import list_available_providers
     cfg = config_read()
     current = cfg.get("model") or {}
     if not isinstance(current, dict):
         current = {"default": str(current)}
-    availability = {row["id"]: row for row in list_available_providers()}
+    try:
+        from hermes_cli.models import list_available_providers
+        availability = {row["id"]: row for row in list_available_providers()}
+    except ImportError:
+        # 旧版没有模型目录接口时仍展示注册的提供方，不把它误判为 OAuth 缺失。
+        from hermes_cli.config import get_env_value
+        availability = {slug: {"authenticated": any(bool(get_env_value(name)) for name in
+                        getattr(provider, "api_key_env_vars", ()))}
+                        for slug, provider in PROVIDER_REGISTRY.items()}
     accounts = {}
     try:
         from hermes_cli.web_routers.oauth import _build_oauth_catalog
@@ -294,6 +301,26 @@ def login(provider):
     return {"login": public}
 
 
+def enable_clarify():
+    from hermes_cli.config import save_config, is_managed
+    if is_managed():
+        raise ValueError("受管理配置不能修改")
+    cfg = config_read()
+    platforms = cfg.get("platform_toolsets")
+    if platforms is None:
+        platforms = {}
+    if not isinstance(platforms, dict):
+        raise ValueError("工具集配置格式无效")
+    tools = platforms.get("api_server", ["hermes-api-server"])
+    if not isinstance(tools, list) or not all(isinstance(item, str) for item in tools):
+        raise ValueError("工具集配置格式无效")
+    if "clarify" not in tools:
+        backup()
+        cfg["platform_toolsets"] = dict(platforms, api_server=tools + ["clarify"])
+        save_config(cfg)
+    return {}
+
+
 def dispatch(request):
     action = request.get("action")
     with scope():
@@ -301,6 +328,8 @@ def dispatch(request):
             return {"snapshot": snapshot(action == "models")}
         if action == "save":
             return save(request)
+        if action == "enable_clarify":
+            return enable_clarify()
         if action == "login":
             return login(request.get("provider", ""))
         if action in ("poll", "cancel"):
@@ -324,6 +353,7 @@ def main():
         os.dup2(sink.fileno(), 1)
         os.dup2(sink.fileno(), 2)
     result = {}
+    request = {}
     try:
         owned(ROOT)
         ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -335,7 +365,10 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_UN)
         result["ok"] = True
     except ImportError:
-        result = {"ok": False, "error": "当前 Hermes 不支持浏览器授权，请升级 Hermes 或使用下方登录命令。"}
+        message = ("当前 Hermes 不支持浏览器授权，请升级 Hermes 或使用下方登录命令。"
+                   if request.get("action") == "login" else
+                   "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。")
+        result = {"ok": False, "error": message}
     except Exception as exc:
         message = str(exc)
         result = {"ok": False, "error": message if message == "模型配置文件无法读取，请先修复，已有配置未覆盖。" else

@@ -66,6 +66,21 @@ class ChatFlowTest {
         }
     }
 
+    @Test fun directConnectionReceivesAndAnswersInteractiveChoices() {
+        val server = server()
+        val repo = connected(server)
+        repo.sendMessage("s1", "给我选项", emptyList())
+        val card = repo.chatItems("s1").await("互动选项") { it.any { item -> item is ChatItem.Clarify } }
+            .filterIsInstance<ChatItem.Clarify>().single()
+        assertEquals(listOf("蓝色", "绿色"), card.options)
+        repo.answerClarify("s1", card.id, "蓝色")
+        repo.chatItems("s1").await("选项回答后的回复") { list -> list.any { it is ChatItem.Message && it.text == "最终回复：给我选项" } }
+        val request = server.requests.single { it.path?.endsWith("/clarify") == true }
+        val body = request.body.clone().readUtf8()
+        assertTrue(body.contains("\"request_id\":\"q1\""))
+        assertTrue(body.contains("\"execution_generation\":3"))
+    }
+
     /** 收集一个 Flow 发出的所有值，检查过程中从没出现过思考内容。 */
     private fun <T> record(flow: Flow<T>): MutableList<T> {
         val seen = Collections.synchronizedList(mutableListOf<T>())

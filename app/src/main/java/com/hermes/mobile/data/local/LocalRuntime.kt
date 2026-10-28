@@ -42,7 +42,7 @@ data class RuntimeEnvironment(
 
 @Serializable
 enum class RuntimeAction {
-    Inspect, Prepare, InstallHermes, UpgradeHermes, ConfigureHermes,
+    Inspect, Prepare, RepairEnvironment, InstallHermes, UpgradeHermes, ConfigureHermes,
     StartHermes, StopHermes, RestartHermes, HermesLogs, RemoveHermes,
     InstallService, InstallProxy, StartService, StopService, ServiceLogs, RemoveService,
     InstallBrowser, StartBrowser, StopBrowser,
@@ -116,6 +116,7 @@ data class RuntimeSnapshot(
     val browserInstalled: Boolean = false,
     val browserRunning: Boolean = false,
     val services: List<ManagedService> = emptyList(),
+    val modelConfigured: Boolean = false,
 )
 
 /** 凭据只交给连接存储，不放进界面状态或通用诊断。 */
@@ -132,10 +133,11 @@ interface LocalConnectionAccess {
 /** Android Intent 桥是外部后端的私有实现；业务和界面不直接发任意 shell 命令。 */
 interface TermuxTransport {
     fun environment(): RuntimeEnvironment
-    suspend fun run(script: String, input: String = ""): TermuxCommandResult
+    suspend fun run(script: String, input: String = "", readOnly: Boolean = false): TermuxCommandResult
     fun openViewer()
 }
 
-class TermuxCommandResult(val exitCode: Int, val stdout: String = "", val stderr: String = "") {
+class TermuxCommandResult(val exitCode: Int, val stdout: String = "", val stderr: String = "",
+                         val issue: RuntimeIssue? = null, val resultCode: Int? = null) {
     override fun toString() = "TermuxCommandResult(exitCode=$exitCode, output=[已隐藏])"
 }

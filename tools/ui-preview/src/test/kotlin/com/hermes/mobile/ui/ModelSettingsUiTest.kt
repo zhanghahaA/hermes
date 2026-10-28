@@ -43,6 +43,25 @@ class ModelSettingsUiTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun enablingInteractiveToolsIsExplicitAndDoesNotSubmitModelCredentials() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val requests = CopyOnWriteArrayList<ModelSettingsRequest>()
+        val manager = ModelSettingsManager(scope, "fixture") { _, body ->
+            requests += Json.decodeFromString(ModelSettingsRequest.serializer(), body)
+            "HMMODELS" + Json.encodeToString(ModelSettingsResponse.serializer(), ModelSettingsResponse(snapshot = ModelSettingsSnapshot()))
+        }
+        try {
+            setContent { HermesTheme { ModelSettingsContent(manager, "测试连接", {}) } }
+            waitUntil(timeoutMillis = 5000) { manager.state.value.snapshot != null }
+            assertFalse(requests.any { it.action == "enable_clarify" })
+            onNodeWithText("启用手机互动选项").performScrollTo().performClick()
+            waitUntil(timeoutMillis = 5000) { requests.any { it.action == "enable_clarify" } }
+            val request = requests.single { it.action == "enable_clarify" }
+            assertNull(request.apiKey)
+            assertEquals("", request.model)
+        } finally { scope.cancel() }
+    }
+
     @Test fun directConnectionExplainsHowToEnableRemoteManagement() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = ModelSettingsManager(scope, "fixture") { _, _ -> error("没有 SSH 不应执行") }
@@ -52,6 +71,29 @@ class ModelSettingsUiTest {
             onNodeWithText("配置当前连接").performClick()
             assertTrue(edited)
             assertNull(manager.state.value.snapshot)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun localModelSaveContinuesToChatWithOneClick() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val requests = CopyOnWriteArrayList<ModelSettingsRequest>()
+        val snapshot = ModelSettingsSnapshot(providers = listOf(ModelProvider("openrouter", "OpenRouter", apiKey = true)),
+            provider = "openrouter", model = "fixture-model")
+        val manager = ModelSettingsManager(scope, "fixture") { _, body ->
+            requests += Json.decodeFromString(ModelSettingsRequest.serializer(), body)
+            "HMMODELS" + Json.encodeToString(ModelSettingsResponse.serializer(), ModelSettingsResponse(snapshot = snapshot))
+        }
+        var connected = false
+        try {
+            setContent { HermesTheme { ModelSettingsContent(manager, "这台手机", {},
+                saveAndConnect = true, onModelSaved = { connected = true }) } }
+            waitUntil(timeoutMillis = 5000) { manager.state.value.snapshot != null }
+            onNodeWithText("模型服务 API 密钥").performTextInput("fixture-credential")
+            assertFalse(requests.any { it.action == "save" })
+            onNodeWithText("保存并开始聊天").performScrollTo().performClick()
+            waitUntil(timeoutMillis = 5000) { connected }
+            assertEquals(1, requests.count { it.action == "save" })
+            onNodeWithText("保存").assertDoesNotExist()
         } finally { scope.cancel() }
     }
 }

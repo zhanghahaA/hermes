@@ -113,7 +113,7 @@ fun SettingsScreen(
                     enabled = activeId != null, onClick = onOpenModelSettings)
             }
             SettingsGroup("连接") {
-                SettingsRow(Icons.Rounded.RocketLaunch, "本机运行与服务", "本机 Hermes、Python 服务、反向代理和 X11 浏览器",
+                SettingsRow(Icons.Rounded.RocketLaunch, "在手机上安装 Hermes", "自动安装、选择模型并开始聊天",
                     enabled = repository.localRuntime != null, onClick = onOpenLocalRuntime)
                 GroupDivider()
                 connections.forEachIndexed { index, profile ->

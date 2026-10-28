@@ -183,6 +183,38 @@ class SshTunnelTest {
     }
 
     @Test
+    fun pullRefreshReopensSshWithoutSwitchingConnection() = runBlocking {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        withTimeout(5000) { repo.sessions.first { it.isNotEmpty() } }
+        val before = ssh.logins.get()
+        withTimeout(10_000) { repo.refreshSessions() }
+        assertTrue(ssh.logins.get() > before, "刷新主动重建 SSH，而不是继续使用旧连接")
+        assertTrue(repo.connectionState.value is ConnectionState.Connected)
+        assertTrue(repo.sessions.value.isNotEmpty())
+        assertEquals("ssh1", repo.activeConnectionId.value)
+    }
+
+    @Test
+    fun interactiveChoicesTravelThroughTheSshTunnel() = runBlocking {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        repo.sendMessage("s1", "给我选项", emptyList())
+        val items = withTimeout(10_000) { repo.chatItems("s1").first { list -> list.any { it is ChatItem.Clarify } } }
+        val card = items.filterIsInstance<ChatItem.Clarify>().single()
+        assertEquals(listOf("蓝色", "绿色"), card.options)
+        repo.answerClarify("s1", card.id, "蓝色")
+        withTimeout(10_000) { repo.chatItems("s1").first { list -> list.any { it is ChatItem.Message && it.text == "最终回复：给我选项" } } }
+        assertTrue(hermes.requests.any { it.path?.endsWith("/clarify") == true })
+    }
+
+    @Test
     fun otherFilesAreUploadedOverSftp() {
         val hermes = hermes()
         val ssh = sshd()

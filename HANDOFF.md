@@ -3,7 +3,78 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.13.11-dev 互动与后台恢复
+
+- 当前开发包 **0.13.11-dev / code 48**，继续 `codex/simple-install` 与草稿 PR #5。用户报告手机／电脑发起的互动卡片都收不到、后台久置后下拉刷新转圈而切换同一连接马上恢复、模型页错误提示不支持浏览器授权。
+- 确认 SSH 支持 API 的 SSE 卡片；旧客户端缺少桌面共享会话订阅。新增 SessionControlFeed，复用认证的 Gateway RPC 桥，打开当前会话时 snapshot prompts + events.since 游标／epoch 回放，回答保留 Profile／session／prompt／generation，关闭页面 detach。按 prompt+generation 合并 API 和 Gateway 卡片，电脑处理后同步状态。仅当前打开会话；纯 HTTP 无 SSH 不含桌面 Gateway 共享通道，独立终端进程也不能保证共享。不能宣称各连接方式功能完全一致。
+- 刷新主动 reset SSH + 清理 HTTP 空闲连接，健康探测后读列表，不清空任务和待发送消息；30 秒上限，UI finally 结束转圈且阻止重复下拉。保留切换连接原行为。
+- 模型桥原先所有 ImportError 都报 OAuth 不支持，现按 inspect/login 区分；缺少可选模型目录函数时回退注册提供方与 Key 存在性摘要。未连接用户手机，不能确认截图具体缺失模块。新增显式「启用手机互动选项」：只向当前 Profile 的 API 工具集补 clarify，保留其它工具、模型与密钥，备份且检查 managed；不自动重启。服务未重读时需空闲时重启。
+- 协议按上游 ee7e0f517232fb619c72e49d7e648436bddc598e 的 gateway-contract.generated.ts 与 session_pending_controls.py 核对。详细原因、文件与连接方式边界见 [互动恢复说明](docs/interactive-recovery.md)。
+- 最终完整桌面 **290 项报告、274 项实际通过、0 失败**；16 项真实 Hermes/OpenSSH IT 未配置。Python **43 项报告、39 项通过、4 项真实上游跳过**。新增真实本机 MINA SSH → 假 Hermes 的刷新重登录／互动卡片与回答、HTTP 直连卡片／回答；共享 Gateway 快照、他处处理、响应身份、取消订阅使用替代 RPC，非真实桌面端到端。新测试第一次 JUnit 返回类型声明不正确，修正后整套通过。
+- App／Android 自检 APK 构建通过；已检查新互动入口和提供方设置浅／深色截图。APK SHA-256：`d4b061f1545cd35986d853ff270d7f976f1c683659541b00b0e3f28444b460ed`，签名仍为 `d985fcaf…db1dc7`。下载 `/workspace/shared/downloads/hermes-mobile-0.13.11-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.11-dev`。没有用户手机长期后台、真实桌面共享卡片或用户 Termux 版本验证；覆盖安装无需迁移，不能声称用户设备所有问题已经实测修复。
+
+## 0.13.10-dev 配对优化
+
+- 当前开发包 **0.13.10-dev / code 47**，继续 `codex/simple-install` 与草稿 PR #5。按用户要求直接在安卓 dev 实施，不要求另给服务端仓库。完整行为与局限见 [配对优化说明](docs/mobile-pairing-review.md)。
+- setup/configure.py 保留已有 API Server Key 和所有模型／其它配置；非法旧 Key 或冲突重复配置停止而不轮换。只写差异，公钥按算法与数据去重，保留既有限制；新增授权禁用 agent/X11/PTY。新增 Profile 配对锁与用户授权锁、跨文件写入异常恢复、实际 SSH banner／地址／用户检查、健康与 Bearer 认证检查。服务正常且配置未变不重启，其余通过当前 Profile 的官方 restart 恢复；不使用 --all/--force，不能绕过上游共享实例保护。手机最终通道验连仍独立执行。
+- 首次 Shell 使用 zlib 压缩并保存摘要命名的本地助手，执行过后可复制只带参数的简短重试命令；使用前检查 SHA-256，缓存缺失／被改停止并要求重新执行完整命令。不是 Hermes 原生 mobile pair CLI。SSH 不携带接口 Key，默认不在终端输出敏感回执，保留旧回执格式与安全读取。直连旧协议仍含敏感安装参数，**尚未完成所有连接类型的无密钥公开配对码**；保留不同原 Key／端口时需在手机填原值。不能宣传全部安全短码验收完成。
+- 新增复制指定公钥撤销命令：服务器执行后只删该公钥，现有会话不强制断开；共用私钥的设备会受影响。删 App 连接仍不等于撤销授权。默认／命名 Profile 路径避免二次追加，命名 Profile 需已存在；不自动改变 Gateway 多路复用布局。
+- 最终完整桌面套件 **283 项报告、267 项实际通过、0 失败**；16 项真实 Hermes/OpenSSH IT 未配置未执行。Python 套件 **40 项报告、36 项通过、4 项上游集成跳过**。新增重复运行文件字节／mtime、公钥限制与注释去重、旧 Key 拒绝替换、模型凭据与 Profile 隔离、写入失败恢复、本机真实 HTTP 认证探测、服务管理决策、实际生成 Shell／短助手复用和篡改拒绝、公钥安装／撤销测试。服务进程使用替代／mock，不宣称真实跨平台 Gateway 已启动成功。
+- App 与 Android 自检 APK 编译成功；已检查连接配置页浅／深色截图，按需重启说明可读。开发签名仍为 `d985fcaf…db1dc7`。APK SHA-256：`04828b6816807d366b6012305f78025c25f95c7475b91e934b8ca59a2d003be3`。下载 `/workspace/shared/downloads/hermes-mobile-0.13.10-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.10-dev`。没有真实 Termux 手机／用户 Linux 与云服务器端到端验证，不发布 Release 或合并。
+
 ## 现状
+
+- 当前开发包 **0.13.9-dev / code 46**，继续 `codex/simple-install` 与草稿 PR #5，包含已完成的国内源改动。用户新增要求：一键卸载；终端可进入 Hermes 配置但 App 开始聊天一直等待并提示本机接口未就绪，需要将配置纳入引导。截图不足以证明实际手机失败原因，不能宣称真机已修好。
+- 已确认旧逻辑只凭 mobile-api-key／.env 就认为配置完成，未要求模型配置；连接失败后退回检查步骤。新增 modelConfigured：Android 传入真实 providers/settings.py，由后端在 App 的 HERMES_HOME 下读取模型／账号摘要，只有完整回包和已选提供方、模型及凭据摘要（本地端点除外）才就绪。缺失时主按钮「配置模型并继续」，说明 App 与终端默认配置目录不同，不静默复制密钥。
+- 保存模型后执行 Inspect → StopHermes → ConfigureHermes → StartHermes → 验证／切换连接，同步手机接口配置及本地访问凭据，重启旧进程使新模型设置生效。只读前置检查 45 秒上限；本机 API 冷启动检查最多 90 秒，明确 401／403／缺 Key 和必需接口缺失立即固定分类，暂时超时／503 可重试。失败保持模型入口和「重启并重试」，不误标成 Termux 挂起；页面显示当前阶段。
+- 「卸载本机 Hermes」移至主页面，确认范围后停止自管 Hermes 并 apt-get remove --no-auto-remove -y hermes-agent；保留 Termux、配置、账号、聊天数据库、记忆、App 连接与缓存。其它同名安装仍存在时不假报已完全卸载，不删除未知目录或终端用户数据。
+- 国内源部分已在提交 962c7c7 保存（0.13.8-dev 留档），与本轮配置／卸载改动一起更新 PR。无真机连接，不能把本机假接口、脚本替代命令和编译通过当作用户设备的安装／启动验证。
+
+- 验证：完整桌面套件 **281 项报告、265 项实际通过、0 失败**；16 项真实 Hermes／OpenSSH IT 未配置未执行。Python 套件 **30 项报告、26 项通过、4 项真实上游集成跳过**。新增真实后端模型门槛、超过旧十次限制的慢启动、401／能力失败安全分类、接口超时及重启同步流程、配置引导／卸载确认／失败恢复 UI 回归，Python 实际脚本以替代 apt-get 验证停止进程和保留数据。最终 App 和 Android 自检 APK 构建通过；已检查浅／深色模型引导、直接卸载入口及连接失败恢复截图。
+- 最终 APK SHA-256：`5f41a601a91946e4faf663ab9bd6354aece291e9695ad75cf5134c83d41b9240`，版本 0.13.9-dev / code 46，签名仍为 `d985fcaf…db1dc7`。交付 `/workspace/shared/downloads/hermes-mobile-0.13.9-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.9-dev`。仅更新草稿 PR，不发布 Release；国内真机速度、实际账号配置／冷启动／卸载仍未验证。
+
+### 0.13.8-dev 国内镜像记录
+
+- 当时开发包 **0.13.8-dev / code 45**，继续 `codex/simple-install` 与草稿 PR #5。用户要求面向国内客户使用国内软件源，并确认暂时没有国内存储／CDN，先接入现有国内镜像；不擅自创建镜像服务器、费用或替代 Hermes 签名。
+- 新增 `DomesticPackageSources`：App 的 APT 安装、修复、Python 管理环境、浏览器与代理依赖使用清华 Termux main/root/x11 镜像；显式使用 `~/.hermes-mobile/apt` 独立源列表及索引缓存，保留原全局源配置，不读其它源旧索引、不在失败后自动回退海外。Hermes 已验证的官方源独立纳入；未知第三方源不导入，不能承诺通过该流程升级第三方包。升级 Hermes 使用 install --only-upgrade 限定目标包。
+- Python 服务依赖改用清华 PyPI，只设置当前 pip／构建子进程环境，清理旧 PIP_* 和 pip 配置影响，不覆盖全局 pip 配置。保持 TLS、Termux 签名和 Hermes 固定公钥验证。页面在安装／修复前说明来源，无额外确认点击；APK 下载和 Hermes 包仍用官方海外地址，不能宣传为全程国内。
+- 清华源已通过 Termux 官方镜像名单核对，3 个 APT InRelease 均 HTTP 200 且为签名文档，PyPI 索引 200；此为云环境连通证据，不代表国内手机速度或实际包安装验证。Hermes 官方 stable 的 404 仍未解决。
+- 桌面完整套件 **273 项报告、257 项实际通过、0 失败**；16 项真实 Hermes／OpenSSH IT 未配置未执行。新增国内源隔离／失败停止脚本回归，更新真实安装、修复和命令占位回归；第一次发现旧测试仍匹配 pkg，改为验证实际 hm_apt 修改命令，最终完整套件重跑通过。
+- App 与 Android 自检 APK 构建通过；Python 完整套件 29 项，其中 25 项执行通过、4 项真实上游集成未配置跳过。最初默认沙箱不允许本机假 HTTP 服务打开套接字，允许后重跑通过；不将其误报为产品错误。APK SHA-256：`b9385815b34ef6e631f3473eac36005f690dd9031e871ab5c31a29d0ec196344`，签名仍为 `d985fcaf…db1dc7`。交付 `/workspace/shared/downloads/hermes-mobile-0.13.8-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.8-dev`。
+
+### 0.13.7-dev 官方源诊断记录
+
+- 当时开发包 **0.13.7-dev / code 44**，继续 `codex/simple-install` 和草稿 PR #5。用户截图 curl 已恢复，安装在下载官方公钥时返回 404。已实测 stable/key.asc、stable/dists/hermes-stable/InRelease 均为 404；canary 两项 200，nightly 两项 404。上游文档 `69f73ec5f11f5a945cc864f29c4e2ad2307eaec3/website/docs/getting-started/termux.md` 明确警告 Termux 包当前不能运行。不能把 App 改进说成已经解决官方发布问题，也不能把 canary HTTP 200 说成手机可用。
+- 安装先获取所选通道公钥和 InRelease，再安装 GnuPG 并验证固定主公钥指纹、通过签名 APT 安装 Hermes，最后补齐 App 管理所需 Python。curl 缺失时只先补 curl。404／410 使用固定标记和退出码 44 映射 RepositoryUnavailable，界面说明「官方安装源暂不可用」，明确重试是继续安装。失败不写软件源、不切通道、不要求重新初始化；其它 HTTP／签名失败仍停止。
+- 验证：完整桌面套件 **272 项报告、256 项实际通过、0 失败**；16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 4 项安装源脚本／后端回归和 1 项界面重试回归，覆盖 key/index 404、410、503、明确选择通道、错误指纹拒绝及失败不安装 Python。
+- APK SHA-256：`7b296d19e33963a5ebb7aa31944d6db6dfd9f7102f836b511f1282967cb377b6`；签名沿用 `d985fcaf…db1dc7`。App 与 Android 自检 APK 构建通过；真实 Termux 安装仍未验证，官方 stable 目前仍不可安装。交付 `/workspace/shared/downloads/hermes-mobile-0.13.7-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.7-dev`，包含 HTTP 核实证据。
+
+### 0.13.6-dev 软件包冲突修复记录
+
+- 当时开发包 **0.13.6-dev / code 43**，继续 `codex/simple-install` 与 PR #5。用户新截图已收到 shell 错误：curl 找不到 OpenSSL 符号，说明命令回包已送达，但 Termux 软件包版本冲突；镜像选择提示不是此链接错误的根因，不要求重新初始化或卸载。
+- 新增安装前只读 curl 本地检查与 PackageMismatch 分类；主按钮「修复并继续安装」说明将更新 Termux 现有软件包，用户点击才执行。直接 APT 避开 pkg 对 curl 的依赖，update 使用 Error-Mode=any；dist-upgrade 使用 --no-remove 和 --force-confold，保留配置、禁止移除包、不绕过签名。curl 恢复后连续安装，任一步失败停止。已有可用 Hermes 不因安装工具探测阻断聊天。
+- 验证：完整桌面套件 **267 项报告、251 项实际通过、0 失败**；另 16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 5 项包冲突／真实修复脚本（替代命令）回归和 1 项界面修复连续安装回归；App 与 Android 自检 APK 构建通过。无手机执行证据，真实 Termux 软件包更新与原生安装仍未实测。
+- APK SHA-256：`0cac7e99a68c9e602c4b03889c396ed0cd4c77d0151d27af341f449bc3cd037b`；签名仍为 `d985fcaf…db1dc7`。留档 `/workspace/hermes-cloud/releases/0.13.6-dev`，下载 `/workspace/shared/downloads/hermes-mobile-0.13.6-dev.apk`。仅更新草稿 PR，不发布 Release。
+
+### 0.13.5-dev 检查超时恢复记录
+
+
+- 当时开发包 **0.13.5-dev / code 42**，继续 `/workspace/hermes` 的 `codex/simple-install`，更新 PR #5。用户截图已显示初始化命令执行完成，App 报「上一次 Termux 任务还未返回」；这是进程内命令占位在检查超时后仍保留，造成后续检查被拒绝。截图不能证明回包为何丢失，不把此修复说成已经验证用户手机链路正常。
+- 提取 Android 真正使用的 `TermuxCommandTracker`：只读检查等待超时／取消时注销自己的 PendingIntent、释放自己的占位；安装、配置和模型设置默认不可重入，等待取消后仍保留到实际回包。每次命令独立标识，迟到／重复旧回包不能完成或解锁新命令。PendingIntent 创建或启动服务失败也完成回包并清理占位；不开放导出的广播入口，不落盘回包或凭据。
+- 后端显式标记只读的 Python／Hermes 可用性探测和 Inspect 状态读取；软件包安装、配置、模型设置默认保持修改操作保护。安装页对检查超时显示「打开 Termux 后重试」，并提供「重新发送检查」与后台设置；返回会重新检查，不再要求盲目重复初始化。未知安装结果仍提示先查看 Termux 进度。
+- 验证：完整桌面套件 **261 项报告，245 项实际通过，0 失败**，16 项真实 Hermes／OpenSSH IT 未配置未执行。新增 7 项共享回调登记回归（丢失回包、迟到旧回包、安装超时保护、创建／启动失败、取消清理、真实后端只读分类、manager 重试恢复）和 1 项界面超时恢复回归；App 与 Android 自检 APK 构建通过。浅／深色检查超时及安装等待截图已检查。adb 仍无设备，用户 vivo 的回包送达原因、真实后台限制及原生安装未实测。
+- APK SHA-256：`ba42e616e31d0bdf3deb47e892643a618b5edc4d6c7c08cb20234334616d17b8`；签名仍为 `d985fcaf…db1dc7`。留档 `/workspace/hermes-cloud/releases/0.13.5-dev`，下载 `/workspace/shared/downloads/hermes-mobile-0.13.5-dev.apk`，覆盖同签名旧版无需卸载或清除数据。未发布正式 Release。
+
+### 0.13.4 简化安装记录
+
+
+- 当前开发包 **0.13.4-dev / code 41**，在 `/workspace/hermes`、分支 `codex/simple-install`，基于已合并 0.13.3 的 main `275b327`。设置入口改为「在手机上安装 Hermes」；安装页只展示当前下一步，检查详情与高级服务默认折叠。环境就绪后一次点击安装，连续检查、准备缺失依赖、安装缺失程序、配置手机连接，再自动进入模型设置。本机「保存并开始聊天」直接保存、启动和验连；远程保存仍保留确认。
+- 修复 **Termux 成功回包误判**：Termux v0.118.3 `err=-1` 是 Android RESULT_OK，旧版按 `err!=0` 判失败。Android 接收器现在调用与测试共用的解析器，区分成功、拒绝、缺失结果和 shell 非零退出。错误分类与数字码可复制，原始 errmsg 不暴露。仅明确的外部调用开关拒绝展示初始化命令；从 Termux 返回时权限没变化也会重查。未知后台状态的超时仍保留并发保护，不擅自重跑安装。
+- 安装前重新探测实际状态；失败重试复用已准备的依赖与已安装 Hermes，不盲目重复下载。同步进入 busy 状态以避免连续点击排入重复操作。未授权时不执行命令，进入页面只读检查不安装；安装主按钮旁直接说明修改范围，去掉重复确认弹窗。
+- 最终完整桌面套件 **253 项报告、237 项实际通过、0 失败**，16 项真实 Hermes／OpenSSH IT 未配置未执行。4 项 Termux 协议解析测试、6 项安装界面流程测试、安装失败重试／前置失败／低空间已安装回归、本机模型一次保存测试均通过；远程保存确认回归保留。App 与 Android 自检 APK 构建通过。浅／深色安装、缺权限、初始化、已安装、缺 Termux 截图已检查；无 adb 手机，真实权限、跨 App 返回、原生 arm64 安装和真实模型授权未实测。首次完整测试因同时渲染重新编译输出导致类加载失败，最终固定源码、串行测试全部通过。
+- APK SHA-256：`827fced9662f89465c00b1f1f245e0888a6cce673c92e9ae76f4ee821d8c5b49`；签名仍为 `d985fcaf…db1dc7`，可覆盖同签名低版本，勿卸载丢弃数据。交付留档 `/workspace/hermes-cloud/releases/0.13.4-dev`，下载 `/workspace/shared/downloads/hermes-mobile-0.13.4-dev.apk`。本轮不改 Python 脚本，不宣称重复运行此前真实上游账号集成。未发布正式 Release。
+
+### 0.13.3 诊断版本记录
 
 - 当前为 **0.13.3-dev / code 40**，工作区 `/workspace/hermes-easy-setup`、分支 `codex/runtime-diagnostics`，基于已合并 PR #3 的 main 5aa6883。本机运行页新增逐项环境检查：安装、版本与命令入口、执行权限是否登记／授予、arm64、空间、实际命令回包和 Python 服务环境。失败项默认展开，提供对应授权、下载、存储、初始化入口；灰色准备／安装按钮旁直接说明原因。空间不足仅限制安装，不限制只读检查。
 - Android 读取实际版本、权限登记和服务入口；版本解析移至共享函数并测试。只有实际收到后端回包才标记命令连通；检查失败、未检查、超时分开，超时保留“后台结果未知”的边界。权限等基础条件变化会使旧检查失效并重查，可用空间的正常浮动不会清除已通过的命令结果。「复制检查结果」仅包含 App 版本和白名单检查项，不复制原始日志、账号、地址、密钥或初始化命令。

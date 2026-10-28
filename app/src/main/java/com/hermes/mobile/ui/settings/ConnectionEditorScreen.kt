@@ -167,7 +167,7 @@ fun ConnectionEditorScreen(
     fun report(error: Throwable) {
         showMessage(DiagnosticRedactor.redact(error.message ?: "未完成，请重试", listOf(apiKey, privateKey, sshPassword).filter(String::isNotBlank)))
     }
-    fun makeSetupCommand() {
+    fun makeSetupCommand(reuseHelper: Boolean = false) {
         runCatching {
             val profile = currentProfile()
             ConnectionSetup.validate(profile)
@@ -178,7 +178,7 @@ fun ConnectionEditorScreen(
                 publicKey = pair.publicKey
             }
             val command = ConnectionSetup.command(setupProgram, profile, apiKey,
-                publicKey.takeIf { profile.type == ConnectionType.Ssh && profile.sshAuth == SshAuthMethod.Key }.orEmpty(), setupNonce)
+                publicKey.takeIf { profile.type == ConnectionType.Ssh && profile.sshAuth == SshAuthMethod.Key }.orEmpty(), setupNonce, reuseHelper)
             copyText(command, true)
             copiedSetup = true
             setupKeyAtCopy = apiKey
@@ -448,9 +448,10 @@ fun ConnectionEditorScreen(
                     Text("2 · 复制一次，完成配置", style = MaterialTheme.typography.titleMedium)
                     Text(if (type == ConnectionType.Local) "在这台手机的 Termux 中粘贴，按回车运行。需已安装 Hermes。"
                         else "在运行 Hermes 的机器上${if (type == ConnectionType.Ssh && sshUser.isNotBlank()) "以 $sshUser 登录后" else ""}打开终端，粘贴并按回车（Linux／macOS，需已安装 Hermes）。")
-                    Text("自动备份配置、开通手机连接并授权本手机，保留已有密钥和端口。会重启 Hermes，正在进行的回复可能中断。", style = MaterialTheme.typography.bodySmall)
-                    Button(onClick = ::makeSetupCommand, enabled = !testing) { Text(if (copiedSetup) "重新复制配置命令" else "生成并复制配置命令") }
-                    if (copiedSetup) Text("已复制。执行完成后，直接点底部「检查并连接」。若终端提示保留了已有密钥，请先粘贴配置结果。", style = MaterialTheme.typography.bodySmall)
+                    Text("自动备份配置、开通手机连接并授权本手机，保留已有密钥和端口。配置改变或服务异常时才请求重启；服务正常且配置未变时不重启。", style = MaterialTheme.typography.bodySmall)
+                    Button(onClick = { makeSetupCommand() }, enabled = !testing) { Text(if (copiedSetup) "重新复制配置命令" else "生成并复制配置命令") }
+                    if (copiedSetup) TextButton(onClick = { makeSetupCommand(reuseHelper = true) }, enabled = !testing) { Text("已执行过？复制简短重试命令") }
+                    if (copiedSetup) Text("已复制。执行完成后，直接点底部「检查并连接」。SSH 会安全读取连接结果；直连若已有密钥，请填写原 API Server Key。", style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = {
                         val text = readText()
                         if (text != null && text.contains(ConnectionSetup.ReceiptPrefix)) {
@@ -618,6 +619,7 @@ private fun PublicKeyCard(publicKey: String, saved: Boolean, user: String) {
         SetupCommandCard("把手机公钥加入服务器", "以 $user 登录运行 Hermes 的机器，在终端粘贴并按回车。",
             ConnectionSetup.publicKeyCommand(publicKey), copyLabel = "复制公钥安装命令")
         TextButton(onClick = { copy(publicKey, false); message("公钥已复制") }) { Text("复制公钥") }
+        TextButton(onClick = { copy(ConnectionSetup.revokeKeyCommand(publicKey), false); message("撤销命令已复制。在服务器执行后，本公钥将无法建立新连接；共用这把私钥的设备也会受影响。") }) { Text("复制本手机授权撤销命令") }
         if (saved) Text("私钥已加密保存在手机。可以重复执行安装命令，不会重复添加相同公钥。", style = MaterialTheme.typography.bodySmall)
     }
 }

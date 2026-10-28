@@ -38,7 +38,8 @@ class HermesApplication : Application() {
         com.hermes.mobile.data.local.LocalRuntimeManager(appScope,
             com.hermes.mobile.data.local.TermuxRuntimeBackend(
                 com.hermes.mobile.platform.AndroidTermuxTransport(this),
-                assets.open("runtime/manager.py").bufferedReader().use { it.readText() }),
+                assets.open("runtime/manager.py").bufferedReader().use { it.readText() },
+                assets.open("providers/settings.py").bufferedReader().use { it.readText() }),
             com.hermes.mobile.data.local.RepositoryLocalConnection { repository })
     }
 

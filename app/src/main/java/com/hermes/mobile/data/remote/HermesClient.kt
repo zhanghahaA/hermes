@@ -75,6 +75,8 @@ class HermesClient(
     /** 事件流用的客户端：服务器每 10 秒发一次心跳，30 秒没有任何数据就认为连接已死。 */
     private val streamHttp: OkHttpClient = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
 
+    internal fun evictIdleConnections() { http.connectionPool.evictAll() }
+
     internal suspend fun health(): HealthDto = try {
         get("/health", HealthDto.serializer(), auth = false, profileScoped = false).also {
             // 随便一个返回 JSON 的服务也能解析成功（字段全是可选的），至少要有 status 或 platform 才算 Hermes

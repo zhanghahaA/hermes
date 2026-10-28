@@ -63,6 +63,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -209,6 +210,7 @@ class RemoteHermesRepository(
         runScope = newRunScope()
         runs.clear()
         controls.clear()
+        sharedControls.clear()
         outbox.clear()
         _activeRuns.value = emptySet()
         closeTunnel()
@@ -708,11 +710,36 @@ class RemoteHermesRepository(
     }
 
     override suspend fun refreshSessions() {
-        if (client == null) {
-            _activeConnectionId.value?.let(::connect)
-            connectJob?.join()
-        } else {
-            loadSessions()
+        val id = _activeConnectionId.value ?: return
+        val completed = withTimeoutOrNull(30_000) {
+            val current = client
+            if (current == null) {
+                connect(id)
+                connectJob?.join()
+            } else {
+                try {
+                    // 后台久置可能留下半断开的 SSH；主动刷新应重建传输，不清空待发送消息和任务。
+                    val transport = tunnel
+                    withContext(Dispatchers.IO) { transport?.reset() }
+                    current.evictIdleConnections()
+                    val started = clock()
+                    val health = current.health()
+                    if (current !== client || _activeConnectionId.value != id) return@withTimeoutOrNull true
+                    if (health.platform != null && health.platform != "hermes-agent") throw HermesError.NotHermes()
+                    _connectionState.value = ConnectionState.Connected(
+                        latencyMs = (clock() - started).toInt().coerceAtLeast(1),
+                        serverVersion = health.knownVersion() ?: "未知版本")
+                    loadSessions()
+                    networkKick.tryEmit(Unit)
+                } catch (e: HermesError) {
+                    if (current === client && _activeConnectionId.value == id)
+                        _connectionState.value = ConnectionState.Failed(e.message ?: "刷新失败，请重试")
+                }
+            }
+            true
+        }
+        if (completed == null && _activeConnectionId.value == id) {
+            _errors.tryEmit("刷新超时，请检查网络后重试")
         }
     }
 
@@ -885,7 +912,54 @@ class RemoteHermesRepository(
 
     private fun chatOf(uiId: String): Flow<ChatState?> = combine(chats, aliases) { map, aliasMap -> map[aliasMap[uiId] ?: uiId] }
 
-    override fun chatItems(sessionId: String): Flow<List<ChatItem>> =
+    override fun chatItems(sessionId: String): Flow<List<ChatItem>> = flow {
+        coroutineScope {
+            val watcher = launch { watchSharedControls(resolve(sessionId)) }
+            try { emitAll(chatItemsOnly(sessionId)) }
+            finally { watcher.cancel() }
+        }
+    }
+
+    private data class SharedControl(val sessionId: String, val profile: String, val feed: SessionControlFeed)
+    private val sharedControls = ConcurrentHashMap<String, SharedControl>()
+
+    private suspend fun watchSharedControls(sessionId: String) {
+        if (sessionId.startsWith(DraftPrefix)) return
+        val connection = _activeConnectionId.value
+        while (_activeConnectionId.value == connection) {
+            val api = roomApi() as? RoomClient ?: return
+            val profile = _activeBot.value ?: "default"
+            val feed = SessionControlFeed(api::call)
+            try {
+                feed.watch(sessionId, profile).collect { snapshot ->
+                    if (_activeConnectionId.value != connection || _activeBot.value != profile || roomApi() !== api) return@collect
+                    val present = snapshot.prompts.map { it.promptId }.toSet()
+                    sharedControls.entries.filter { it.value.sessionId == snapshot.sessionId }.forEach { (id, _) ->
+                        val pair = controls[id]
+                        if (pair != null && pair.second.promptId !in present) {
+                            settleControl(ActiveRun(pair.first, sessionId), pair.second.promptId, "已在其他设备处理")
+                            sharedControls.remove(id)
+                        }
+                    }
+                    if (snapshot.prompts.isEmpty() && !runs.containsKey(sessionId)) {
+                        updateChat(sessionId) { it.copy(phase = RunPhase.Idle) }
+                    }
+                    snapshot.prompts.forEach { request ->
+                        // 同一 API 任务也可能从共享 Gateway 收到，按 prompt 和 generation 合并。
+                        if (controls.values.any { it.second.promptId == request.promptId && it.second.generation == request.generation }) return@forEach
+                        val run = ActiveRun("gateway-${snapshot.sessionId}-${request.generation}", sessionId)
+                        addControl(run, request, null)
+                        sharedControls["ctl-${run.runId}-${request.promptId}"] = SharedControl(snapshot.sessionId, profile, feed)
+                    }
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: HermesError.NotSupported) { return }
+            catch (_: Exception) { /* 旧版／暂时断连继续使用 API 卡片；恢复后重新获取快照。 */ }
+            delay(3000)
+        }
+    }
+
+    private fun chatItemsOnly(sessionId: String): Flow<List<ChatItem>> =
         combine(chatOf(sessionId), settings) { st, prefs ->
             st?.display().orEmpty().filter { it !is ChatItem.Activity || prefs.showWorkProcess || it.earlierReply.isNotBlank() }
         }.onStart {
@@ -1468,6 +1542,9 @@ class RemoteHermesRepository(
         })
 
     private fun addControl(run: ActiveRun, request: ControlRequest, seq: Long?) {
+        if (request.promptId != null && controls.values.any {
+                it.second.promptId == request.promptId && it.second.generation == request.generation
+            }) return
         val itemId = "ctl-${run.runId}-${request.promptId ?: seq ?: UUID.randomUUID()}"
         if (controls.containsKey(itemId)) return
         val exists = chats.value[run.sessionId]?.local?.any { it.item.id == itemId } == true
@@ -1622,14 +1699,17 @@ class RemoteHermesRepository(
         setCard(key, itemId, runId) { if (it is ChatItem.Approval) it.copy(resolvedChoice = choice) else it }
         runScope.launch {
             try {
-                withRetry { client?.respondApproval(runId, request.approvalBody(choice)) ?: throw HermesError.Unreachable("未连接") }
+                val shared = sharedControls[itemId]
+                if (shared != null) shared.feed.respond(shared.sessionId, shared.profile, request, choice)
+                else withRetry { client?.respondApproval(runId, request.approvalBody(choice)) ?: throw HermesError.Unreachable("未连接") }
                 controls.remove(itemId)
             } catch (e: HermesError.Conflict) {
                 // 已经在别处处理过了
                 controls.remove(itemId)
-            } catch (e: HermesError) {
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
                 setCard(key, itemId, runId) { if (it is ChatItem.Approval) it.copy(resolvedChoice = null) else it }
-                _errors.tryEmit("审批没发出去：${e.message}")
+                _errors.tryEmit(if (sharedControls.containsKey(itemId)) "审批未送达，请检查连接后重试；卡片也可能已在电脑处理。" else "审批没发出去：${e.message}")
             }
         }
     }
@@ -1640,13 +1720,16 @@ class RemoteHermesRepository(
         setCard(key, itemId, runId) { if (it is ChatItem.Clarify) it.copy(answer = answer) else it }
         runScope.launch {
             try {
-                withRetry { client?.respondClarify(runId, request.clarifyBody(answer)) ?: throw HermesError.Unreachable("未连接") }
+                val shared = sharedControls[itemId]
+                if (shared != null) shared.feed.respond(shared.sessionId, shared.profile, request, answer)
+                else withRetry { client?.respondClarify(runId, request.clarifyBody(answer)) ?: throw HermesError.Unreachable("未连接") }
                 controls.remove(itemId)
             } catch (e: HermesError.Conflict) {
                 controls.remove(itemId)
-            } catch (e: HermesError) {
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
                 setCard(key, itemId, runId) { if (it is ChatItem.Clarify) it.copy(answer = null) else it }
-                _errors.tryEmit("回答没发出去：${e.message}")
+                _errors.tryEmit(if (sharedControls.containsKey(itemId)) "回答未送达，请检查连接后重试；卡片也可能已在电脑处理。" else "回答没发出去：${e.message}")
             }
         }
     }

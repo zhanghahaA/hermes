@@ -102,7 +102,7 @@ class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.i
         s
     }
 
-    private suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap())): JsonObject {
+    internal suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap())): JsonObject {
         val s = channel()
         val id = ids.incrementAndGet()
         val answer = CompletableDeferred<JsonObject>()
@@ -110,12 +110,14 @@ class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.i
         val line = buildJsonObject {
             put("id", id)
             put("method", method)
-            put("params", JsonObject(params + ("profile" to JsonPrimitive("default"))))
+            put("params", JsonObject(params + ("profile" to (params["profile"] ?: JsonPrimitive("default")))))
         }.toString() + "\n"
         try {
             withContext(Dispatchers.IO) {
-                s.input.write(line.toByteArray(Charsets.UTF_8))
-                s.input.flush()
+                synchronized(s.input) {
+                    s.input.write(line.toByteArray(Charsets.UTF_8))
+                    s.input.flush()
+                }
             }
         } catch (e: Exception) {
             pending.remove(id)

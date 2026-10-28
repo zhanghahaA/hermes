@@ -6,6 +6,10 @@ import stat
 import tempfile
 import time
 import unittest
+import types
+import sys
+import subprocess
+from unittest import mock
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[2] / "app/src/main/assets/providers/settings.py"
@@ -24,6 +28,40 @@ class ProviderFilesTest(unittest.TestCase):
     def tearDown(self):
         bridge.ROOT = self.before
         self.temp.cleanup()
+
+    def test_missing_model_catalog_does_not_disable_provider_selection(self):
+        auth = types.ModuleType("hermes_cli.auth")
+        auth.PROVIDER_REGISTRY = {"fixture": types.SimpleNamespace(name="Fixture", auth_type="api_key", api_key_env_vars=("FIXTURE_KEY",))}
+        config = types.ModuleType("hermes_cli.config")
+        config.get_env_value = lambda name: "fixture-secret"
+        modules = {"hermes_cli": types.ModuleType("hermes_cli"), "hermes_cli.auth": auth,
+                   "hermes_cli.config": config, "hermes_cli.models": types.ModuleType("hermes_cli.models")}
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(bridge, "config_read", return_value={"model": {"provider": "fixture", "default": "fixture-model"}}):
+            result = bridge.snapshot()
+        self.assertTrue(next(row for row in result["providers"] if row["id"] == "fixture")["authenticated"])
+        self.assertNotIn("fixture-secret", json.dumps(result))
+
+    def test_enabling_clarify_only_adds_tool_and_is_idempotent(self):
+        config = types.ModuleType("hermes_cli.config")
+        cfg = {"model": {"provider": "fixture", "api_key": "fixture-secret"},
+               "platform_toolsets": {"api_server": ["hermes-api-server", "existing"], "telegram": ["other"]}}
+        config.is_managed = lambda: False
+        config.save_config = mock.Mock()
+        with mock.patch.dict(sys.modules, {"hermes_cli": types.ModuleType("hermes_cli"), "hermes_cli.config": config}), mock.patch.object(bridge, "config_read", return_value=cfg):
+            bridge.enable_clarify(); bridge.enable_clarify()
+        config.save_config.assert_called_once()
+        self.assertEqual(cfg["platform_toolsets"]["api_server"], ["hermes-api-server", "existing", "clarify"])
+        self.assertEqual(cfg["platform_toolsets"]["telegram"], ["other"])
+        self.assertEqual(cfg["model"]["api_key"], "fixture-secret")
+
+    def test_import_error_is_classified_by_operation_without_secret_output(self):
+        for action in ("inspect", "login"):
+            result = subprocess.run([sys.executable, "-I", str(SOURCE)], input=json.dumps({"action": action}), text=True,
+                                    capture_output=True, env=dict(os.environ, HERMES_HOME=str(bridge.ROOT)), timeout=10)
+            payload = json.loads(result.stdout.removeprefix("HMMODELS"))
+            self.assertFalse(payload["ok"])
+            self.assertEqual("不支持浏览器授权" in payload["error"], action == "login")
+            self.assertEqual(result.stderr, "")
 
     def test_private_receipts_are_atomic_and_not_world_readable(self):
         path = bridge.login_path("a" * 32)

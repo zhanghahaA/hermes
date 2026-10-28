@@ -1,6 +1,6 @@
 # Hermes 移动版（Android）
 
-当前开发包 **0.13.3-dev / Android versionCode 40**：本机部署逐项显示环境检查结果及修复入口，区分命令已连通、未检查和超时，支持复制不含密钥或原始日志的检查报告。通知助手应用列表按需后台加载；Termux 提供权限设置入口和自动重查，先安装 Hermes，再在 App 内配置订阅账号、API 密钥、自定义端点或已有本地模型服务，保存后启动并连接。远程 Hermes 的模型设置通过当前连接的 SSH 操作。见 [部署与模型设置](docs/model-settings.md) 和 [首次连接指南](docs/easy-setup.md)。真实 Android 授权、arm64 安装和账号浏览器授权仍需设备验证，开发包不等同于正式稳定版。
+当前开发包 **0.13.9-dev / Android versionCode 46**：本机引导区分安装、模型配置和接口验证，未配置模型不再直接显示开始聊天。保存模型后重启并同步手机接口，连接失败提供对应原因和重试入口；「卸载本机 Hermes」直接可见，确认后保留配置与聊天数据。保留清华国内依赖镜像，Hermes 包与 Termux／X11 应用仍走官方源。见 [部署与模型设置](docs/model-settings.md)，真实手机连接效果仍需验证。
 
 在手机上使用 [Hermes Agent](https://github.com/NousResearch/hermes-agent)：默认像发消息一样收到最终回复，可在设置中开启逐字回复或思考与工作过程；Hermes 需要你批准或追问时，聊天里会出现一张卡片让你点。
 

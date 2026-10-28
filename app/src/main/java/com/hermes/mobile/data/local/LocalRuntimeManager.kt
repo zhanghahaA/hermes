@@ -3,6 +3,7 @@ package com.hermes.mobile.data.local
 import com.hermes.mobile.data.store.DiagnosticRedactor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +23,8 @@ data class LocalRuntimeState(
     val output: String = "",
     val failed: Boolean = false,
     val probe: RuntimeProbe = RuntimeProbe.NotChecked,
+    val issue: RuntimeIssue? = null,
+    val resultCode: Int? = null,
 )
 
 /** 随 App 进程保留状态。更换为内置后端时，界面、操作串行化和连接存储都可以保留。 */
@@ -50,27 +53,36 @@ class LocalRuntimeManager(
         check(state.value.environment.blockers.isEmpty()) { state.value.environment.blockers.joinToString("\n") }
         withTimeout(45_000) {
             execute(RuntimeRequest(RuntimeAction.Inspect))
+            check(state.value.snapshot.hermesInstalled) { "请先安装本机 Hermes" }
+            if (!state.value.snapshot.modelConfigured) throw RuntimeCommandException(RuntimeIssue.ModelSetupRequired)
             check(state.value.snapshot.configured) { "请先配置本机连接" }
             if (!state.value.snapshot.hermesRunning) execute(RuntimeRequest(RuntimeAction.StartHermes))
         }
     }
 
-    private fun operation(label: String, block: suspend () -> Unit): Job = scope.launch {
+    private fun operation(label: String, failureIssue: RuntimeIssue? = null, block: suspend () -> Unit): Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
         if (!mutex.tryLock()) return@launch
-        mutable.update { it.copy(busy = true, message = label, output = "", failed = false) }
+        mutable.update { it.copy(busy = true, message = label, output = "", failed = false, issue = null, resultCode = null) }
         try {
             refreshEnvironment()
             check(state.value.environment.blockers.isEmpty()) { state.value.environment.blockers.joinToString("\n") }
             withTimeout(timeoutMillis) { block() }
         } catch (_: TimeoutCancellationException) {
-            mutable.update { it.copy(checked = false, failed = true, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.TimedOut else it.probe,
-                message = "等待超时。Termux 中的任务可能仍在执行，请先检查状态，不要重复安装。") }
+            mutable.update {
+                val inspecting = it.probe == RuntimeProbe.Checking
+                it.copy(checked = false, failed = true, probe = if (inspecting) RuntimeProbe.TimedOut else it.probe,
+                    issue = if (inspecting) RuntimeIssue.InspectionTimeout else RuntimeIssue.CommandPending,
+                    message = if (inspecting) RuntimeIssue.InspectionTimeout.explanation
+                        else "等待超时。Termux 中的任务可能仍在执行，请先检查状态，不要重复安装。")
+            }
         } catch (e: CancellationException) {
             mutable.update { it.copy(checked = false, failed = true, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.NotChecked else it.probe,
                 message = "等待已结束，请重新检查后台任务状态") }
             throw e
         } catch (e: Exception) {
             mutable.update { it.copy(failed = true, checked = false, probe = if (it.probe == RuntimeProbe.Checking) RuntimeProbe.Failed else it.probe,
+                issue = (e as? RuntimeCommandException)?.issue ?: failureIssue,
+                resultCode = (e as? RuntimeCommandException)?.resultCode,
                 message = DiagnosticRedactor.redact(e.message ?: "操作未完成")) }
         } finally {
             mutable.update { it.copy(busy = false) }
@@ -81,7 +93,11 @@ class LocalRuntimeManager(
     private suspend fun execute(request: RuntimeRequest) {
         val response = backend.execute(request) { step -> mutable.update { it.copy(message = step) } }
         response.connectionKey?.let(connection::save)
-        mutable.update { it.copy(snapshot = response.snapshot, checked = true, output = response.output, probe = RuntimeProbe.Passed) }
+        mutable.update {
+            val snapshot = if (request.action != RuntimeAction.Inspect && response.snapshot.hermesInstalled && response.snapshot.configured)
+                response.snapshot.copy(modelConfigured = it.snapshot.modelConfigured) else response.snapshot
+            it.copy(snapshot = snapshot, checked = true, output = response.output, probe = RuntimeProbe.Passed)
+        }
     }
 
     fun inspect() = operation("正在检查运行环境") {
@@ -92,19 +108,31 @@ class LocalRuntimeManager(
     }
 
     fun perform(request: RuntimeRequest) = operation(label(request.action)) {
-        if (request.action in setOf(RuntimeAction.Prepare, RuntimeAction.InstallHermes, RuntimeAction.InstallBrowser, RuntimeAction.InstallService, RuntimeAction.InstallProxy)) {
+        if (request.action in setOf(RuntimeAction.Prepare, RuntimeAction.RepairEnvironment, RuntimeAction.InstallHermes, RuntimeAction.InstallBrowser, RuntimeAction.InstallService, RuntimeAction.InstallProxy)) {
             check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
         }
         if (request.action == RuntimeAction.InstallBrowser && !state.value.snapshot.toolsReady) execute(RuntimeRequest(RuntimeAction.Prepare))
         execute(request)
+        if (request.action == RuntimeAction.RemoveHermes) check(!state.value.snapshot.hermesInstalled) { "软件包卸载后仍检测到其它 Hermes 安装，请在 Termux 检查安装方式。" }
         mutable.update { it.copy(message = "${label(request.action)}完成") }
     }
 
     /** 安装不再依赖模型 Key；先完成安装与手机接口配置，再由设置页配置提供方。 */
-    fun install(channel: ReleaseChannel = ReleaseChannel.Stable) = operation("正在安装本机 Hermes") {
-        check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
-        execute(RuntimeRequest(RuntimeAction.Prepare))
-        execute(RuntimeRequest(RuntimeAction.InstallHermes, channel = channel, acceptExperimental = true))
+    fun install(channel: ReleaseChannel = ReleaseChannel.Stable, repairEnvironment: Boolean = false) = operation("正在安装本机 Hermes") {
+        if (repairEnvironment) {
+            check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
+            execute(RuntimeRequest(RuntimeAction.RepairEnvironment))
+        }
+        mutable.update { it.copy(probe = RuntimeProbe.Checking) }
+        withTimeout(25_000) { execute(RuntimeRequest(RuntimeAction.Inspect)) }
+        if (!state.value.snapshot.toolsReady || !state.value.snapshot.hermesInstalled) {
+            check(state.value.environment.enoughSpace) { "请至少预留 2 GB 内部存储空间" }
+        }
+        if (!state.value.snapshot.hermesInstalled) {
+            execute(RuntimeRequest(RuntimeAction.InstallHermes, channel = channel, acceptExperimental = true))
+        }
+        // Hermes 的原生包自带运行时；先确认其安装源可用，再准备 App 的 Python 管理环境。
+        if (!state.value.snapshot.toolsReady) execute(RuntimeRequest(RuntimeAction.Prepare))
         execute(RuntimeRequest(RuntimeAction.ConfigureHermes))
         mutable.update { it.copy(message = "Hermes 已安装。下一步配置模型提供方，再启动并连接。") }
     }
@@ -128,8 +156,15 @@ class LocalRuntimeManager(
     /** 切换后的连接恢复可能再次调用 ensureRunning；必须在操作锁释放后等待，避免互相等待。 */
     suspend fun awaitConnected() = connection.awaitActivated()
 
-    fun connect() = operation("正在检查本机连接") {
+    fun connect(restart: Boolean = false) = operation("正在检查本机配置", failureIssue = RuntimeIssue.LocalApiNotReady) {
+        mutable.update { it.copy(probe = RuntimeProbe.Checking) }
+        withTimeout(45_000) { execute(RuntimeRequest(RuntimeAction.Inspect)) }
+        if (!state.value.snapshot.modelConfigured) throw RuntimeCommandException(RuntimeIssue.ModelSetupRequired)
+        // 保存模型后的重启同时同步手机接口配置与本地凭据，避免沿用旧进程或旧 Key。
+        if (restart) execute(RuntimeRequest(RuntimeAction.StopHermes))
+        if (restart || !state.value.snapshot.hermesRunning) execute(RuntimeRequest(RuntimeAction.ConfigureHermes))
         execute(RuntimeRequest(RuntimeAction.StartHermes))
+        mutable.update { it.copy(message = "正在等待本机聊天接口，首次启动可能需要约一分钟…") }
         connection.verifyAndActivate()
         mutable.update { it.copy(message = "本机连接检查通过，已切换到「这台手机」") }
     }
@@ -139,6 +174,7 @@ class LocalRuntimeManager(
         fun label(action: RuntimeAction): String = when (action) {
             RuntimeAction.Inspect -> "检查环境"
             RuntimeAction.Prepare -> "准备 Python 服务环境"
+            RuntimeAction.RepairEnvironment -> "修复 Termux 运行环境"
             RuntimeAction.InstallHermes -> "安装本机 Hermes"
             RuntimeAction.UpgradeHermes -> "升级本机 Hermes"
             RuntimeAction.ConfigureHermes -> "配置本机连接"

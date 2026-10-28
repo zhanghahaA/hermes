@@ -51,7 +51,7 @@ fun ModelSettingsScreen(repository: HermesRepository, connectionId: String?, onB
         scope.launch {
             try {
                 val runtime = repository.localRuntime ?: error("本机环境尚未就绪")
-                runtime.connect().join()
+                runtime.connect(restart = true).join()
                 connectMessage = runtime.state.value.message
                 if (!runtime.state.value.failed) { runtime.awaitConnected(); onConnected() }
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -188,9 +188,18 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                     OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     if (selection.models.isNotEmpty()) TextButton(onClick = { chooseModel = true }) { Text("从模型列表选择") }
                     TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("models", provider)) }) { Text("读取可选模型列表") }
-                    Button(enabled = !busy && model.isNotBlank(), onClick = { confirmSave = true }) { Text(if (saveAndConnect) "保存并开始聊天" else "保存模型配置") }
+                    if (saveAndConnect) Text("保存到 App 使用的独立配置，保留备份，然后重启本机 Hermes 并验证连接。终端默认配置不会自动同步。", style = MaterialTheme.typography.bodySmall)
+                    Button(enabled = !busy && model.isNotBlank(), onClick = {
+                        if (saveAndConnect) {
+                            manager.submit(ModelSettingsRequest("save", provider, model.trim(), key.trim().takeIf(String::isNotEmpty), url.trim(), apiMode = apiMode)) { key = ""; onModelSaved() }
+                        } else confirmSave = true
+                    }) { Text(if (saveAndConnect) "保存并开始聊天" else "保存模型配置") }
                 } }
                 TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("inspect")) }) { Text("刷新配置") }
+            }
+            if (ready) {
+                Text("手机互动选项：Hermes 的 API 工具集可能默认关闭 clarify。下面只添加这个追问工具，保留其它工具与模型设置，不自动重启服务。", style = MaterialTheme.typography.bodySmall)
+                TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("enable_clarify")) }) { Text("启用手机互动选项") }
             }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (externalMessage.isNotBlank()) {

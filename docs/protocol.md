@@ -359,3 +359,46 @@ App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cl
 - 显示：`message.user` / `message.member` 是消息；`turn.failed` / `turn.cancelled` / `turn.deferred` / `room.activity`（`status: bounded`）等显示成一行提示；其它事件不显示。
 - 每个 bot 在自己的 Profile 里有一个隐藏会话（标题 `Group: <room_id>`，来源 `bot_room`）跑它的回合。
 
+
+## Termux 命令回包（0.13.4）
+
+- `RUN_COMMAND_PENDING_INTENT` 返回 `result` Bundle。`err` 使用 Android 的结果码：`-1`（`Activity.RESULT_OK`）表示调用成功；shell 自身的 `exitCode=0` 才表示命令成功。两者不能混用。缺失 `err` 或成功回包缺失 `exitCode` 视为不完整结果。
+- `RuntimeResultReceiver` 将实际 Bundle 字段交给共享 `decodeTermuxResult`，桌面测试直接验证同一解析器。`err=0` 是拒绝／取消，不当作成功。依据：[Termux v0.118.3 Errno](https://github.com/termux/termux-app/blob/v0.118.3/termux-shared/src/main/java/com/termux/shared/models/errors/Errno.java)、[回包字段](https://github.com/termux/termux-app/blob/v0.118.3/termux-shared/src/main/java/com/termux/shared/termux/TermuxConstants.java)。
+- 回包错误只保留固定分类及数字码。包含 `allow-external-apps` 的拒绝显示一次初始化入口，其它失败不要求盲目重复粘贴命令。原始 `errmsg` 可能含命令／凭据，不写到界面或复制报告；shell 失败继续按原有脱敏规则展示，结构化输入操作不回显原始输出。
+- 页面进入／从 Termux 或权限设置返回时只执行检查，不自动安装。安装主按钮旁说明修改范围；一次点击连续检查、准备缺失依赖、安装缺失程序并配置连接。失败重试重新探测状态，已完成的软件安装复用。0.13.5 起，只读检查超时／取消会注销回调并释放自己的占位，新检查使用新的标识；迟到旧回包不能完成或释放新命令。安装、配置、模型设置等修改操作超时仍保留“后台任务状态未知”的保护，直到实际回包，不靠重试强制解除。
+
+### Termux 软件包版本冲突（0.13.6）
+
+未安装 Hermes 时，Inspect 额外运行本地 `curl --version`（只读、无网络）。只有无结构化输入的失败命令同时出现 curl、`CANNOT LINK EXECUTABLE` 和 `cannot locate symbol` 才映射为 PackageMismatch；显示固定说明，诊断承认命令回包已送达。用户点击明确说明更新范围的修复按钮后，执行 `apt-get -o APT::Update::Error-Mode=any update` 与 `apt-get -y --no-remove -o Dpkg::Options::=--force-confold dist-upgrade`，再检查 curl。保留配置并拒绝移除包，不绕过签名，不自动切源；任一步失败就停止，不继续安装。修复属于修改操作，保留等待实际回包的防重入保护。脚本测试使用替代 APT/curl 程序，不能作为真实 Termux 包升级已验证的依据。
+
+### 官方安装源不可用（0.13.7）
+
+安装脚本先获取当前通道的 key.asc 和 InRelease（仅检查可下载，不将 HTTP 200 视为签名或运行通过）。curl 的明确 404／410 映射为退出码 44 与固定标记 HM_REPOSITORY_UNAVAILABLE；后端同时核对码与 stderr 整行标记，再映射为 RepositoryUnavailable。普通 HTTP 失败、超时和其它程序的 404 不套用此分类。失败前不安装 GnuPG、不写入软件源、不切换通道；仅 curl 本身缺失时需先补齐。manager 先安装自带运行时的 Hermes，再准备 App 的 Python 管理环境，避免源不可用时先做无效准备。
+
+可下载后仍验证单一主公钥及固定指纹，再由 APT 验签安装。不会绕过签名或自动切换到 canary。重试入口明确是「重试安装」，成功后可继续修改环境，不把它伪装成只读检查。上游 stable 当前返回 404，且文档警告 Termux 包暂时无法运行；文件可下载及脚本替代命令测试都不等于真机安装成功。
+
+### 国内依赖镜像（0.13.8）
+
+`DomesticPackageSources` 为 App 的包安装命令生成独立 `~/.hermes-mobile/apt/sources.list` 和 `lists` 缓存；显式传递 `Dir::Etc::sourcelist`、`Dir::Etc::sourceparts=-`、`Dir::State::lists`，避免读取全局其它源与旧缓存。清华 Termux main/root/x11 来源已与 Termux 官方 mirrors/chinese_mainland 名单核对。安装 Python、GnuPG、Chromium、Caddy 与包冲突修复全部通过该 APT 入口，源更新使用 Error-Mode=any，失败不继续安装，不使用 pkg 自动选择镜像。Hermes 自身仍使用经过指纹校验的官方签名源；下载其公钥和索引前的镜像初始化不纳入已有 Hermes 源，避免旧通道影响前置工具下载。
+
+原全局 Termux／pip 源配置不覆盖。独立列表只加入三类 Termux 源及既有 Hermes 源，不自动复制未知第三方源；因此不能宣称会升级所有第三方软件。Python 服务的 pip 子进程清除继承的 PIP_* 参数，设置 PIP_CONFIG_FILE=/dev/null、清华 PIP_INDEX_URL 及禁用版本检查；构建子进程继承相同设置，不污染服务器、模型端点或服务运行环境。没有添加 trusted=yes、allow-unauthenticated 或关闭 TLS 验证。镜像可访问和假命令脚本测试不等于真实手机安装已验证。
+
+### 本机配置门槛与连接恢复（0.13.9）
+
+`RuntimeSnapshot.modelConfigured` 与手机接口的 `configured` 分开。Android 将 providers/settings.py 注入实际 Termux 后端，Inspect 在同一个 HERMES_HOME 下通过 Hermes 自带 Python 读取 HMMODELS 摘要，要求有效回包、提供方与模型，以及账号／Key 摘要（本地端点除外）；未知或不完整模型回包不标记就绪。模型 inspect/models 命令标为只读，可在超时后释放等待；save/login 仍是修改命令。未配置时 connect 不启动服务，页面进入配置步骤，不自动读取终端默认目录中的密钥。
+
+本机保存后 connect(restart=true) 依次 Inspect → StopHermes → ConfigureHermes → StartHermes → 验证并激活连接。只读前置检查 45 秒超时，接口冷启动重试最多 90 秒；鉴权与能力失败立即报告固定分类，不回显服务响应或凭据。取消／切换连接不强制切回本机。连接锁释放后才等待正式连接完成，避免 ensureRunning 重入死锁。已有未配置／不完整 Hermes 不会被当作可聊天状态。
+
+卸载入口从高级功能移到主页面，保留一次明确范围确认。Python 停止自己记录的 Hermes 进程，再执行 apt-get remove --no-auto-remove -y hermes-agent，不触网、不清理配置／会话／其它服务。manager 核对卸载后的程序检测结果，仍有其它 Hermes 安装时报告未完全移除；保留 App 的连接信息和缓存供重新安装后复用。
+
+### 配对幂等与短重试（0.13.10）
+
+配对配置按差异写入，保留已有 API_SERVER_KEY（非法值拒绝而不替换）和模型凭据。配置未变且健康／认证通过时不重启，必要时通过当前 Profile 的官方 gateway restart 恢复并等待接口；手机最终连接仍由已有完整验连流程确认。SSH 回执仍为旧格式、0600 私有文件，但默认不打印终端；直连旧协议的安装命令仍属于敏感凭据，不是公开配对码。
+
+首次命令压缩并缓存带摘要的标准库助手；后续短重试只传参数并检查缓存摘要。公钥按算法和数据去重，新增授权禁用 agent／X11／PTY，指定公钥撤销不清空 authorized_keys。完整边界和测试见 [配对优化说明](mobile-pairing-review.md)。
+
+### 共享互动卡片与刷新（0.13.11）
+
+打开 SSH 会话时复用 Gateway JSON-RPC 桥读取 canonical `session.resume.prompts`，随后 `session.events.since` 回放 `approval/clarify.request` 与 settled/responded；按 prompt_id 与 execution_generation 合并，回答走对应 Gateway respond 方法并保留 Profile。关闭页面 detach 自己的订阅。不支持该协议时保留原 API run 事件流程；纯 HTTP 无 SSH 不具备此桌面共享通道。
+
+下拉刷新主动重建 SSH 传输及 HTTP 空闲连接，健康探测后读列表，保留任务和待发送内容；30 秒上限与 UI finally 避免无限转圈。模型桥的 ImportError 按操作分类，不再把 inspect 缺模块误报为 OAuth 不支持；缺少可选模型目录时可回退到注册提供方。用户明确点击「启用手机互动选项」才补充 API clarify 工具，不自动重启。详见 [互动与恢复](interactive-recovery.md)。
