@@ -390,3 +390,9 @@ App 的做法：SSH 命令通道里跑一个小桥（Hermes 自己的 `hermes_cl
 本机保存后 connect(restart=true) 依次 Inspect → StopHermes → ConfigureHermes → StartHermes → 验证并激活连接。只读前置检查 45 秒超时，接口冷启动重试最多 90 秒；鉴权与能力失败立即报告固定分类，不回显服务响应或凭据。取消／切换连接不强制切回本机。连接锁释放后才等待正式连接完成，避免 ensureRunning 重入死锁。已有未配置／不完整 Hermes 不会被当作可聊天状态。
 
 卸载入口从高级功能移到主页面，保留一次明确范围确认。Python 停止自己记录的 Hermes 进程，再执行 apt-get remove --no-auto-remove -y hermes-agent，不触网、不清理配置／会话／其它服务。manager 核对卸载后的程序检测结果，仍有其它 Hermes 安装时报告未完全移除；保留 App 的连接信息和缓存供重新安装后复用。
+
+### 配对幂等与短重试（0.13.10）
+
+配对配置按差异写入，保留已有 API_SERVER_KEY（非法值拒绝而不替换）和模型凭据。配置未变且健康／认证通过时不重启，必要时通过当前 Profile 的官方 gateway restart 恢复并等待接口；手机最终连接仍由已有完整验连流程确认。SSH 回执仍为旧格式、0600 私有文件，但默认不打印终端；直连旧协议的安装命令仍属于敏感凭据，不是公开配对码。
+
+首次命令压缩并缓存带摘要的标准库助手；后续短重试只传参数并检查缓存摘要。公钥按算法和数据去重，新增授权禁用 agent／X11／PTY，指定公钥撤销不清空 authorized_keys。完整边界和测试见 [配对优化说明](mobile-pairing-review.md)。

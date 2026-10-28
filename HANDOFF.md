@@ -3,6 +3,15 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.13.10-dev 配对优化
+
+- 当前开发包 **0.13.10-dev / code 47**，继续 `codex/simple-install` 与草稿 PR #5。按用户要求直接在安卓 dev 实施，不要求另给服务端仓库。完整行为与局限见 [配对优化说明](docs/mobile-pairing-review.md)。
+- setup/configure.py 保留已有 API Server Key 和所有模型／其它配置；非法旧 Key 或冲突重复配置停止而不轮换。只写差异，公钥按算法与数据去重，保留既有限制；新增授权禁用 agent/X11/PTY。新增 Profile 配对锁与用户授权锁、跨文件写入异常恢复、实际 SSH banner／地址／用户检查、健康与 Bearer 认证检查。服务正常且配置未变不重启，其余通过当前 Profile 的官方 restart 恢复；不使用 --all/--force，不能绕过上游共享实例保护。手机最终通道验连仍独立执行。
+- 首次 Shell 使用 zlib 压缩并保存摘要命名的本地助手，执行过后可复制只带参数的简短重试命令；使用前检查 SHA-256，缓存缺失／被改停止并要求重新执行完整命令。不是 Hermes 原生 mobile pair CLI。SSH 不携带接口 Key，默认不在终端输出敏感回执，保留旧回执格式与安全读取。直连旧协议仍含敏感安装参数，**尚未完成所有连接类型的无密钥公开配对码**；保留不同原 Key／端口时需在手机填原值。不能宣传全部安全短码验收完成。
+- 新增复制指定公钥撤销命令：服务器执行后只删该公钥，现有会话不强制断开；共用私钥的设备会受影响。删 App 连接仍不等于撤销授权。默认／命名 Profile 路径避免二次追加，命名 Profile 需已存在；不自动改变 Gateway 多路复用布局。
+- 最终完整桌面套件 **283 项报告、267 项实际通过、0 失败**；16 项真实 Hermes/OpenSSH IT 未配置未执行。Python 套件 **40 项报告、36 项通过、4 项上游集成跳过**。新增重复运行文件字节／mtime、公钥限制与注释去重、旧 Key 拒绝替换、模型凭据与 Profile 隔离、写入失败恢复、本机真实 HTTP 认证探测、服务管理决策、实际生成 Shell／短助手复用和篡改拒绝、公钥安装／撤销测试。服务进程使用替代／mock，不宣称真实跨平台 Gateway 已启动成功。
+- App 与 Android 自检 APK 编译成功；已检查连接配置页浅／深色截图，按需重启说明可读。开发签名仍为 `d985fcaf…db1dc7`。APK SHA-256：`04828b6816807d366b6012305f78025c25f95c7475b91e934b8ca59a2d003be3`。下载 `/workspace/shared/downloads/hermes-mobile-0.13.10-dev.apk`，留档 `/workspace/hermes-cloud/releases/0.13.10-dev`。没有真实 Termux 手机／用户 Linux 与云服务器端到端验证，不发布 Release 或合并。
+
 ## 现状
 
 - 当前开发包 **0.13.9-dev / code 46**，继续 `codex/simple-install` 与草稿 PR #5，包含已完成的国内源改动。用户新增要求：一键卸载；终端可进入 Hermes 配置但 App 开始聊天一直等待并提示本机接口未就绪，需要将配置纳入引导。截图不足以证明实际手机失败原因，不能宣称真机已修好。
