@@ -3,6 +3,14 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.13.12-dev：直连附加 SSH 的卡片补偿
+
+- 基于已合并 PR #5 的 main 3f4c88f，在 codex/direct-interactive-fix 开发。0.13.11-dev 已发布 GitHub 预发布版本，原 APK 摘要与发布附件一致；不是草稿状态。
+- 用户确认当前直连的文件互通 SSH 已开启。核对 openFileSsh／roomApi 表明这种组合本来就复用 SSH 管理通道，不能把失败直接归因于直连。实际发现 watcher 在 draft 会话上立即返回，绑定正式会话之后不再订阅；未连接完成时也会早退；共享异常静默吞掉。
+- watcher 改为页面打开时等待正式 id 与连接，失败显示一次安全提示并重试；旧协议不支持另行提示。API run 增加独立状态补偿检查，SSE 仍连接也能补 pending_controls；迟到状态仅作用于仍是同一 run 的任务。没有自动启用工具、改服务器配置或重启。
+- 新增真实本机 MINA SSH exec JSON 行桥＋HTTP 直连组合测试，先打开草稿，发送后绑定正式会话，接收并回答共享卡片。桥替代远端 Python 与真实 Gateway，不等同用户设备实测。
+- 完整桌面 291 项报告、275 项实际通过、0 失败，16 项真实 Hermes/OpenSSH IT 未配置；App 构建成功。组合测试单项通过后完整重跑通过。初始测试桥未识别 bash 包装的目录查询导致等待，修正测试桥后通过；源码未改 Python，不重复声称跑过新的上游 Python 集成。APK 0.13.12-dev / code 49，SHA-256 `1e9c1c9332c17aca7b2eedb4c651df764c57d55813ca00988a51dfb16dfee720`，原开发签名 d985fcaf…db1dc7 已核对。下载 /workspace/shared/downloads/hermes-mobile-0.13.12-dev.apk。
+
 ## 0.13.11-dev 互动与后台恢复
 
 - 当前开发包 **0.13.11-dev / code 48**，继续 `codex/simple-install` 与草稿 PR #5。用户报告手机／电脑发起的互动卡片都收不到、后台久置后下拉刷新转圈而切换同一连接马上恢复、模型页错误提示不支持浏览器授权。
