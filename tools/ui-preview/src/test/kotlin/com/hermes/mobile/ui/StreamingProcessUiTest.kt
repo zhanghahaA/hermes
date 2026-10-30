@@ -85,4 +85,42 @@ class StreamingProcessUiTest {
             onNodeWithText("total 42").assertIsDisplayed()
         } finally { scope.cancel() }
     }
+
+    /** 逐字回复时往上翻：新内容不能把正在看的地方往上推；停在底部时照旧跟着新内容走。 */
+    @Test fun scrolledUpReaderIsNotPushedByStreamingButBottomStillFollows() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val base = FakeHermesRepository(scope)
+        base.updateSettings { it.copy(streamReplies = true) }
+        val list = MutableStateFlow<List<ChatItem>>((1..12).map { i ->
+            ChatItem.Message("m$i", i.toLong(), if (i % 2 == 0) Role.Assistant else Role.User, "历史消息 $i")
+        })
+        val paragraphs = (1..30).map { "第 $it 段正在生成的回复内容。" }
+        val text = MutableStateFlow<String?>(paragraphs.joinToString("\n\n"))
+        val repo = object : HermesRepository by base {
+            override fun chatItems(sessionId: String) = list
+            override fun streamingText(sessionId: String) = text
+            override fun runPhase(sessionId: String) = MutableStateFlow(RunPhase.Working)
+        }
+        fun top(label: String) = onNodeWithText(label, substring = true).getUnclippedBoundsInRoot().top.value
+        fun grow(n: Int) {
+            text.value = text.value + (1..n).joinToString("") { "\n\n又生成了一段新的内容 $it。" }
+            waitForIdle()
+        }
+        try {
+            setContent { HermesTheme { ChatScreen(repo, "s-1", {}, {}) } }
+            waitForIdle()
+            // 在底部：跟着新内容走，看得见的内容往上移
+            val label = "第 30 段"
+            val before = top(label)
+            grow(3)
+            assertTrue(top(label) < before - 10, "停在底部时应该跟着新内容走")
+
+            // 往上翻一点（还在这条回复里）：之后再生成，正在看的位置不动
+            onRoot().performTouchInput { swipe(center, center.copy(y = center.y + 300f), durationMillis = 800) }
+            waitForIdle()
+            val reading = top(label)
+            repeat(4) { grow(2) }
+            assertEquals(reading, top(label), 0.5f, "翻上去以后，新内容不能把正在看的内容推走")
+        } finally { scope.cancel() }
+    }
 }

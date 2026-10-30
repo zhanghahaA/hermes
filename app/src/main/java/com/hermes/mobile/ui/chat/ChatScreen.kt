@@ -59,6 +59,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -191,6 +192,19 @@ fun ChatScreen(
     val rows = remember(items, phase, streaming, settings) {
         val visible = items.filter { it !is ChatItem.Activity || settings.showWorkProcess || it.earlierReply.isNotBlank() }
         buildRows(visible, phase, streaming, settings.showTyping).asReversed()
+    }
+
+    // 列表是倒着排的，底部那行（逐字回复、工作过程）长高时只能往上长，会把正在看的内容往上推，和手指对着干。
+    // 停在最底部就跟着新内容走；翻上去了，长高多少就往回补多少，看的内容不动，新内容在下面接着长。
+    val live by rememberUpdatedState(phase != RunPhase.Idle || streaming != null)
+    LaunchedEffect(listState) {
+        var sizes = emptyMap<Any, Int>()
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.associate { it.key to it.size } }.collect { now ->
+            val grown = now.entries.sumOf { (key, size) -> sizes[key]?.let { (size - it).coerceAtLeast(0) } ?: 0 }
+            sizes = now
+            val following = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+            if (grown > 0 && live && !following) listState.dispatchRawDelta(grown.toFloat())
+        }
     }
 
     // 会话内搜索：匹配的行号（列表是倒着的，0 是最新的），从最新的一条往前翻

@@ -12,6 +12,7 @@
 - **新样式**（参照 Claude）：一行摘要“正在处理 · 第 N 步 / 已完成 N 个步骤 · 用时”，展开是带图标和竖线的时间线；工具名翻成中文（`stepTitle`，不认识的照原名），后面一行等宽字体的参数摘要和耗时；点一步展开看完整参数和结果。
   - `WorkStep` 新增 `output`（`tool.completed` 的 preview，服务器已脱敏、≤500 字）和 `durationMs`（`duration` 秒）；`Activity.finishedAt` 用来算总用时。
 - 验证：`ChatFlowTest.processStaysAboveReplyWhenHistoryWindowSlides`（假服务器加了 `messageWindow`）、`runSurvivesAppRestart` 加了位置断言（两个测试在修之前都失败）、`StreamingProcessUiTest` 的收起保持 / 默认收起 / 点开看结果、`WorkActivityTest`。截图 41b–41g。**没在用户手机上实测**；用户说的“偶发跑到下面”是按代码推断的原因，没拿到用户那边的现场。
+- **逐字回复时往上翻会和手指对着干**：列表是 `reverseLayout`，最底下一行（逐字回复、工作过程）长高时底边固定、往上长，把正在看的内容推上去。`ChatScreen` 现在盯着可见行的高度：停在最底部（第 0 行、偏移 0）照旧跟随；翻上去了且这一轮还在进行，长高多少就 `dispatchRawDelta` 补回多少（拖动中也能补）。`StreamingProcessUiTest.scrolledUpReaderIsNotPushedByStreamingButBottomStillFollows` 覆盖两种情况，修之前正在看的内容会被推走 256dp。
 - `tools/it-env/ensure_env.sh`：假模型没在跑时，`( … & )` 的写法会让 bash 把子 shell 直接变成假模型进程，脚本一直等它退出、IT 永远不开始。改成 `( … exec … ) &` + `disown`。
 
 ## 0.13.13：文件改为原样上传（不再贴内容、不再 PDF 转图）
