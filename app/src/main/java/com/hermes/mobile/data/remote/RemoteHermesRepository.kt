@@ -914,7 +914,7 @@ class RemoteHermesRepository(
 
     override fun chatItems(sessionId: String): Flow<List<ChatItem>> = flow {
         coroutineScope {
-            val watcher = launch { watchSharedControls(resolve(sessionId)) }
+            val watcher = launch { watchSharedControls(sessionId) }
             try { emitAll(chatItemsOnly(sessionId)) }
             finally { watcher.cancel() }
         }
@@ -923,11 +923,26 @@ class RemoteHermesRepository(
     private data class SharedControl(val sessionId: String, val profile: String, val feed: SessionControlFeed)
     private val sharedControls = ConcurrentHashMap<String, SharedControl>()
 
-    private suspend fun watchSharedControls(sessionId: String) {
-        if (sessionId.startsWith(DraftPrefix)) return
+    private suspend fun watchSharedControls(uiSessionId: String) {
         val connection = _activeConnectionId.value
+        var reported = false
         while (_activeConnectionId.value == connection) {
-            val api = roomApi() as? RoomClient ?: return
+            val sessionId = resolve(uiSessionId)
+            if (sessionId.startsWith(DraftPrefix) || _connectionState.value !is ConnectionState.Connected) {
+                delay(300)
+                continue
+            }
+            val api = roomApi() as? RoomClient
+            if (api == null) {
+                val profile = _connections.value.firstOrNull { it.id == connection }
+                if (profile?.sshUser.isNullOrBlank()) return
+                if (!reported) {
+                    _errors.tryEmit("互动卡片同步尚未连接 SSH；请检查当前连接的 SSH 设置。")
+                    reported = true
+                }
+                delay(3000)
+                continue
+            }
             val profile = _activeBot.value ?: "default"
             val feed = SessionControlFeed(api::call)
             try {
@@ -953,8 +968,16 @@ class RemoteHermesRepository(
                     }
                 }
             } catch (e: CancellationException) { throw e }
-            catch (_: HermesError.NotSupported) { return }
-            catch (_: Exception) { /* 旧版／暂时断连继续使用 API 卡片；恢复后重新获取快照。 */ }
+            catch (_: HermesError.NotSupported) {
+                _errors.tryEmit("当前 Hermes 未提供共享互动卡片接口；手机任务仍使用 API 事件，请确认服务版本与追问工具配置。")
+                return
+            }
+            catch (_: Exception) {
+                if (!reported) {
+                    _errors.tryEmit("互动卡片同步暂时失败，正在重试 SSH／Gateway；普通聊天不受影响。")
+                    reported = true
+                }
+            }
             delay(3000)
         }
     }
@@ -1428,6 +1451,14 @@ class RemoteHermesRepository(
                 local = st.local + LocalEntry(activity, st.messageCount, runId))
         }
         runScope.launch { follow(run) }
+        // SSE 长连接可能还活着却漏掉了控制事件；状态接口作为独立补偿，不依赖 SSH。
+        runScope.launch {
+            while (runs[sessionId] === run) {
+                delay(2500)
+                val current = client ?: continue
+                if (runs[sessionId] === run) settleFromStatus(run, current)
+            }
+        }
     }
 
     /** App 被杀之前还没等到结果的轮次：重新订阅（服务器会从头补发事件），或者直接拿最终结果。 */
@@ -1483,6 +1514,7 @@ class RemoteHermesRepository(
         } catch (e: HermesError) {
             return false
         }
+        if (runs[run.sessionId] !== run) return true
         when (status.status) {
             "completed" -> complete(run, status.output.orEmpty(), status.pending_steer?.takeIf { it.isNotBlank() })
             "failed" -> end(run, status.error ?: "Hermes 处理失败")

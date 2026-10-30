@@ -215,6 +215,38 @@ class SshTunnelTest {
     }
 
     @Test
+    fun directChatWithSshReceivesSharedCardsAfterDraftBecomesRealSession() = runBlocking {
+        val hermes = hermes()
+        val requests = java.util.concurrent.CopyOnWriteArrayList<kotlinx.serialization.json.JsonObject>()
+        val ssh = sshd(TestSshServer(authorizedKey = keys.publicKey).also {
+            it.sshd.commandFactory = org.apache.sshd.server.command.CommandFactory { _, command -> InteractiveGatewayCommand(command, requests) }
+        })
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes).copy(type = ConnectionType.Direct), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        assertNotNull(repo.roomApi(), "直连附加 SSH 也应提供 Gateway 通道")
+        val draft = assertNotNull(repo.createSession())
+        val received = kotlinx.coroutines.CompletableDeferred<ChatItem.Clarify>()
+        val collecting = launch {
+            repo.chatItems(draft).collect { items ->
+                items.filterIsInstance<ChatItem.Clarify>().firstOrNull()?.let { received.complete(it) }
+            }
+        }
+        try {
+            kotlinx.coroutines.delay(400)
+            repo.sendMessage(draft, "普通测试消息", emptyList())
+            val card = try { withTimeout(10_000) { received.await() } }
+            catch (e: Exception) { throw AssertionError("未收到卡片，RPC=" + requests.map { it["method"] } + "，连接=" + repo.connectionState.value, e) }
+            assertEquals(listOf("甲", "乙"), card.options)
+            repo.answerClarify(draft, card.id, "甲")
+            withTimeout(5000) {
+                while (requests.none { it["method"].toString() == "\"clarify.respond\"" }) kotlinx.coroutines.delay(20)
+            }
+            assertTrue(requests.any { it["method"].toString() == "\"session.resume\"" })
+        } finally { collecting.cancel(); collecting.join() }
+    }
+
+    @Test
     fun otherFilesAreUploadedOverSftp() {
         val hermes = hermes()
         val ssh = sshd()
