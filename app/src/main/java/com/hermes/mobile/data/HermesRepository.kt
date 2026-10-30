@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 
 /**
@@ -104,6 +105,9 @@ interface HermesRepository {
     val models: StateFlow<List<ModelOption>>
     val defaultModelId: StateFlow<String>
     fun setSessionModel(sessionId: String, modelId: String)
+    /** 这个对话的推理强度（见 [com.hermes.mobile.data.model.ReasoningEfforts]），null 是跟随 Hermes 配置。 */
+    fun reasoningEffort(sessionId: String): Flow<String?> = flowOf(null)
+    fun setReasoningEffort(sessionId: String, effort: String?) = Unit
     fun setDefaultModel(modelId: String)
     val skills: StateFlow<List<Skill>>
     /** 读技能列表出错时的说明（有的 Hermes 版本这个接口本身有问题）。 */

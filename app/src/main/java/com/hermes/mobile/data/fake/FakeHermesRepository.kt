@@ -287,6 +287,14 @@ class FakeHermesRepository(
         _defaultModelId.value = modelId
     }
 
+    private val efforts = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    override fun reasoningEffort(sessionId: String): Flow<String?> = efforts.map { it[sessionId] }
+
+    override fun setReasoningEffort(sessionId: String, effort: String?) {
+        efforts.update { if (effort == null) it - sessionId else it + (sessionId to effort) }
+    }
+
     private val _skills = MutableStateFlow(SampleData.skills)
     override val skills: StateFlow<List<Skill>> = _skills.asStateFlow()
 

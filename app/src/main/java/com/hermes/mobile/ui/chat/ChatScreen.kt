@@ -71,6 +71,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
+import com.hermes.mobile.data.model.reasoningEffortLabel
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.Draft
@@ -158,6 +159,7 @@ fun ChatScreen(
     val settings by repository.settings.collectAsState()
     val models by repository.models.collectAsState()
     val features by repository.features.collectAsState()
+    val effort by remember(sessionId) { repository.reasoningEffort(sessionId) }.collectAsState(initial = null)
 
     // 草稿存在仓库里：退出聊天再进来、甚至重启 App，输入框里的字还在
     val savedDraft = remember(sessionId) { repository.draft(sessionId) }
@@ -303,6 +305,7 @@ fun ChatScreen(
                     )
                 } else ChatTopBar(
                     session = session,
+                    effort = effort,
                     phase = phase,
                     onBack = onBack,
                     onModelClick = { if (session?.readOnly == false) showModels = true },
@@ -433,6 +436,8 @@ fun ChatScreen(
                 showModels = false
             },
             onDismiss = { showModels = false },
+            effort = effort,
+            onEffort = { repository.setReasoningEffort(sessionId, it) },
         )
     }
 
@@ -636,6 +641,7 @@ private fun NewChatHint(modifier: Modifier = Modifier) {
 @Composable
 private fun ChatTopBar(
     session: Session?,
+    effort: String?,
     phase: RunPhase,
     onBack: () -> Unit,
     onModelClick: () -> Unit,
@@ -673,7 +679,7 @@ private fun ChatTopBar(
                                 current == RunPhase.AwaitingInput -> Subtitle("等待你的确认", MaterialTheme.colorScheme.tertiary)
                                 session?.readOnly == true -> Subtitle("${session.source.label} 会话 · 只读", MaterialTheme.colorScheme.onSurfaceVariant)
                                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Subtitle(session?.model ?: "默认模型", MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Subtitle(listOfNotNull(session?.model ?: "默认模型", reasoningEffortLabel(effort)?.let { "推理$it" }).joinToString(" · "), MaterialTheme.colorScheme.onSurfaceVariant)
                                     Icon(
                                         Icons.Rounded.ExpandMore,
                                         contentDescription = "切换模型",

@@ -3,6 +3,18 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.13.15：gateway 断线自动恢复、推理强度、模型分组折叠
+
+- **“和 Hermes gateway 的连接断了”一直出现、刷新没用**（Bot 页和聊天页的“互动卡片同步暂时失败”是同一个原因）：`RoomClient` 只在通道有退出码时才重开，
+  而 SSH 底层断掉（息屏、换网络）时服务器发不回退出码，死通道被一直复用，写失败后也只关不清。现在读线程结束、写失败、45 秒没回音都把通道标成死的，下次调用重开。
+  只有“连接设置 → 检查并连接”能恢复的现象应该没了。`RoomClientReconnectTest` 用一个永远不给退出码的假桥复现（修之前两个用例都失败）。**没在用户手机上验证。**
+- **推理强度**：每个对话单独选（默认 / 关闭 / 低 / 中 / 高 / 极高），存在手机上（`StoredState.sessionEfforts`，键和 `sessionModels` 一样），
+  每一轮 `/v1/runs` 带 `model_options: {"reasoning_effort": …}`，不改服务器配置。草稿里选的在建好会话时搬过去。`/api/model/options` 的
+  `capabilities[model].reasoning == false` 时面板不显示这一排。标题栏模型名后面显示“推理高”之类。
+- **模型按提供方折叠**：默认只展开当前模型那组（只有一组时展开），收起的组显示“N 个模型 · 正在用 …”，搜索时全部展开。能力页同一个列表也一样。
+- **电脑上的会话在手机上只能分叉**：不是 App 改出来的。Hermes 的 API 只允许继续来源是 `api_server` / `bot_room` 的会话（`gateway/session_api_turn.py`），
+  电脑端 / TUI 建的会话来源是 `desktop`，提交返回 409 `permission_denied`，App 照旧标只读、提供分叉。要从手机接着聊得改成像电脑端那样经 gateway 发消息，还没做，等用户决定。
+
 ## 0.13.14：工作过程改成时间线样式，修两处显示问题
 
 - **收起状态记住了**：以前用 `rememberSaveable`，离开聊天页再进来就又展开。现在记在 `WorkProcessFolds`（内存，和工作过程本身同生命周期）。没点过时：进行中展开、结束后收起。

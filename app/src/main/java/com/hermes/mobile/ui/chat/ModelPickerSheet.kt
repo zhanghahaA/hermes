@@ -1,6 +1,17 @@
 package com.hermes.mobile.ui.chat
 
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material3.FilterChip
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import com.hermes.mobile.data.model.ReasoningEfforts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,37 +49,87 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.model.ModelOption
 import com.hermes.mobile.ui.components.IconBadge
-import com.hermes.mobile.ui.components.SectionHeader
 import com.hermes.mobile.ui.components.TagLabel
 
+/**
+ * 切换模型的底部面板。[onEffort] 不为空时上面多一排“推理强度”（只对这个对话生效，随每一轮请求带给 Hermes）；
+ * 当前模型 Hermes 说不支持推理时不显示。
+ */
 @Composable
 fun ModelPickerSheet(
     models: List<ModelOption>,
     selectedName: String?,
     onSelect: (ModelOption) -> Unit,
     onDismiss: () -> Unit,
+    effort: String? = null,
+    onEffort: ((String?) -> Unit)? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        ModelPickerContent(
-            models = models,
-            isSelected = { it.model == selectedName || it.name == selectedName },
-            onSelect = onSelect,
-            header = {
-                item(key = "title") {
-                    Column(Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
-                        Text("切换模型", style = MaterialTheme.typography.titleLarge)
-                        Text("只对这个对话生效", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
+        ModelSheetBody(models, selectedName, onSelect, effort, onEffort, Modifier.navigationBarsPadding())
+    }
+}
+
+/** [ModelPickerSheet] 里面的内容（预览截图也用它）。 */
+@Composable
+fun ModelSheetBody(
+    models: List<ModelOption>,
+    selectedName: String?,
+    onSelect: (ModelOption) -> Unit,
+    effort: String? = null,
+    onEffort: ((String?) -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    val isSelected: (ModelOption) -> Boolean = { it.model == selectedName || it.name == selectedName }
+    val current = models.firstOrNull(isSelected)
+    ModelPickerContent(
+        models = models,
+        isSelected = isSelected,
+        onSelect = onSelect,
+        header = {
+            item(key = "title") {
+                Column(Modifier.padding(horizontal = 24.dp, vertical = 4.dp)) {
+                    Text("切换模型", style = MaterialTheme.typography.titleLarge)
+                    Text("只对这个对话生效", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            },
-            modifier = Modifier.navigationBarsPadding(),
+            }
+            if (onEffort != null && current?.reasoning != false) {
+                item(key = "effort") { EffortRow(effort, onEffort) }
+            }
+        },
+        modifier = modifier,
+    )
+}
+
+/** 推理强度：默认 / 关闭 / 低 / 中 / 高 / 极高，横向一排可以滑。 */
+@Composable
+private fun EffortRow(effort: String?, onEffort: (String?) -> Unit) {
+    Column(Modifier.padding(top = 12.dp, bottom = 4.dp)) {
+        Text("推理强度", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(horizontal = 24.dp))
+        Text(
+            "越高想得越久、越费 token；「默认」用 Hermes 配置里的设置",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 2.dp),
         )
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ReasoningEfforts.forEach { (value, label) ->
+                FilterChip(
+                    selected = effort == value,
+                    onClick = { onEffort(value) },
+                    label = { Text(label) },
+                    modifier = Modifier.testTag("effort-${value ?: "default"}"),
+                )
+            }
+        }
     }
 }
 
 /**
  * 按 Provider 分组、可以搜索的模型列表（一家 Provider 可能有上百个模型，所以是懒加载列表）。
  * 底部面板和“能力”页共用；[header] 放在列表最上面。
+ * 每组可以折叠：默认只展开当前模型所在的那组（只有一组时展开）；搜索时全部展开。
  */
 @Composable
 fun ModelPickerContent(
@@ -84,6 +145,10 @@ fun ModelPickerContent(
         if (query.isBlank()) models
         else models.filter { it.name.contains(query.trim(), true) || it.provider.contains(query.trim(), true) }
     }
+    val groups = remember(shown) { shown.groupBy { it.provider } }
+    val opened = remember { mutableStateMapOf<String, Boolean>() }
+    fun isOpen(provider: String, group: List<ModelOption>): Boolean =
+        query.isNotBlank() || (opened[provider] ?: (groups.size == 1 || group.any(isSelected)))
     LazyColumn(modifier, contentPadding = contentPadding) {
         header()
         if (models.size > 8) {
@@ -111,9 +176,12 @@ fun ModelPickerContent(
                 )
             }
         }
-        shown.groupBy { it.provider }.forEach { (provider, group) ->
-            item(key = "h-$provider") { SectionHeader(provider, Modifier.padding(start = 4.dp)) }
-            items(group, key = { it.id }) { model ->
+        groups.forEach { (provider, group) ->
+            val open = isOpen(provider, group)
+            item(key = "h-$provider") {
+                ProviderHeader(provider, group, open, current = group.firstOrNull(isSelected)) { opened[provider] = !open }
+            }
+            if (open) items(group, key = { it.id }) { model ->
                 val selected = isSelected(model)
                 Row(
                     Modifier
@@ -137,6 +205,34 @@ fun ModelPickerContent(
                 }
             }
         }
+    }
+}
+
+/** 一组的标题：Provider 名、几个模型（收起时顺带显示选中的是哪个），点一下展开 / 收起。 */
+@Composable
+private fun ProviderHeader(provider: String, group: List<ModelOption>, open: Boolean, current: ModelOption?, onToggle: () -> Unit) {
+    val turn by animateFloatAsState(if (open) 90f else 0f, label = "provider-chevron")
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .semantics { stateDescription = if (open) "已展开" else "已收起" }
+            .testTag("provider-$provider")
+            .padding(start = 24.dp, end = 16.dp, top = 14.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(provider, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            Text(
+                if (!open && current != null) "${group.size} 个模型 · 正在用 ${current.name}" else "${group.size} 个模型",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Icon(
+            Icons.Rounded.ChevronRight, if (open) "收起 $provider" else "展开 $provider",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.rotate(turn),
+        )
     }
 }
 

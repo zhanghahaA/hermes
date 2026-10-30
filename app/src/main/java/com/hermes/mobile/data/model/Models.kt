@@ -251,7 +251,16 @@ data class ModelOption(
     val note: String? = null,
     val model: String = name,
     val providerSlug: String = provider,
+    /** Hermes 说这个模型支持推理强度（不知道时当作支持：对不支持的模型 Hermes 会忽略这个参数）。 */
+    val reasoning: Boolean = true,
 )
+
+/** 推理强度：发给 Hermes 的值 → 界面上的字。null 是跟随 Hermes 配置。 */
+val ReasoningEfforts: List<Pair<String?, String>> = listOf(
+    null to "默认", "none" to "关闭", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高",
+)
+
+fun reasoningEffortLabel(effort: String?): String? = ReasoningEfforts.firstOrNull { it.first == effort && effort != null }?.second
 
 data class Skill(val name: String, val description: String, val category: String) {
     /** 在新对话里指定用这个技能时，预先写进输入框的话。 */

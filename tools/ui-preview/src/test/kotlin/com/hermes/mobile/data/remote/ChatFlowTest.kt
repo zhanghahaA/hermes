@@ -167,6 +167,25 @@ class ChatFlowTest {
         assertTrue(runBlocking { repo.chatItems("s1").first() }.filterIsInstance<ChatItem.Activity>().single().steps.isEmpty(), "重新打开不能恢复刚清掉的思考")
     }
 
+    /** 推理强度只存在手机上，每一轮随请求带给 Hermes；草稿里选的在建好会话后照样生效，换回“默认”就不带。 */
+    @Test fun reasoningEffortIsSentWithEachRunIncludingDrafts() {
+        val s = server()
+        val repo = connected(s)
+        val draft = assertNotNull(repo.createSession())
+        repo.setReasoningEffort(draft, "high")
+        assertEquals("high", runBlocking { repo.reasoningEffort(draft).first() })
+        repo.sendMessage(draft, "想深一点", emptyList())
+        repo.runPhase(draft).await("回到空闲") { it == RunPhase.Idle }
+        fun runBodies() = s.requests.filter { it.path == "/v1/runs" }.map { it.body.clone().readUtf8() }
+        assertTrue(runBodies().single().contains("\"model_options\":{\"reasoning_effort\":\"high\"}"), runBodies().single())
+        assertEquals("high", runBlocking { repo.reasoningEffort("new1").first() }, "草稿的选择搬到正式会话上")
+
+        repo.setReasoningEffort(draft, null)
+        repo.sendMessage(draft, "这次随便", emptyList())
+        repo.chatItems(draft).await("第二轮回复") { list -> list.texts().any { it.second == "最终回复：这次随便" } }
+        assertTrue(runBodies().last().let { "model_options" !in it }, "默认时不带：${runBodies().last()}")
+    }
+
     /** 长对话：Hermes 只返回最近 N 条，这一轮里前面的消息滑出去了，工作过程仍要在这一轮的回复上面。 */
     @Test fun processStaysAboveReplyWhenHistoryWindowSlides() {
         val s = server()

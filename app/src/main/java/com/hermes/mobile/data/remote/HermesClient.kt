@@ -148,6 +148,7 @@ class HermesClient(
         model: String? = null,
         provider: String? = null,
         workspace: String? = null,
+        reasoningEffort: String? = null,
     ): RunAcceptedDto {
         val body = patch {
             put("input", input)
@@ -155,6 +156,8 @@ class HermesClient(
             // 这一轮用哪个模型。/v1/runs 不读会话上锁定的模型，不带就是 Hermes 的默认模型
             if (model != null) put("model", model)
             if (provider != null) put("provider", provider)
+            // 推理强度只对这一轮生效（Hermes 认 none / low / medium / high / xhigh …，不认识的值忽略）
+            if (reasoningEffort != null) put("model_options", buildJsonObject { put("reasoning_effort", reasoningEffort) })
             // 只对这一轮生效的补充系统提示（Hermes 叫 ephemeral system prompt），不进聊天记录
             if (instructions != null) put("instructions", instructions)
         }

@@ -16,6 +16,7 @@ import com.hermes.mobile.data.model.imageCount
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import java.io.File
@@ -72,6 +73,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flow
@@ -1330,8 +1332,10 @@ class RemoteHermesRepository(
             val workspace = _sessionGroups.value.folders[sessionId]
             val instructions = ClientInstructions + skillCommandNote(out.text).orEmpty() + workspace?.let(::workspaceNote).orEmpty()
             val (model, provider) = chosenModel(sessionId)
+            val effort = state.value.sessionEfforts[sessionModelKey(sessionId)]
             val accepted = withRetry {
-                c.startRun(sessionId, input, idempotencyKey = localId, instructions = instructions, model = model, provider = provider, workspace = workspace)
+                c.startRun(sessionId, input, idempotencyKey = localId, instructions = instructions, model = model, provider = provider,
+                    workspace = workspace, reasoningEffort = effort)
             }
             val runId = accepted.run_id ?: throw HermesError.NotHermes()
             outbox.remove(localId)
@@ -1896,6 +1900,7 @@ class RemoteHermesRepository(
                         note = if (current) "Hermes 默认" else null,
                         model = m,
                         providerSlug = p.slug,
+                        reasoning = ((p.capabilities?.get(m) as? JsonObject)?.get("reasoning") as? JsonPrimitive)?.booleanOrNull != false,
                     )
                 }
             }
@@ -1929,6 +1934,16 @@ class RemoteHermesRepository(
 
     private fun sessionModelKey(sessionId: String) = "${scopeId.orEmpty()}/$sessionId"
 
+    override fun reasoningEffort(sessionId: String): Flow<String?> =
+        combine(state, aliases) { st, al -> st.sessionEfforts[sessionModelKey(al[sessionId] ?: sessionId)] }.distinctUntilChanged()
+
+    /** 推理强度只存在手机上，每一轮随请求带给 Hermes（不改服务器配置）。草稿的会在建好会话时搬过去。 */
+    override fun setReasoningEffort(sessionId: String, effort: String?) {
+        if (connectedId == null) return
+        val key = sessionModelKey(resolve(sessionId))
+        persist { st -> st.copy(sessionEfforts = if (effort == null) st.sessionEfforts - key else st.sessionEfforts + (key to effort)) }
+    }
+
     private fun rememberSessionModel(sessionId: String, option: ModelOption) {
         if (connectedId == null) return
         persist { st -> st.copy(sessionModels = st.sessionModels + (sessionModelKey(sessionId) to option.id)) }
@@ -1955,6 +1970,10 @@ class RemoteHermesRepository(
 
     /** 新会话刚在服务器上建好：把草稿时选的模型（或手机上设的默认模型）锁上。 */
     private suspend fun applyInitialModel(draftId: String, sessionId: String) {
+        val draftKey = sessionModelKey(draftId)
+        state.value.sessionEfforts[draftKey]?.let { effort ->
+            persist { st -> st.copy(sessionEfforts = st.sessionEfforts - draftKey + (sessionModelKey(sessionId) to effort)) }
+        }
         val choice = pendingModels.remove(draftId) ?: appDefaultModel()?.takeIf { it.id != serverDefaultModel } ?: return
         rememberSessionModel(sessionId, choice)
         try {

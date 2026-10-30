@@ -166,7 +166,7 @@ private val scenes = listOf(
     Scene("08-chat-readonly") { repo, _ -> ChatScreen(repo, "s-4", onBack = {}, onOpenChat = {}) },
     Scene("09-sheet-model") { repo, _ ->
         SheetOver({ ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) }) {
-            ModelPickerContent(SampleData.models, isSelected = { it.name == "Claude Sonnet" }, onSelect = {})
+            com.hermes.mobile.ui.chat.ModelSheetBody(SampleData.models, selectedName = "Claude Sonnet", onSelect = {}, effort = "high", onEffort = {})
         }
     },
     Scene("10-sheet-attach") { repo, _ ->

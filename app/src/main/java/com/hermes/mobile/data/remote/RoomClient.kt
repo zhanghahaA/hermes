@@ -52,18 +52,25 @@ data class RoomLog(val events: List<RoomEvent>, val latestSeq: Long, val hasMore
  * 经 SSH 连 Hermes gateway 的群聊（hosted rooms）。群聊的每一轮都在 gateway 里跑，
  * 这里只是把 `groups.*` JSON-RPC 请求一行一行写给服务器上的小桥（[HermesAdmin.GroupBridgeScript]），
  * 桥用本机控制 socket 换票据连上 gateway 的 `/api/ws`，和电脑版、TUI 用的是同一个接口。
+ * 互动卡片同步（[SessionControlFeed]）也走这条通道。
  * 一条 SSH 通道一直开着；断了下次调用时重新开。
  */
 class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.io.Closeable {
     private val lock = Mutex()
     @Volatile private var stream: RemoteStream? = null
+    /**
+     * 当前通道还活着。SSH 底层断掉（息屏、换网络）时服务器发不回退出码，`exitCode` 一直是 null，
+     * 只看它会把死通道一直拿来用，每次都报“连接断了”、刷新也没用。读线程结束、写失败、等回复超时都算死。
+     */
+    @Volatile private var alive = false
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonObject>>()
     private val ids = AtomicLong()
 
     /** 拿到能用的通道：没有或已经断了就新开一条，等桥说 ready。 */
     private suspend fun channel(): RemoteStream = lock.withLock {
-        stream?.takeIf { it.exitCode == null }?.let { return it }
+        stream?.takeIf { alive && it.exitCode == null }?.let { return it }
         stream?.let { runCatching { it.close() } }
+        stream = null
         val s = open()
         val ready = CompletableDeferred<JsonObject>()
         val reader = Thread({
@@ -79,6 +86,7 @@ class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.i
                 }
             } catch (_: Exception) {
             } finally {
+                if (stream === s) alive = false
                 val gone = AdminException("和 Hermes gateway 的连接断了")
                 ready.completeExceptionally(gone)
                 pending.values.forEach { it.completeExceptionally(gone) }
@@ -99,7 +107,14 @@ class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.i
             throw AdminException((hello["error"] as? JsonPrimitive)?.contentOrNull ?: "连不上 Hermes 的群聊服务")
         }
         stream = s
+        alive = true
         s
+    }
+
+    /** 这条通道不能再用了：下次调用重新开。 */
+    private fun drop(s: RemoteStream) {
+        if (stream === s) alive = false
+        runCatching { s.close() }
     }
 
     internal suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap())): JsonObject {
@@ -121,11 +136,15 @@ class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.i
             }
         } catch (e: Exception) {
             pending.remove(id)
-            runCatching { s.close() }
+            drop(s)
             throw AdminException("和 Hermes gateway 的连接断了")
         }
         val reply = try {
             withTimeout(45_000) { answer.await() }
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            // 一直没回音多半是底层连接已经半死不活了，换一条
+            drop(s)
+            throw AdminException("Hermes gateway 45 秒没有回应，下次会重新连接")
         } finally {
             pending.remove(id)
         }

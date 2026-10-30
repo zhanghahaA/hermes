@@ -153,6 +153,9 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 
 - 并发上限 429、gateway 繁忙 503（带 `Retry-After`）：按服务器给的时间退避重试。
 - 不允许从 API 继续的会话：提交返回 409 `permission_denied` → App 把会话标为只读，提供“分叉后继续”。
+  现在的 Hermes 只放行来源是 `api_server` / `bot_room` 的会话；电脑端 / TUI 建的会话（来源 `desktop` 等）都会被拒。
+- 推理强度：`/v1/runs` 请求体里 `model_options: {"reasoning_effort": "none|low|medium|high|xhigh"}`，只对这一轮生效（`none` 等于关闭推理，不认识的值忽略）。
+  `/api/model/options` 每个 Provider 的 `capabilities[模型].reasoning` 为 false 时这个模型没有推理强度可调。
   409 `session_active_turn`：这个会话正在别处回复，提示稍后再发。
 - 分叉 `POST /api/sessions/{id}/fork {"title"?}` → 201，复制整个会话（不能只复制到某条消息）。
 
