@@ -107,17 +107,32 @@ class SshTunnel(
      * 把手机上的文件传到服务器的 `~/hermes-uploads/` 下（文件名前加时间，避免覆盖），返回服务器上的绝对路径。
      * 连接断了会先重连一次。
      */
-    fun upload(localPath: String, name: String): String {
+    /**
+     * 把本机文件经 SFTP 传到服务器的 [dir]（`~/…` 是相对 SSH 登录用户的主目录；为空用 `~/hermes-uploads`），
+     * 文件夹不存在就建。保留原文件名，重名时加序号：`config.yaml`、`config (1).yaml`……返回服务器上的绝对路径。
+     */
+    fun upload(localPath: String, name: String, dir: String? = null): String {
         fun once(): String = session().newSFTPClient().use { sftp ->
-            val dir = sftp.canonicalize(".").trimEnd('/') + "/hermes-uploads"
-            sftp.mkdirs(dir)
-            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(java.util.Date())
+            val home = sftp.canonicalize(".").trimEnd('/')
+            val wanted = dir?.trim()?.takeIf { it.isNotEmpty() } ?: "~/hermes-uploads"
+            val target = when {
+                wanted == "~" -> home
+                wanted.startsWith("~/") -> home + "/" + wanted.removePrefix("~/").trimEnd('/')
+                wanted.startsWith("/") -> wanted.trimEnd('/').ifEmpty { "/" }
+                else -> home + "/" + wanted.trimEnd('/')
+            }
+            sftp.mkdirs(target)
             val source = net.schmizz.sshj.xfer.FileSystemFile(localPath)
+            fun put(fileName: String): String {
+                val path = freePath(sftp, target, fileName)
+                sftp.put(source, path)
+                return path
+            }
             try {
-                "$dir/$stamp-${safeName(name)}".also { sftp.put(source, it) }
+                put(safeName(name))
             } catch (e: net.schmizz.sshj.sftp.SFTPException) {
                 // 有的 SFTP 服务器不接受中文、空格等文件名，换成纯 ASCII 再试一次（保留扩展名）
-                "$dir/$stamp-${asciiName(name)}".also { sftp.put(source, it) }
+                put(asciiName(name))
             }
         }
         return try {
@@ -125,6 +140,19 @@ class SshTunnel(
         } catch (e: IOException) {
             reset()
             once()
+        }
+    }
+
+    /** [dir] 里还没被占用的文件名：先用原名，有了就加 (1)、(2)……（加在扩展名前面）。 */
+    private fun freePath(sftp: net.schmizz.sshj.sftp.SFTPClient, dir: String, fileName: String): String {
+        val dot = fileName.lastIndexOf('.').takeIf { it > 0 } ?: fileName.length
+        val base = fileName.substring(0, dot)
+        val ext = fileName.substring(dot)
+        var n = 0
+        while (true) {
+            val candidate = "$dir/" + (if (n == 0) fileName else "$base ($n)$ext")
+            if (sftp.statExistence(candidate) == null) return candidate
+            n++
         }
     }
 

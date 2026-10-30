@@ -63,4 +63,28 @@ class ConnectionEditorTest {
             scope.cancel()
         }
     }
+
+    /** 高级设置里能填文件上传位置，保存进连接；不填就是空（用默认的 ~/hermes-uploads）。 */
+    @Test
+    fun uploadFolderIsSaved() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val repo = RecordingRepo(scope)
+            setContent {
+                HermesTheme {
+                    CompositionLocalProvider(LocalShowMessage provides {}) {
+                        ConnectionEditorScreen(repo, connectionId = null, initialType = "Ssh", onClose = {})
+                    }
+                }
+            }
+            onNodeWithText("SSH 主机").performTextInput("example.invalid")
+            onNodeWithText("用户名").performTextInput("test-user")
+            onNodeWithText("高级设置／已有密钥").performClick()
+            onNodeWithText("文件上传位置").performScrollTo().performTextInput("/data/inbox/")
+            onNodeWithText("保存").performClick()
+            assertEquals("/data/inbox", assertNotNull(repo.saved).first.uploadDir, "去掉末尾的 /")
+        } finally {
+            scope.cancel()
+        }
+    }
 }

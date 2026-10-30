@@ -221,11 +221,11 @@ fun ChatScreen(
         var accepted = added
         if (!repository.canSendAnyFile() && accepted.any { it is Attachment.BinaryFile }) {
             accepted = accepted.filterNot { it is Attachment.BinaryFile }
-            showMessage("直连和 HTTPS 只能发图片、PDF 和文本类文件；其它文件需要 SSH 或本机 Termux 连接")
+            showMessage("这个连接没有 SSH，发不了文件（Hermes 的接口只收文字和图片）。在连接设置里打开 SSH 或「文件互通」后再发")
         }
         val room = MaxImagesPerMessage - attachments.imageCount()
         if (accepted.imageCount() > room) {
-            showMessage("一条消息最多 $MaxImagesPerMessage 张图片（PDF 每页算一张）")
+            showMessage("一条消息最多 $MaxImagesPerMessage 张图片")
             var left = room
             accepted = accepted.filter { a ->
                 val n = listOf(a).imageCount()

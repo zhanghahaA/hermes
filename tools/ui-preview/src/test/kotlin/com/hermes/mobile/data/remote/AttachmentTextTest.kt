@@ -6,11 +6,11 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AttachmentTextTest {
+    /** 以前的版本把文本文件内容放进代码块、PDF 转成图片；那样的旧消息还要能拆回文件卡片。 */
     @Test
-    fun textFileRoundTripsEvenWithFencesInside() {
+    fun legacyInlineFilesStillParse() {
         val content = "第一行\n```kotlin\nval x = 1\n```\n最后"
-        val message = "帮我看看\n\n" + AttachmentText.textFile("notes.md", content) + "\n\n" + AttachmentText.pdf("报告.pdf", 12, 8)
-        assertTrue(message.contains("````markdown"), "内容里有 ```，围栏要更长：$message")
+        val message = "帮我看看\n\n📎 附件：notes.md\n````markdown\n$content\n````\n\n📎 附件：报告.pdf（共 12 页，前 8 页已转成图片附在后面）"
         val (text, files) = AttachmentText.parse(message)
         assertEquals("帮我看看", text)
         assertEquals(listOf("notes.md", "报告.pdf"), files.map { it.name })
@@ -20,9 +20,11 @@ class AttachmentTextTest {
 
     @Test
     fun uploadedFileShowsFriendlyNote() {
-        val (text, files) = AttachmentText.parse("看这个\n\n" + AttachmentText.uploaded("a.zip", "/home/me/hermes-uploads/20261018-a.zip"))
+        val (text, files) = AttachmentText.parse("看这个\n\n" + AttachmentText.uploaded("config.yaml", "/home/me/hermes-uploads/config.yaml"))
         assertEquals("看这个", text)
-        assertEquals("已上传：/home/me/hermes-uploads/20261018-a.zip", files.single().note)
+        assertEquals("config.yaml", files.single().name)
+        assertEquals("已上传：/home/me/hermes-uploads/config.yaml", files.single().note)
+        assertEquals("/home/me/hermes-uploads/config.yaml", files.single().remotePath, "点开时经 SSH 下载这个文件")
     }
 
     @Test
@@ -92,7 +94,7 @@ class AttachmentTextTest {
 
     @Test
     fun sentTextFilesKeepTheirContentForOpening() {
-        val (_, files) = AttachmentText.parse("看\n\n" + AttachmentText.textFile("a.csv", "x,y\n1,2"))
+        val (_, files) = AttachmentText.parse("看\n\n📎 附件：a.csv\n```csv\nx,y\n1,2\n```")
         assertEquals("x,y\n1,2", files.single().inlineText)
     }
 

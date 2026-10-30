@@ -182,20 +182,6 @@ fun AttachmentRow(attachments: List<Attachment>, onRemove: (Attachment) -> Unit)
             Box {
                 when (attachment) {
                     is Attachment.Image -> ImageTile(attachment.toImageRef(), Modifier.size(64.dp), maxPx = 256)
-                    is Attachment.Pdf -> Box(Modifier.size(64.dp)) {
-                        attachment.pages.firstOrNull()?.let { ImageTile(it.toImageRef(), Modifier.fillMaxSize(), maxPx = 256) }
-                        Text(
-                            "PDF · ${attachment.pages.size}页",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.White,
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .clip(RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp))
-                                .background(Color.Black.copy(alpha = 0.55f))
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                        )
-                    }
-                    is Attachment.TextFile -> PendingFile(attachment.name, attachment.sizeBytes)
                     is Attachment.BinaryFile -> PendingFile(attachment.name, attachment.sizeBytes)
                 }
                 Box(

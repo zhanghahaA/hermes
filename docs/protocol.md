@@ -175,10 +175,15 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
   聊天记录里的用户消息只留文字，后面追加 `[Image attached at: <路径>]` 和 `[screenshot]` 两行。
   App 发图时按同一个 SHA-256 在本机缓存一份，读记录时据此找回原图。新版存档里的 `hermes-retained:<sha256>` 也按这个规则找。
 - 模型不支持看图时，Hermes 先调视觉辅助模型描述图片，主模型收到的是描述文字。
-- API 不收其它文件（`/v1/artifacts/upload` 是浏览器扩展用的，默认关闭，模型也读不到）。App 的做法：
-  文本文件把内容写进消息（`📎 附件：<名字>` + 代码块）；PDF 渲染成图片；其它文件 SSH 用 SFTP 传到 `~/hermes-uploads/`，
-  本机 Termux 存到 `/storage/emulated/0/Download/Hermes/`，消息里写 `📎 附件：<名字>（已保存到 <路径>，需要时请用工具读取）`。
-  读记录时这些段落拆回文件卡片。
+- API 不收其它文件：`file` / `input_file` / `file_id` 和非图片的 `data:` 一律 `400 unsupported_content_type`
+  （官方文档 api-server.md 的“No file upload”，`gateway/platforms/api_server.py` 的 `_normalize_multimodal_content`；
+  `/v1/artifacts/upload` 是浏览器扩展用的，默认关闭，模型也读不到）。App 的做法：照片以外的文件（包括文本、YAML、PDF）
+  都原样经 SFTP 传到 Hermes 那台机器上，不把内容写进消息、也不把 PDF 转成图片：
+  - 位置：对话在某个 Hermes 项目里 → `<项目文件夹>/uploads/`；否则 → 连接的 `uploadDir`（默认 `~/hermes-uploads`，`~` 指 SFTP 登录后的目录）。不存在就建。
+  - 文件名：保留原名，重名加 ` (1)`、` (2)`……（加在扩展名前）；SFTP 服务器不收中文名时退回 ASCII 名。
+  - 本机 Termux 存到 `/storage/emulated/0/Download/Hermes/`。没有 SSH 的直连 / HTTPS 不让发文件。
+  - 消息里写 `📎 附件：<名字>（已保存到 <路径>，这是用户发来的文件，请用工具打开读取）`，读记录时拆回文件卡片（点开经 SSH 下载）。
+  - 以前版本发的消息里，文本文件是 `📎 附件：<名字>` + 代码块、PDF 是“已转成图片”的说明，读记录时也还认得。
 
 ## 模型（阶段 4）
 
@@ -261,7 +266,7 @@ Gateway 状态走 API：`GET /health/detailed` 有 `readiness.checks`（数据�
 
 不同版本的 Hermes 对 API 收到的图片处理不一样：新版存到 `<HERMES_HOME>/cache/documents/native-inputs/<sha256>/`，
 并在消息后面加 `[Image attached at: <路径>]`；有的版本只留 `[screenshot]`，主模型不支持看图时只拿到辅助模型写的文字描述。
-所以只要连接能传文件（SSH，或本机 Termux 的下载目录），App 发图时还会把原文件传一份到 `~/hermes-uploads/`，
+所以只要连接能传文件（SSH，或本机 Termux 的下载目录），App 发图时还会把原文件传一份到和文件相同的位置（项目的 `uploads/` 或连接设的位置），
 在消息里加一行 `📎 图片文件：<路径>（……的原文件，需要上传、保存或用工具处理图片时用这个路径）`，界面上不显示这一行。
 
 图片编码：长边不超过 2048；只有真有透明像素才用 PNG（Android 几乎把所有 PNG 都标成有透明通道，截图存 PNG 会很大），

@@ -258,9 +258,8 @@ class RealHermesIT {
             }
             val red = jpeg(0xff0000)
             val green = jpeg(0x00ff00)
-            val csv = com.hermes.mobile.data.model.Attachment.TextFile("t", "数据.csv", "名字,数量\n苹果,3\n", 30)
             val chat = repo.createSession()!!
-            repo.sendMessage(chat, "看看这两张图和表格", listOf(red, green, csv))
+            repo.sendMessage(chat, "看看这两张图", listOf(red, green))
             val items = runBlocking {
                 withTimeout(90_000) {
                     repo.chatItems(chat).first { list ->
@@ -278,9 +277,8 @@ class RealHermesIT {
                 messages.any { it.role == Role.Assistant && (it.text.contains("收到 2 张图片") || it.text.contains("attached an image")) },
                 "图片到了 Hermes",
             )
-            assertEquals("看看这两张图和表格", mine.text, "记录里的图片路径和文件内容不显示在正文里")
+            assertEquals("看看这两张图", mine.text, "记录里的图片路径不显示在正文里")
             assertEquals(listOf(red.path, green.path), mine.images.map { it.source }, "按 SHA-256 找回本机缓存的原图")
-            assertEquals(listOf("数据.csv"), mine.files.map { it.name })
             runBlocking { repo.session(chat).first() }?.id?.let(repo::deleteSession)
             Thread.sleep(1000)
         } finally {

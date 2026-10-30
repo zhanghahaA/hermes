@@ -118,7 +118,8 @@ class OpenSshIT {
             val note = withFile.filterIsInstance<ChatItem.Message>().first { it.role == Role.User }.files.single().note!!
             println("OpenSSH 上传：$note")
             val remotePath = note.removePrefix("已上传：")
-            assertTrue(remotePath.endsWith("-季度 报表.xlsx"), "OpenSSH 接受中文文件名：$remotePath")
+            // 保留原文件名；之前跑过留下了同名文件时是「季度 报表 (1).xlsx」
+            assertTrue(Regex("/hermes-uploads/季度 报表( \\(\\d+\\))?\\.xlsx$").containsMatchIn(remotePath), "OpenSSH 接受中文文件名，保留原名：$remotePath")
             // 测试进程可能没有 UTF-8 区域设置，按目录列出来找（Path 保留原始字节）
             val uploaded = java.nio.file.Files.list(java.nio.file.Paths.get(remotePath.substringBeforeLast('/'))).use { files ->
                 files.toList().filter { it.toString().endsWith(".xlsx") }.maxBy { java.nio.file.Files.getLastModifiedTime(it) }
@@ -291,13 +292,17 @@ class OpenSshIT {
         val name = "it-proj-${System.nanoTime() % 100000}"
         try {
             val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
+            val inbox = kotlin.io.path.createTempDirectory("it-inbox").toFile().canonicalFile
             val profile = ConnectionProfile(
                 id = "os", name = "OpenSSH", type = ConnectionType.Ssh, host = "127.0.0.1", port = 8642,
-                sshUser = user, sshPort = sshPort, sshAuth = SshAuthMethod.Key,
+                sshUser = user, sshPort = sshPort, sshAuth = SshAuthMethod.Key, uploadDir = inbox.path,
             )
             repo.saveConnection(profile, key, File(dir, "user_ed25519").readText())
             runBlocking { withTimeout(30_000) { repo.connectionState.first { it is ConnectionState.Connected } } }
             val admin = assertNotNull(repo.admin())
+            val yaml = "name: it\nport: 1234\n"
+            val localYaml = File.createTempFile("it-yaml", ".yaml").apply { writeText(yaml) }
+            fun yamlFile() = com.hermes.mobile.data.model.Attachment.BinaryFile("y${System.nanoTime()}", "config.yaml", "application/x-yaml", localYaml.path, localYaml.length())
 
             val (home, children) = runBlocking { admin.listFolders(folder.parent) }
             assertEquals(folder.parentFile.canonicalPath, home)
@@ -308,10 +313,10 @@ class OpenSshIT {
             assertNotNull(project, repo.sessionGroups.value.projects.toString())
             assertEquals(folder.path, project.path)
 
-            // 在项目里开新对话：发完第一条，它就在项目里
+            // 在项目里开新对话：发完第一条，它就在项目里；带的文件放进项目文件夹的 uploads
             val chat = repo.createSession()!!
             repo.setDraftProject(chat, project)
-            repo.sendMessage(chat, "你好", emptyList())
+            repo.sendMessage(chat, "你好", listOf(yamlFile()))
             runBlocking {
                 withTimeout(60_000) {
                     repo.chatItems(chat).first { list -> list.any { it is ChatItem.Message && it.role == Role.Assistant && !it.id.startsWith("reply-") } }
@@ -329,9 +334,21 @@ class OpenSshIT {
             }
             waitGroup(name)
             assertEquals(folder.path, repo.sessionGroups.value.folders[real], "Hermes 里会话的工作目录是项目文件夹")
+            assertEquals(yaml, File(folder, "uploads/config.yaml").readText(), "项目对话的文件在项目文件夹的 uploads 里")
 
             repo.moveToProject(real, null)
             waitGroup("默认")
+            // 不在项目里的对话：文件放到连接里设的位置
+            repo.sendMessage(real, "再看看", listOf(yamlFile()))
+            runBlocking {
+                withTimeout(60_000) {
+                    while (!File(inbox, "config.yaml").isFile) kotlinx.coroutines.delay(300)
+                    repo.chatItems(real).first { list -> list.count { it is ChatItem.Message && it.role == Role.Assistant && !it.id.startsWith("reply-") } >= 2 }
+                }
+            }
+            assertEquals(yaml, File(inbox, "config.yaml").readText())
+            val sent = runBlocking { repo.chatItems(real).first() }.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
+            assertEquals("已上传：${inbox.path}/config.yaml", sent.files.single().note)
 
             // 新建文件夹、改名、删除项目（用 Hermes 自己的 projects_db）
             val sub = runBlocking { admin.makeFolder(folder.path, "sub folder") }

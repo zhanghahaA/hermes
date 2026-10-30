@@ -24,7 +24,12 @@ data class ConnectionProfile(
     val sshAuth: SshAuthMethod = SshAuthMethod.Key,
     /** 记住的 SSH 主机指纹（`SHA256:...`）。为空表示还没连过，第一次连上时记住。 */
     val sshHostKey: String? = null,
+    /** 发给 Hermes 的文件经 SSH 放到这里（不在项目里的对话）；为空用 [DefaultUploadDir]。 */
+    val uploadDir: String? = null,
 )
+
+/** 默认的文件上传位置：SSH 登录用户主目录下的 hermes-uploads。 */
+const val DefaultUploadDir = "~/hermes-uploads"
 
 enum class SshAuthMethod { Key, Password }
 
@@ -128,13 +133,10 @@ sealed interface Attachment {
     /** 图片（相册、拍照）。[path] 是压缩后存在本机的文件，文件名就是内容的 SHA-256。 */
     data class Image(override val id: String, val path: String, val aspect: Float) : Attachment
 
-    /** PDF：前 [pages] 页已经渲染成图片，模型看图片；[totalPages] 是原文件总页数。 */
-    data class Pdf(override val id: String, val name: String, val pages: List<Image>, val totalPages: Int, val sizeBytes: Long) : Attachment
-
-    /** 文本类文件（代码、日志、CSV、JSON……）：内容直接放进消息。 */
-    data class TextFile(override val id: String, val name: String, val text: String, val sizeBytes: Long) : Attachment
-
-    /** 其它文件：SSH 连接上传到服务器，本机 Termux 存到手机的下载目录，再告诉 Hermes 文件在哪。 */
+    /**
+     * 文件（文本、PDF、文档、压缩包……照片以外的都是）：原样经 SSH 传到 Hermes 那台电脑上，
+     * 本机 Termux 存到手机的下载目录，消息里只告诉 Hermes 文件在哪，由它用工具自己打开。
+     */
     data class BinaryFile(override val id: String, val name: String, val mime: String, val path: String, val sizeBytes: Long) : Attachment
 }
 

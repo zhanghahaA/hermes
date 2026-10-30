@@ -260,7 +260,7 @@ class SshTunnelTest {
         scope.launch { repo.errors.collect { errors += it } }
         val bytes = ByteArray(300_000) { (it % 251).toByte() }
         val local = java.io.File.createTempFile("upload", ".zip").apply { writeBytes(bytes) }
-        repo.sendMessage("s1", "解压看看", listOf(com.hermes.mobile.data.model.Attachment.BinaryFile("b1", "数据 包.zip", "application/zip", local.path, bytes.size.toLong())))
+        repo.sendMessage("s1", "解压看看", listOf(com.hermes.mobile.data.model.Attachment.BinaryFile("b1", "data pack.zip", "application/zip", local.path, bytes.size.toLong())))
         val items = runBlocking {
             kotlinx.coroutines.withTimeoutOrNull(15_000) {
                 repo.chatItems("s1").first { list ->
@@ -269,15 +269,50 @@ class SshTunnelTest {
                 }
             }
         } ?: throw AssertionError("没等到回复。错误：$errors；现在：${runBlocking { repo.chatItems("s1").first() }.takeLast(3)}")
-        val uploaded = java.nio.file.Files.list(ssh.home.resolve("hermes-uploads")).use { it.toList() }.single()
-        assertTrue(uploaded.fileName.toString().endsWith(".zip"), uploaded.toString())
+        // 测试用的 JVM 默认编码不是 UTF-8，文件名用 ASCII（中文名走同一条路径，真实 OpenSSH 的集成测试里有）
+        val uploaded = ssh.home.resolve("hermes-uploads/data pack.zip")
+        assertTrue(java.nio.file.Files.isRegularFile(uploaded), "保留原文件名：" + java.nio.file.Files.list(ssh.home.resolve("hermes-uploads")).use { it.toList() })
         assertTrue(java.nio.file.Files.readAllBytes(uploaded).contentEquals(bytes), "上传的内容完整")
         val input = hermes.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
-        assertTrue(input.contains("📎 附件：数据 包.zip（已保存到 /hermes-uploads/"), input)
+        assertTrue(input.contains("📎 附件：data pack.zip（已保存到 /hermes-uploads/data pack.zip，"), input)
         val mine = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
         assertEquals("解压看看", mine.text)
-        assertEquals("数据 包.zip", mine.files.single().name, "气泡里显示原文件名")
-        assertTrue(mine.files.single().note!!.startsWith("已上传：/hermes-uploads/"), mine.files.single().note)
+        assertEquals("data pack.zip", mine.files.single().name, "气泡里显示原文件名")
+        assertEquals("已上传：/hermes-uploads/data pack.zip", mine.files.single().note)
+    }
+
+    /** 文本、YAML 也原样传文件（不再把内容写进消息）；重名加序号；连接里设的位置生效。 */
+    @Test
+    fun textFilesAreUploadedAsFilesWithOriginalNames() {
+        val hermes = hermes()
+        val ssh = sshd()
+        val repo = repo()
+        repo.saveConnection(profile(ssh, hermes).copy(uploadDir = "~/inbox/hermes"), hermes.key, keys.privateKey)
+        assertTrue(repo.awaitState() is ConnectionState.Connected)
+        runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
+
+        val yaml = "server:\n  port: 8080\n  secret_line: DO-NOT-INLINE\n"
+        val local = java.io.File.createTempFile("cfg", ".yaml").apply { writeText(yaml) }
+        fun send(text: String) {
+            repo.sendMessage("s1", text, listOf(com.hermes.mobile.data.model.Attachment.BinaryFile("y-$text", "config.yaml", "application/x-yaml", local.path, local.length())))
+            runBlocking {
+                withTimeout(15_000) {
+                    repo.chatItems("s1").first { list ->
+                        list.any { it is ChatItem.Message && it.role == Role.Assistant && it.text.startsWith("最终回复：$text") } &&
+                            list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("local-") || it.id.startsWith("reply-") }
+                    }
+                }
+            }
+        }
+        send("看看配置")
+        send("再看一次")
+        val dir = ssh.home.resolve("inbox/hermes")
+        assertEquals(yaml, java.nio.file.Files.readString(dir.resolve("config.yaml")))
+        assertEquals(yaml, java.nio.file.Files.readString(dir.resolve("config (1).yaml")), "重名的加序号，不覆盖")
+        val inputs = hermes.requests.filter { it.path == "/v1/runs" }.map { it.body.clone().readUtf8() }
+        assertTrue(inputs.none { "DO-NOT-INLINE" in it }, "文件内容不写进消息：$inputs")
+        assertTrue(inputs[0].contains("📎 附件：config.yaml（已保存到 /inbox/hermes/config.yaml，"), inputs[0])
+        assertTrue(inputs[1].contains("/inbox/hermes/config (1).yaml"), inputs[1])
     }
 
     /** 发图片时原文件也传一份到服务器：模型拿到真实路径，可以拿去上传、处理（有的 Hermes 版本只给模型文字描述）。 */
@@ -301,8 +336,7 @@ class SshTunnelTest {
                 }
             }
         }
-        val uploaded = java.nio.file.Files.list(ssh.home.resolve("hermes-uploads")).use { it.toList() }.single()
-        assertTrue(uploaded.fileName.toString().endsWith("image.jpg"), uploaded.toString())
+        val uploaded = ssh.home.resolve("hermes-uploads/image.jpg")
         assertTrue(java.nio.file.Files.readAllBytes(uploaded).contentEquals(bytes), "原文件完整")
         val input = hermes.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
         assertTrue(input.contains("📎 图片文件：/hermes-uploads/") && input.contains("image_url"), "模型既能看图，也知道文件在哪：$input")

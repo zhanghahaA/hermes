@@ -9,6 +9,7 @@ import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.ImageRef
 import kotlinx.coroutines.sync.withLock
 import com.hermes.mobile.data.model.MaxImagesPerMessage
+import com.hermes.mobile.data.model.DefaultUploadDir
 import com.hermes.mobile.data.model.displayFiles
 import com.hermes.mobile.data.model.displayImages
 import com.hermes.mobile.data.model.imageCount
@@ -1289,7 +1290,7 @@ class RemoteHermesRepository(
         try {
             val c = client ?: throw HermesError.Unreachable("还没连上 Hermes")
             val sessionId = ensureServerSession(uiId)
-            val input = buildInput(out)
+            val input = buildInput(out, sessionId)
             val workspace = _sessionGroups.value.folders[sessionId]
             val instructions = ClientInstructions + skillCommandNote(out.text).orEmpty() + workspace?.let(::workspaceNote).orEmpty()
             val (model, provider) = chosenModel(sessionId)
@@ -1325,25 +1326,21 @@ class RemoteHermesRepository(
      * 消息 + 附件 → `/v1/runs` 的 input。只有文字时是字符串；有图片时是
      * `[{"role":"user","content":[{"type":"text",...},{"type":"image_url",...}]}]`。
      */
-    private suspend fun buildInput(out: Outgoing): JsonElement = withContext(Dispatchers.IO) {
+    private suspend fun buildInput(out: Outgoing, sessionId: String): JsonElement = withContext(Dispatchers.IO) {
         val blocks = mutableListOf<String>()
         val images = mutableListOf<Attachment.Image>()
+        val dir = uploadDirFor(sessionId)
         for (attachment in out.attachments) {
             when (attachment) {
                 is Attachment.Image -> images += attachment
-                is Attachment.Pdf -> {
-                    images += attachment.pages
-                    blocks += AttachmentText.pdf(attachment.name, attachment.totalPages, attachment.pages.size)
-                }
-                is Attachment.TextFile -> blocks += AttachmentText.textFile(attachment.name, attachment.text)
-                is Attachment.BinaryFile -> blocks += AttachmentText.uploaded(attachment.name, deliverFile(attachment))
+                is Attachment.BinaryFile -> blocks += AttachmentText.uploaded(attachment.name, deliverFile(attachment, dir))
             }
         }
-        if (images.size > MaxImagesPerMessage) throw HermesError.BadUrl("一条消息最多 $MaxImagesPerMessage 张图片（PDF 每页算一张）")
+        if (images.size > MaxImagesPerMessage) throw HermesError.BadUrl("一条消息最多 $MaxImagesPerMessage 张图片")
         // 发的图片同时存一份原文件到 Hermes 那台机器上：有的 Hermes 版本只把图片转成文字描述、不落盘，
         // 模型要上传附件、用工具处理图片时得有真文件路径
         val photos = out.attachments.filterIsInstance<Attachment.Image>()
-        val copies = photos.mapIndexedNotNull { i, image -> imageCopy(image, i + 1, photos.size)?.let { AttachmentText.imageFile(it, i + 1, photos.size) } }
+        val copies = photos.mapIndexedNotNull { i, image -> imageCopy(image, i + 1, photos.size, dir)?.let { AttachmentText.imageFile(it, i + 1, photos.size) } }
         val text = (listOf(quotedInput(out.quote, out.text)) + blocks + listOfNotNull(copies.takeIf { it.isNotEmpty() }?.joinToString("\n")))
             .filter { it.isNotBlank() }.joinToString("\n\n")
         if (images.isEmpty()) return@withContext JsonPrimitive(text)
@@ -1366,14 +1363,25 @@ class RemoteHermesRepository(
         }
     }
 
-    /** 图片原文件放到 Hermes 那台机器上（SSH 上传，或本机 Termux 存到下载目录）；做不到就返回 null，不影响发送。 */
-    private fun imageCopy(image: Attachment.Image, index: Int, total: Int): String? {
+    /**
+     * 发给 Hermes 的文件放在电脑上的哪里（SSH 连接）：对话在某个 Hermes 项目里，就放进项目文件夹的 `uploads/`；
+     * 否则用连接里设的位置，没设就是 `~/hermes-uploads`。
+     */
+    private fun uploadDirFor(sessionId: String): String {
+        val grouping = _sessionGroups.value
+        val project = grouping.projects.firstOrNull { it.name == grouping.of[sessionId] }?.path
+        if (project != null) return project.trimEnd('/') + "/uploads"
+        return _connections.value.firstOrNull { it.id == connectedId }?.uploadDir?.trim()?.takeIf { it.isNotEmpty() } ?: DefaultUploadDir
+    }
+
+    /** 图片原文件放到 Hermes 那台机器上（SSH 上传到 [dir]，或本机 Termux 存到下载目录）；做不到就返回 null，不影响发送。 */
+    private fun imageCopy(image: Attachment.Image, index: Int, total: Int, dir: String): String? {
         val file = File(image.path)
         if (!file.isFile) return null
         val name = "image" + (if (total > 1) "-$index" else "") + "." + file.extension.ifEmpty { "jpg" }
         tunnel?.let { t ->
             return try {
-                t.upload(file.path, name)
+                t.upload(file.path, name, dir)
             } catch (e: Exception) {
                 _errors.tryEmit("图片原文件没能传到服务器（图片照常发送）：${e.message}")
                 null
@@ -1384,21 +1392,24 @@ class RemoteHermesRepository(
         return localFileExporter?.invoke(file.path, name, mimeOf(file.name))
     }
 
-    /** 普通文件交给 Hermes：SSH 上传到服务器，本机 Termux 存到下载目录。返回 Hermes 那边能读到的路径。 */
-    private fun deliverFile(file: Attachment.BinaryFile): String {
+    /**
+     * 文件交给 Hermes：SSH 原样上传到电脑上的 [dir]，本机 Termux 存到下载目录。返回 Hermes 那边能读到的路径。
+     * Hermes 的接口只收文字和图片，没有 SSH（直连、HTTPS）就发不了文件。
+     */
+    private fun deliverFile(file: Attachment.BinaryFile, dir: String): String {
         val profile = _connections.value.firstOrNull { it.id == connectedId }
         tunnel?.let { t ->
             return try {
-                t.upload(file.path, file.name)
+                t.upload(file.path, file.name, dir)
             } catch (e: Exception) {
-                throw HermesError.Ssh("文件上传失败：${e.message}")
+                throw HermesError.Ssh("文件上传到 $dir 失败：${e.message}")
             }
         }
         return when (profile?.type) {
             ConnectionType.Ssh -> throw HermesError.Ssh("SSH 隧道没连上")
             ConnectionType.Local -> localFileExporter?.invoke(file.path, file.name, file.mime)
                 ?: throw HermesError.NotSupported("把文件交给本机 Termux")
-            else -> throw HermesError.NotSupported("发送这种文件（直连和 HTTPS 只能发图片、PDF 和文本文件，其它文件请用 SSH 连接）")
+            else -> throw HermesError.NotSupported("发送文件（这个连接没有 SSH。Hermes 的接口只收文字和图片，文件要经 SSH 传到电脑上：在连接设置里打开 SSH 或「文件互通」）")
         }
     }
 

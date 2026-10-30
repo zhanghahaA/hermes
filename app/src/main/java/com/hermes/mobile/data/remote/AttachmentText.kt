@@ -3,32 +3,20 @@ package com.hermes.mobile.data.remote
 import com.hermes.mobile.data.model.FileRef
 
 /**
- * 文件在消息正文里的写法。Hermes 的 API 只收图片，所以文件都变成正文里的一段：
+ * 文件在消息正文里的写法。Hermes 的 API 只收文字和图片，文件原样经 SSH 传到 Hermes 那台电脑上，
+ * 消息里只写一行告诉它文件在哪：
  *
  * ```
- * 📎 附件：notes.txt
- * ```text
- * 文件内容……
- * ```
+ * 📎 附件：notes.txt（已保存到 /home/me/hermes-uploads/notes.txt，……）
  * ```
  *
- * 模型能直接读；App 读聊天记录时再按 [parse] 拆回文件卡片，气泡里不显示大段内容。
+ * App 读聊天记录时再按 [parse] 拆回文件卡片。以前的版本把文本文件内容放进代码块、PDF 转成图片，
+ * 那样的旧消息 [parse] 也还认得。
  */
 internal object AttachmentText {
     const val Marker = "📎 附件："
 
-    /** 文本文件：内容放进代码块。围栏比内容里最长的一串反引号还长，内容里有 ``` 也不会断。 */
-    fun textFile(name: String, text: String): String {
-        val longest = Regex("`+").findAll(text).maxOfOrNull { it.value.length } ?: 0
-        val fence = "`".repeat(maxOf(3, longest + 1))
-        return "$Marker$name\n$fence${languageOf(name)}\n${text.trimEnd()}\n$fence"
-    }
-
-    fun pdf(name: String, totalPages: Int, shownPages: Int): String =
-        if (shownPages >= totalPages) "$Marker$name（共 $totalPages 页，已转成图片附在后面）"
-        else "$Marker$name（共 $totalPages 页，前 $shownPages 页已转成图片附在后面）"
-
-    fun uploaded(name: String, path: String): String = "$Marker$name（已保存到 $path，需要时请用工具读取）"
+    fun uploaded(name: String, path: String): String = "$Marker$name（已保存到 $path，这是用户发来的文件，请用工具打开读取）"
 
     /** 图片原文件在 Hermes 那台机器上的位置（给模型用，界面上不显示这一行）。 */
     const val ImageFileMarker = "📎 图片文件："
@@ -77,28 +65,6 @@ internal object AttachmentText {
         note.startsWith("已保存到 ") -> "已上传：" + note.removePrefix("已保存到 ").substringBefore('，')
         note.contains("已转成图片") -> note.substringBefore('，')
         else -> note
-    }
-
-    private fun languageOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "kt", "kts" -> "kotlin"
-        "py" -> "python"
-        "js", "mjs", "cjs" -> "javascript"
-        "ts" -> "typescript"
-        "sh", "bash", "zsh" -> "bash"
-        "json" -> "json"
-        "yml", "yaml" -> "yaml"
-        "md" -> "markdown"
-        "csv" -> "csv"
-        "html", "htm" -> "html"
-        "xml" -> "xml"
-        "toml" -> "toml"
-        "sql" -> "sql"
-        "c", "h" -> "c"
-        "cpp", "cc", "hpp" -> "cpp"
-        "java" -> "java"
-        "go" -> "go"
-        "rs" -> "rust"
-        else -> "text"
     }
 }
 

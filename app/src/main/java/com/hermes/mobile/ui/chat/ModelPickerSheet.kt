@@ -156,9 +156,10 @@ fun AttachSheetContent(onPickPhotos: () -> Unit, onCamera: () -> Unit, onPickFil
         AttachRow("拍照", "用相机拍一张发给 Hermes", Icons.Rounded.PhotoCamera, true, onCamera)
         AttachRow(
             "文件",
-            if (anyFile) "任意文件；PDF 和文本文件 Hermes 能直接看到内容" else "PDF、文本、代码、表格等；其它格式需要 SSH 或本机连接",
+            if (anyFile) "任意文件，原样传到 Hermes 那台电脑上，由它打开处理"
+            else "这个连接没有 SSH，发不了文件：在连接设置里打开 SSH 或「文件互通」",
             Icons.Rounded.FolderOpen,
-            true,
+            anyFile,
             onPickFiles,
         )
     }

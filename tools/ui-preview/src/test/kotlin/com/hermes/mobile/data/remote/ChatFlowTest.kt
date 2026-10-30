@@ -328,14 +328,12 @@ class ChatFlowTest {
         val repo = connected(s)
         val red = cachedImage(0xff0000)
         val blue = cachedImage(0x0000ff)
-        val notes = Attachment.TextFile("t1", "notes.md", "# 标题\n```\ncode\n```", 30L)
-        repo.sendMessage("s1", "看看这些", listOf(red, blue, notes))
+        repo.sendMessage("s1", "看看这些", listOf(red, blue))
 
         // 发送中：自己的气泡立刻显示图片和文件卡片
         val sending = repo.chatItems("s1").await("本地气泡") { list -> list.any { it is ChatItem.Message && it.text == "看看这些" } }
             .filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
         assertEquals(listOf(red.path, blue.path), sending.images.map { it.source })
-        assertEquals(listOf("notes.md"), sending.files.map { it.name })
 
         val final = repo.chatItems("s1").await("对齐后的记录") { list ->
             list.texts().any { it.second == "收到 2 张图片" } &&
@@ -343,22 +341,22 @@ class ChatFlowTest {
         }
         val request = s.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
         assertTrue(request.contains("\"type\":\"image_url\"") && request.contains("data:image/jpeg;base64,"), request.take(300))
-        assertTrue(request.contains("📎 附件：notes.md"), "文本文件的内容放进消息")
 
         // 从服务器记录里拆回来：正文干净，图片指回本机缓存，文件变成卡片
         val mine = final.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
         assertEquals("看看这些", mine.text)
         assertEquals(listOf(red.path, blue.path), mine.images.map { it.source }, "按 SHA-256 找回本机缓存的原图")
-        assertEquals(listOf("notes.md"), mine.files.map { it.name })
+        assertTrue(mine.files.isEmpty())
     }
 
     @Test
     fun otherFilesNeedSshOrLocal() {
         val s = server()
         val repo = connected(s)
-        assertFalse(repo.canSendAnyFile(), "直连不能发任意文件")
-        val tmp = java.io.File.createTempFile("upload", ".zip").apply { writeBytes(byteArrayOf(1, 2, 3)) }
-        repo.sendMessage("s1", "压缩包", listOf(Attachment.BinaryFile("z", "a.zip", "application/zip", tmp.path, 3L)))
+        assertFalse(repo.canSendAnyFile(), "直连没有 SSH，发不了文件")
+        // 文本文件也一样：不再把内容写进消息
+        val tmp = java.io.File.createTempFile("upload", ".yaml").apply { writeText("a: 1\n") }
+        repo.sendMessage("s1", "看看配置", listOf(Attachment.BinaryFile("y", "config.yaml", "application/x-yaml", tmp.path, 5L)))
         repo.chatItems("s1").await("发送失败") { list -> list.filterIsInstance<ChatItem.Message>().any { it.status == DeliveryStatus.Failed } }
         assertTrue(s.requests.none { it.path == "/v1/runs" }, "不能发的文件不提交")
     }

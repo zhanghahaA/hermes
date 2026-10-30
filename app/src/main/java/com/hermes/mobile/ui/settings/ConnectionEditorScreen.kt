@@ -72,6 +72,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.ConnectionProfile
+import com.hermes.mobile.data.model.DefaultUploadDir
 import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.ConnectionType
 import com.hermes.mobile.data.model.TestStepStatus
@@ -113,6 +114,7 @@ fun ConnectionEditorScreen(
     var publicKey by remember { mutableStateOf(existing?.id?.let(repository::sshPublicKey).orEmpty()) }
     var sshPassword by remember { mutableStateOf("") }
     var resetHostKey by rememberSaveable { mutableStateOf(false) }
+    var uploadDir by rememberSaveable { mutableStateOf(existing?.uploadDir.orEmpty()) }
     // 本机 Termux / 直连：可选的“文件互通”SSH
     var fileSsh by rememberSaveable { mutableStateOf(existing != null && existing.type != ConnectionType.Ssh && !existing.sshUser.isNullOrBlank()) }
     var showPaste by rememberSaveable { mutableStateOf(false) }
@@ -157,6 +159,7 @@ fun ConnectionEditorScreen(
         sshPort = sshPort.toIntOrNull() ?: -1,
         sshAuth = if (sshAuth == 0) SshAuthMethod.Key else SshAuthMethod.Password,
         sshHostKey = if (resetHostKey) null else discoveredHostKey ?: existing?.sshHostKey,
+        uploadDir = uploadDir.trim().trimEnd('/').ifEmpty { null },
     )
 
     fun sshSecret(): String? {
@@ -284,6 +287,24 @@ fun ConnectionEditorScreen(
         } else Text("登录密钥会在复制配置命令时自动生成，无需创建文件。", style = MaterialTheme.typography.bodySmall)
         existing?.sshHostKey?.let { pinned ->
             HostKeyRow(pinned, reset = resetHostKey, onReset = { resetHostKey = true })
+        }
+        if (advanced) {
+            val badDir = uploadDir.isNotBlank() && !uploadDir.trim().let { it.startsWith("/") || it == "~" || it.startsWith("~/") }
+            OutlinedTextField(
+                value = uploadDir,
+                onValueChange = { uploadDir = it },
+                label = { Text("文件上传位置") },
+                placeholder = { Text(DefaultUploadDir) },
+                singleLine = true,
+                isError = badDir,
+                supportingText = {
+                    Text(
+                        if (badDir) "写完整路径（/ 开头），或 ~/ 开头表示 SSH 用户的主目录"
+                        else "发给 Hermes 的文件经 SSH 原样放到这个文件夹（没有会自动建）。项目里的对话放进项目文件夹的 uploads。留空用 $DefaultUploadDir",
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 

@@ -3,6 +3,19 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.13.13：文件改为原样上传（不再贴内容、不再 PDF 转图）
+
+- 用户不认可“文本文件内容写进消息”“PDF 转成图片”的做法（Hermes 回复说它收到的是内容而不是文件）。Hermes 官方 API 本身不收文件（`input_file` 等返回 400，见 protocol.md）。
+- 现在照片以外的文件（txt、yaml、代码、PDF、Office、压缩包……）全部原样经 SFTP 传到 Hermes 那台电脑上，消息里只写一行 `📎 附件：名字（已保存到 路径，……）`：
+  - 项目里的对话 → `<项目文件夹>/uploads/`；其它对话 → 连接的「文件上传位置」（`ConnectionProfile.uploadDir`，连接设置 → 高级设置里填，默认 `~/hermes-uploads`）。照片原图也放同一个位置。
+  - 保留原文件名，重名加 ` (1)`、` (2)`；不再加时间戳前缀。
+  - 没有 SSH 的直连 / HTTPS（没开文件互通）：「文件」入口变灰并说明原因，不再退回贴内容。本机 Termux 照旧存到「下载/Hermes」。
+- 删掉了 `Attachment.TextFile` / `Attachment.Pdf` 和 PDF 渲染；旧消息里内联的文本 / PDF 说明 `AttachmentText.parse` 仍然认得。
+- 验证：SshTunnelTest（MINA SFTP：原名、重名序号、自定义位置、内容不进消息）、ConnectionEditorTest（上传位置保存）、真实 Hermes + OpenSSH 的 `projectsAndArchiveOverRealSsh`
+  （项目对话的文件落到 `项目/uploads/`，移出项目后落到连接设的位置）都通过。**没在用户手机和电脑上实测**；`AttachmentImporter.file()` 依赖 Android，桌面测试覆盖不到（逻辑只剩“图片走照片、其它都当文件”）。
+- 测试用 JVM 默认编码不是 UTF-8，MINA 测试里的文件名用 ASCII；中文名走的是同一条代码。
+- **签名**：这个环境的 debug 签名（SHA-256 `7C:55:60:3A…A7:73`）和用户手机上装的开发签名（`d985fcaf…db1dc7`，在 Codex 环境里）不同，这里出的 APK 不能覆盖安装。APK 需要在有保留签名的环境里构建。
+
 ## 0.13.12-dev：直连附加 SSH 的卡片补偿
 
 - 基于已合并 PR #5 的 main 3f4c88f，在 codex/direct-interactive-fix 开发。0.13.11-dev 已发布 GitHub 预发布版本，原 APK 摘要与发布附件一致；不是草稿状态。
