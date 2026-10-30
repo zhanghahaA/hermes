@@ -49,7 +49,7 @@ data class ServerCapabilities(
  * 探测能力：优先读 `/v1/capabilities`；旧版本（没有这个接口）就直接试会话接口，
  * 并用 `/v1/models` 验证 Key。
  */
-suspend fun HermesClient.probeCapabilities(version: String?): ServerCapabilities = try {
+suspend fun HermesApi.probeCapabilities(version: String?): ServerCapabilities = try {
     ServerCapabilities.from(capabilities(), version)
 } catch (e: HermesError.NotSupported) {
     verifyKey()

@@ -1,4 +1,6 @@
-"""用户主动粘贴执行的配置助手：保留有效密钥、备份配置、仅安装公钥。"""
+"""用户主动粘贴执行的配置助手：保留有效密钥、备份配置、仅安装公钥。
+
+SSH 连接走 Hermes gateway（和电脑版同一个服务），不需要 API Server：这时只授权手机公钥，不改 .env、不重启服务。"""
 import base64
 import hashlib
 import fcntl
@@ -56,10 +58,11 @@ def _configure(root, ssh_dir, parameters):
     backup = root / ".env.before-mobile-setup"
     no_links(env_file)
     no_links(backup)
+    gateway_only = parameters["type"] == "Ssh"
     previous = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
     values = {}
     assignment = re.compile(r"^\s*(?:export\s+)?(API_SERVER_[A-Z_]+)\s*=(.*)$")
-    for line in previous.splitlines():
+    for line in ([] if gateway_only else previous.splitlines()):
         match = assignment.match(line)
         if match:
             parts = shlex.split(match[2], comments=True)
@@ -69,11 +72,13 @@ def _configure(root, ssh_dir, parameters):
             values[match[1]] = value
     old_key = values.get("API_SERVER_KEY", "")
     # 已有接口密钥即使不合法也不得静默替换；模型提供商密钥不参与此逻辑。
-    if "API_SERVER_KEY" in values:
+    if gateway_only:
+        key = ""
+    elif "API_SERVER_KEY" in values:
         key = old_key
     else:
         key = parameters["apiKey"] or secrets.token_hex(32)
-    if not isinstance(key, str) or not 16 <= len(key) <= 4096 or any(ord(c) < 32 or ord(c) == 127 for c in key):
+    if not gateway_only and (not isinstance(key, str) or not 16 <= len(key) <= 4096 or any(ord(c) < 32 or ord(c) == 127 for c in key)):
         raise ValueError("API Server 密钥格式不正确，已保留原值；请明确处理后重试，不要修改模型密钥")
     host = values.get("API_SERVER_HOST", "127.0.0.1")
     if parameters["type"] == "Direct":
@@ -96,12 +101,12 @@ def _configure(root, ssh_dir, parameters):
         no_links(ssh_dir)
         no_links(ssh_dir / "authorized_keys")
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if env_file.exists() and not backup.exists():
+    if not gateway_only and env_file.exists() and not backup.exists():
         atomic(backup, previous)
     desired = {"API_SERVER_ENABLED": "true", "API_SERVER_KEY": key,
                "API_SERVER_HOST": host, "API_SERVER_PORT": str(port)}
     # 保留无关行、注释和已正确的赋值文本；只替换发生变化的项。
-    changed_names = {name for name, value in desired.items() if values.get(name) != value}
+    changed_names = set() if gateway_only else {name for name, value in desired.items() if values.get(name) != value}
     edited = []
     for line in previous.splitlines(keepends=True):
         match = assignment.match(line.rstrip("\r\n"))
@@ -115,9 +120,10 @@ def _configure(root, ssh_dir, parameters):
         for name, value in desired.items():
             if name in changed_names:
                 contents += name + "=" + (json.dumps(value) if name in ("API_SERVER_KEY", "API_SERVER_HOST") else value) + "\n"
-    if contents != previous:
-        atomic(env_file, contents)
-    env_file.chmod(0o600)
+    if not gateway_only:
+        if contents != previous:
+            atomic(env_file, contents)
+        env_file.chmod(0o600)
     if public_key:
         ssh_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         ssh_dir.chmod(0o700)
@@ -296,6 +302,67 @@ def ensure_service(root, parameters, receipt, changed, timeout=90):
     raise ValueError("等待 API 超时，未认定配对成功；配置和密钥已保留，可检查服务后重新执行")
 
 
+GATEWAY_PROBE = """
+from hermes_constants import get_hermes_home
+from hermes_cli.gateway_runtime import discover_gateway_endpoint, attachable, gateway_profile_home
+found = discover_gateway_endpoint(gateway_profile_home(get_hermes_home()))
+print("running" if attachable(found) else "stopped:" + str(found.reason_code or found.state))
+"""
+
+
+def hermes_python():
+    # 找 Hermes 自己用的 Python（和 App 经 SSH 找的办法一样）：新版 hermes 能直接说；
+    # 旧版顺着 hermes 命令找：符号链接、同目录的 python、第一行 #!、包装脚本里 exec 的那个文件
+    try:
+        done = subprocess.run(["hermes", "--print-runtime-command"], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=20)
+        lines = done.stdout.strip().splitlines()
+        command = json.loads(lines[-1]) if done.returncode == 0 and lines else None
+        if isinstance(command, list) and command and all(isinstance(part, str) for part in command):
+            return command[:1]
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    path = shutil.which("hermes")
+    for _ in range(5):
+        if not path:
+            break
+        path = os.path.realpath(path)
+        for candidate in ("python", "python3"):
+            nearby = os.path.join(os.path.dirname(path), candidate)
+            if os.access(nearby, os.X_OK):
+                return [nearby]
+        try:
+            with open(path, "rb") as stream:
+                text = stream.read(65536).decode("utf-8", "replace")
+        except OSError:
+            break
+        first = text.splitlines()[0] if text else ""
+        if first.startswith("#!") and "python" in first:
+            return shlex.split(first[2:])
+        found = re.search(r'exec "?(/[^ "]+)', text)
+        path = found[1] if found else None
+    return None
+
+
+def report_gateway(root):
+    # 只看一眼，不启动、不重启：gateway 由用户自己在电脑上管
+    command = hermes_python()
+    state = None
+    if command:
+        try:
+            done = subprocess.run(command + ["-c", GATEWAY_PROBE], env=dict(os.environ, HERMES_HOME=str(root)),
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30)
+            state = (done.stdout.strip().splitlines() or [""])[-1]
+        except (OSError, subprocess.SubprocessError):
+            state = None
+    if state == "running":
+        print("Hermes gateway 正在运行，手机会经 SSH 连到它。")
+    elif state and state.startswith("stopped"):
+        print("提示：没检测到正在运行的 Hermes gateway。手机经 SSH 连的是 gateway，请在电脑上运行 hermes gateway（或安装为服务）后再连接。")
+    else:
+        print("提示：没能确认 Hermes gateway 的状态（这个版本的 Hermes 可能还不支持）。手机经 SSH 连的是 gateway，请确认它在运行。")
+
+
 def main():
     os.umask(0o077)
     stage = "读取配对参数"
@@ -320,9 +387,14 @@ def main():
             no_links(env_file)
             before = env_file.read_bytes() if env_file.exists() else None
             reused, receipt = configure(root, Path.home() / ".ssh", parameters)
-            print("API 配置与 SSH 授权已检查，已有密钥保持不变。")
-            stage = "检查服务与 API 认证"
-            ensure_service(root, parameters, receipt, before != env_file.read_bytes())
+            if parameters["type"] == "Ssh":
+                print("SSH 授权已检查；没有修改 Hermes 配置，也没有重启服务。")
+                stage = "检查 Hermes gateway"
+                report_gateway(root)
+            else:
+                print("API 配置与 SSH 授权已检查，已有密钥保持不变。")
+                stage = "检查服务与 API 认证"
+                ensure_service(root, parameters, receipt, before != env_file.read_bytes())
             if "--show-result" in sys.argv[2:]:
                 # 仅显式要求兼容旧客户端时导出敏感回执；不写日志。
                 print(receipt)

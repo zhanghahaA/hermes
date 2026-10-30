@@ -49,14 +49,14 @@ class NotificationSender(
         }
     } ?: error("摘要超时，保留批次稍后查询")
 
-    private suspend fun <T> withClient(target: NotificationTarget, block: suspend (HermesClient) -> T): T {
+    private suspend fun <T> withClient(target: NotificationTarget, block: suspend (HermesApi) -> T): T {
         val state = snapshot()
         val saved = state.connections.firstOrNull { it.id == target.connectionId } ?: error("绑定的连接已删除")
         val baseBot = saved.profile?.takeIf(String::isNotBlank) ?: "default"
         val keyName = if (target.bot == baseBot) saved.id else "bot:" + saved.id + ":" + target.bot
         val key = state.keys[keyName]?.let(secrets::decrypt)
-        // 其它 Bot 必须使用它自己的密钥，不能回退到主连接密钥。
-        require(target.bot == baseBot || !key.isNullOrBlank()) { "绑定的 Bot 尚未开通访问" }
+        // 其它 Bot 必须使用它自己的密钥，不能回退到主连接密钥（SSH 连接走 gateway，不用密钥）。
+        require(saved.type == ConnectionType.Ssh || target.bot == baseBot || !key.isNullOrBlank()) { "绑定的 Bot 尚未开通访问" }
         val profile = saved.copy(profile = target.bot.takeUnless { it == "default" })
         var tunnel: SshTunnel? = null
         try {
@@ -69,7 +69,8 @@ class NotificationSender(
                     auth, profile.port, profile.sshHostKey, {}, diagnostics = trace)
                 tunnel = ssh
                 withContext(Dispatchers.IO) { ssh.connect() }
-                factory(ssh.localBaseUrl, key, profile.profile).throughSshTunnel(trace)
+                // SSH 连接全走 Hermes gateway（和聊天一样）
+                GatewayHermesApi(GatewayChannel { HermesAdmin(ssh, profile.profile).openGateway() })
             } else {
                 val url = when (profile.type) {
                     ConnectionType.Direct -> "http://" + profile.host.trim() + ":" + profile.port

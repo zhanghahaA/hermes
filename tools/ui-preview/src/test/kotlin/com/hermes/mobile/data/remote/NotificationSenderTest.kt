@@ -19,29 +19,29 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.test.*
 
 class NotificationSenderTest {
+    /** SSH 连接：通知摘要也全走 Hermes gateway（自己开一条固定指纹的 SSH，不碰界面正在用的那条，不需要 API Key）。 */
     @Test fun scheduledSummaryUsesIndependentPinnedSshTunnel() = runBlocking {
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setBody("""{"run_id":"ssh-run","status":"started"}"""))
-        server.enqueue(MockResponse().setBody("""{"status":"completed","output":"摘要已生成"}"""))
-        server.start()
-        val ssh = TestSshServer().start()
+        val gateway = com.hermes.mobile.data.ssh.FakeGateway()
+        gateway.sessions["fixed"] = gateway.Session("fixed", "通知助手", "local")
+        val ssh = gateway.install(TestSshServer()).start()
         try {
             var pin: String? = null
             val auth = SshAuth.Password(ssh.password)
-            SshTunnel("127.0.0.1", ssh.port, ssh.user, auth, server.port, null, { pin = it }).use { it.connect() }
+            SshTunnel("127.0.0.1", ssh.port, ssh.user, auth, 8642, null, { pin = it }).use { it.connect() }
             val secrets = FakeSecretBox()
             val state = StoredState(
-                connections = listOf(ConnectionProfile("ssh-bound", "测试", ConnectionType.Ssh, "127.0.0.1", server.port,
+                connections = listOf(ConnectionProfile("ssh-bound", "测试", ConnectionType.Ssh, "127.0.0.1", 8642,
                     sshUser = ssh.user, sshPort = ssh.port, sshAuth = SshAuthMethod.Password, sshHostKey = assertNotNull(pin))),
-                keys = mapOf("ssh:ssh-bound" to secrets.encrypt(ssh.password), "ssh-bound" to secrets.encrypt("test-api-key")),
+                keys = mapOf("ssh:ssh-bound" to secrets.encrypt(ssh.password)),
             )
             val sender = NotificationSender({ state }, secrets, pollMillis = 1)
             val batch = NotificationBatch("ssh-batch", NotificationTarget("ssh-bound", "default", "fixed", "测试"), emptyList())
-            withTimeout(20_000) { assertEquals("摘要已生成", sender.send(batch) {}) }
-            assertEquals("/v1/runs", server.takeRequest().path)
-            assertEquals("/v1/runs/ssh-run", server.takeRequest().path)
+            val summary = withTimeout(20_000) { sender.send(batch) {} }
+            assertTrue(summary.startsWith("最终回复："), summary)
+            val methods = gateway.requests.mapNotNull { it["method"]?.toString()?.trim('"') }
+            assertTrue("prompt.submit" in methods && "prompt.receipt" in methods, methods.toString())
             assertEquals(2, ssh.logins.get())
-        } finally { ssh.stop(); server.shutdown() }
+        } finally { ssh.stop() }
     }
 
     @Test fun sendsToBoundBotWithItsOwnKeyAndResumesRunWithoutResubmitting() = runBlocking {

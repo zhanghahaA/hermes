@@ -41,6 +41,18 @@ class AttachmentTextTest {
     }
 
     @Test
+    fun gatewayImageDescriptionIsRemovedAndThePhotoKept() {
+        // 经 Hermes gateway 发图后存下来的样子（真实测试环境里抄的）
+        val stored = "[The user sent an image~ Here's what I can see:\n收到 1 张图片：Concisely describe this image in 2-4 sentences. " +
+            "Skip decorative details.]\n[If you need a closer look, use vision_analyze with image_url: /home/u/.hermes/cache/documents/native-inputs/" +
+            "dddf7670824b5d6e68a1abab415a73e80ac6f2ed254e8973217aa108ebec0a21/upload_1ollw9oc.jpg ~]\n\n把这张图存好"
+        val (text, images) = ImageMarkers.parse(stored)
+        assertEquals("把这张图存好", text)
+        assertEquals("dddf7670824b5d6e68a1abab415a73e80ac6f2ed254e8973217aa108ebec0a21", images.single().sha256)
+        assertTrue(images.single().path!!.endsWith("upload_1ollw9oc.jpg"))
+    }
+
+    @Test
     fun plainTextIsUntouched() {
         val text = "普通消息\n[不是图片]"
         assertEquals(text to emptyList(), ImageMarkers.parse(text).let { it.first to it.second })

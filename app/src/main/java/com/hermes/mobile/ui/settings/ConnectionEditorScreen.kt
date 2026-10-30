@@ -129,7 +129,6 @@ fun ConnectionEditorScreen(
     var showQuickSetup by rememberSaveable { mutableStateOf(existing == null) }
     var showSetupResult by remember { mutableStateOf(false) }
     var copiedSetup by remember { mutableStateOf(false) }
-    var setupKeyAtCopy by remember { mutableStateOf("") }
     var discoveredHostKey by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
     fun useKey(text: String?) {
@@ -167,6 +166,9 @@ fun ConnectionEditorScreen(
         return if (!usesSsh) null else if (sshAuth == 0) privateKey.ifBlank { null } else sshPassword.ifBlank { null }
     }
 
+    // SSH 连接走 Hermes gateway，不用 API Key；只有直连 / HTTPS / 本机 Termux 才用
+    fun currentKey(): String? = if (type == ConnectionType.Ssh) null else apiKey.ifBlank { null }
+
     fun report(error: Throwable) {
         showMessage(DiagnosticRedactor.redact(error.message ?: "未完成，请重试", listOf(apiKey, privateKey, sshPassword).filter(String::isNotBlank)))
     }
@@ -174,17 +176,16 @@ fun ConnectionEditorScreen(
         runCatching {
             val profile = currentProfile()
             ConnectionSetup.validate(profile)
-            if (apiKey.isBlank()) apiKey = ConnectionSetup.generateApiKey()
+            if (apiKey.isBlank() && profile.type != ConnectionType.Ssh) apiKey = ConnectionSetup.generateApiKey()
             if (profile.type == ConnectionType.Ssh && profile.sshAuth == SshAuthMethod.Key && publicKey.isBlank()) {
                 val pair = SshKeys.generate()
                 privateKey = pair.privateKey
                 publicKey = pair.publicKey
             }
-            val command = ConnectionSetup.command(setupProgram, profile, apiKey,
+            val command = ConnectionSetup.command(setupProgram, profile, currentKey().orEmpty(),
                 publicKey.takeIf { profile.type == ConnectionType.Ssh && profile.sshAuth == SshAuthMethod.Key }.orEmpty(), setupNonce, reuseHelper)
             copyText(command, true)
             copiedSetup = true
-            setupKeyAtCopy = apiKey
             showMessage("已复制。请在运行 Hermes 的机器上粘贴并执行。")
         }.onFailure(::report)
     }
@@ -193,24 +194,23 @@ fun ConnectionEditorScreen(
         runCatching {
             var candidate = currentProfile()
             ConnectionSetup.validate(candidate)
-            var key = apiKey.ifBlank { null }
+            var key = currentKey()
             val secret = sshSecret()
-            require(key != null || existing != null) { "请先复制配置命令，或填写已有的 API Key" }
-            require(key == null || key.length >= 16) { "API Key 至少需要 16 位" }
+            if (candidate.type != ConnectionType.Ssh) {
+                require(key != null || existing != null) { "请先复制配置命令，或填写已有的 API Key" }
+                require(key == null || key.length >= 16) { "API Key 至少需要 16 位" }
+            }
             if (candidate.sshUser != null) require(secret != null || existing?.sshUser != null) { "请先生成／导入密钥，或填写 SSH 密码" }
             testing = true
             steps = emptyList()
             scope.launch {
                 try {
-                    if (candidate.type == ConnectionType.Ssh && copiedSetup && apiKey == setupKeyAtCopy) {
+                    if (candidate.type == ConnectionType.Ssh && copiedSetup) {
+                        // 配置助手的回执证明这台主机就是执行了命令的那台，用来记住主机指纹（SSH 不需要密钥和端口）
                         val original = candidate
-                        val originalKey = key
                         val result = repository.readConnectionSetup(candidate, secret, setupNonce)
                         if (result != null) {
-                            check(currentProfile() == original && apiKey.ifBlank { null } == originalKey && sshSecret() == secret) { "设置已变化，请按当前设置重新检查" }
-                            apiKey = result.apiKey
-                            key = result.apiKey
-                            port = result.port.toString()
+                            check(currentProfile() == original && sshSecret() == secret) { "设置已变化，请按当前设置重新检查" }
                             discoveredHostKey = result.hostKey
                             resetHostKey = false
                             candidate = currentProfile()
@@ -224,7 +224,7 @@ fun ConnectionEditorScreen(
                     val passed = steps.isNotEmpty() && steps.all { it.status == TestStepStatus.Passed || it.status == TestStepStatus.Skipped } &&
                         steps.any { it.status == TestStepStatus.Passed }
                     if (passed) {
-                        check(currentProfile() == candidate && apiKey.ifBlank { null } == key && sshSecret() == secret) { "设置已变化，请按当前设置重新检查" }
+                        check(currentProfile() == candidate && currentKey() == key && sshSecret() == secret) { "设置已变化，请按当前设置重新检查" }
                         repository.saveConnection(candidate, key, secret)
                         if (repository.activeConnectionId.value != candidate.id) repository.switchConnection(candidate.id)
                         showMessage("检查通过，已保存并连接")
@@ -237,7 +237,7 @@ fun ConnectionEditorScreen(
         }.onFailure(::report)
     }
 
-    // SSH 账号（SSH 隧道用；本机 Termux / 直连的“文件互通”也用这一套）
+    // SSH 账号（SSH 连接用；本机 Termux / 直连的“文件互通”也用这一套）
     val sshCredentials: @Composable () -> Unit = {
         OutlinedTextField(
             value = sshUser,
@@ -344,7 +344,7 @@ fun ConnectionEditorScreen(
                         onClick = {
                             runCatching {
                                 ConnectionSetup.validate(currentProfile())
-                                repository.saveConnection(currentProfile(), apiKey.ifBlank { null }, sshSecret())
+                                repository.saveConnection(currentProfile(), currentKey(), sshSecret())
                                 onClose()
                             }.onFailure(::report)
                         },
@@ -412,15 +412,8 @@ fun ConnectionEditorScreen(
                         ConnectionType.Ssh -> {
                             HostPortFields(host, { host = it }, sshPort, { sshPort = it }, "SSH 主机", "电脑或服务器地址", "SSH 端口", showPort = advanced)
                             sshCredentials()
-                            if (advanced) OutlinedTextField(
-                                value = port,
-                                onValueChange = { port = it },
-                                label = { Text("远端 Hermes 端口") },
-                                supportingText = { Text("隧道会把手机本地端口转发到远端 127.0.0.1 的这个端口") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+                            Text("经 SSH 连到这台电脑上正在运行的 Hermes gateway（和电脑版是同一个服务），不需要开 API Server，也不需要 API Key。",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         ConnectionType.Local -> {
                             if (advanced) OutlinedTextField(
@@ -469,11 +462,13 @@ fun ConnectionEditorScreen(
                     Text("2 · 复制一次，完成配置", style = MaterialTheme.typography.titleMedium)
                     Text(if (type == ConnectionType.Local) "在这台手机的 Termux 中粘贴，按回车运行。需已安装 Hermes。"
                         else "在运行 Hermes 的机器上${if (type == ConnectionType.Ssh && sshUser.isNotBlank()) "以 $sshUser 登录后" else ""}打开终端，粘贴并按回车（Linux／macOS，需已安装 Hermes）。")
-                    Text("自动备份配置、开通手机连接并授权本手机，保留已有密钥和端口。配置改变或服务异常时才请求重启；服务正常且配置未变时不重启。", style = MaterialTheme.typography.bodySmall)
+                    Text(if (type == ConnectionType.Ssh) "只把本手机的公钥加入这个用户的 SSH 授权，并看一眼 Hermes gateway 是否在运行。不修改 Hermes 配置，不重启服务。"
+                        else "自动备份配置、开通手机连接并授权本手机，保留已有密钥和端口。配置改变或服务异常时才请求重启；服务正常且配置未变时不重启。", style = MaterialTheme.typography.bodySmall)
                     Button(onClick = { makeSetupCommand() }, enabled = !testing) { Text(if (copiedSetup) "重新复制配置命令" else "生成并复制配置命令") }
                     if (copiedSetup) TextButton(onClick = { makeSetupCommand(reuseHelper = true) }, enabled = !testing) { Text("已执行过？复制简短重试命令") }
-                    if (copiedSetup) Text("已复制。执行完成后，直接点底部「检查并连接」。SSH 会安全读取连接结果；直连若已有密钥，请填写原 API Server Key。", style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = {
+                    if (copiedSetup) Text(if (type == ConnectionType.Ssh) "已复制。执行完成后，直接点底部「检查并连接」。"
+                        else "已复制。执行完成后，直接点底部「检查并连接」。直连若已有密钥，请填写原 API Server Key。", style = MaterialTheme.typography.bodySmall)
+                    if (type != ConnectionType.Ssh) TextButton(onClick = {
                         val text = readText()
                         if (text != null && text.contains(ConnectionSetup.ReceiptPrefix)) {
                             runCatching { val result = ConnectionSetup.readResult(text, currentProfile(), setupNonce); apiKey = result.apiKey; port = result.port.toString(); showMessage("已填入服务器的已有密钥") }.onFailure(::report)
@@ -481,14 +476,15 @@ fun ConnectionEditorScreen(
                     }) { Text("粘贴配置结果") }
                 }
             }
-            if (advanced) SecretField(
+            val usesKey = type != ConnectionType.Ssh
+            if (advanced && usesKey) SecretField(
                 "API Key",
                 apiKey,
                 { apiKey = it },
                 if (existing != null) "已保存。留空表示不修改" else "会在复制配置命令时自动填好；已有密钥也可直接粘贴",
             )
-            if (!advanced && apiKey.isNotBlank()) Text(if (type == ConnectionType.Ssh && copiedSetup) "检查时会通过 SSH 自动获取连接密钥，无需手动填写。" else "连接密钥已填入，检查通过后会加密保存。", style = MaterialTheme.typography.bodySmall)
-            TextButton(onClick = {
+            if (!advanced && usesKey && apiKey.isNotBlank()) Text("连接密钥已填入，检查通过后会加密保存。", style = MaterialTheme.typography.bodySmall)
+            if (usesKey) TextButton(onClick = {
                 val text = readText()?.trim()
                 if (text != null && text.length in 16..4096 && text.none { it.isWhitespace() || it.isISOControl() }) {
                     apiKey = text

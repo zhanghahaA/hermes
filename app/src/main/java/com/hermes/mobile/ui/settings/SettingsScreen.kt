@@ -140,7 +140,7 @@ fun SettingsScreen(
                     if (index < connections.lastIndex) GroupDivider()
                 }
                 GroupDivider()
-                SettingsRow(Icons.Rounded.Add, "添加连接", "直连、HTTPS、SSH 隧道或手机本机", onClick = { onEditConnection(null) })
+                SettingsRow(Icons.Rounded.Add, "添加连接", "SSH、直连、HTTPS 或手机本机", onClick = { onEditConnection(null) })
             }
 
             SettingsGroup("外观") {

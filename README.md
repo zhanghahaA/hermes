@@ -6,11 +6,11 @@ English | [中文](README.zh-CN.md)
 
 An Android app for chatting with [Hermes Agent](https://github.com/NousResearch/hermes-agent). It shows final replies by default; settings let you enable streaming replies or expandable thinking and tool progress supplied by the server. When Hermes needs your approval or asks a follow-up question, a card appears in the chat for you to tap.
 
-Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). It talks to the Hermes API Server; features that the API does not cover are done over SSH using Hermes's own commands.
+Built with Kotlin and Jetpack Compose (Material 3, liquid-glass UI). Direct, HTTPS and local Termux connections talk to the Hermes API Server; SSH connections talk to the Hermes gateway (the same service Hermes Desktop and the TUI use) through a small bridge run over SSH, so they need no API Server and no API key. Features neither covers are done over SSH using Hermes's own commands.
 
 ## Features
 
-- **Connections**: direct (LAN / Tailscale), HTTPS, **SSH tunnel** (generate a key on the phone or import one, password login, host key pinning, automatic reconnect) and **local Termux**. Each connection has a step-by-step "Test connection".
+- **Connections**: direct (LAN / Tailscale), HTTPS, **SSH** (chats go through the Hermes gateway, so sessions started on the desktop can be continued; generate a key on the phone or import one, password login, host key pinning, automatic reconnect) and **local Termux**. Each connection has a step-by-step "Test connection".
 - **Chat**: final replies by default, optional continuous streaming and collapsible server-supplied thinking/tool progress, approval and clarify cards, stop, **steer** Hermes while it is replying, resume after the network drops or the app is killed, notifications when a reply arrives in the background. Markdown rendering (tables, formulas, task lists, footnotes, and the quirks models tend to produce), in-chat search, swipe a reply to quote it, select text and ask a follow-up.
 - **Sessions**: new / fork / rename / pin / **archive** / delete, automatic titles. Sessions are grouped by Hermes **projects**; create a project, move a chat into one, or start a new chat inside it.
 - **Attachments**: photos, camera, files. Photos are sent for the model to see. Every other file (text, YAML, PDF, Office, archives…) is uploaded as-is over SSH to the machine running Hermes (into the project's `uploads/` folder for project chats, otherwise a per-connection folder, default `~/hermes-uploads`), keeping its name, and Hermes is told where it is. The Hermes API does not accept file uploads, so files need SSH (or local Termux).
@@ -36,7 +36,7 @@ See [docs/setup.md](docs/setup.md) for how to connect the phone to Hermes (in Ch
 ## Requirements
 
 - Android 8.0 (API 26) or newer.
-- Hermes Agent with the API Server enabled (`API_SERVER_ENABLED=true`, an `API_SERVER_KEY`). Some features (admin, projects, file uploads, bot screen) need an SSH login to the machine running Hermes.
+- Over SSH: Hermes Agent with `hermes gateway` running (no API Server needed). Direct / HTTPS / local Termux: the API Server enabled (`API_SERVER_ENABLED=true`, an `API_SERVER_KEY`). Some features (admin, projects, file uploads, bot screen) need an SSH login to the machine running Hermes.
 
 ## Install
 

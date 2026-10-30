@@ -3,6 +3,37 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.14.0：SSH 连接全走 Hermes gateway（不用 API Server、不用 API Key）
+
+用户要求“把 SSH 隧道的方式改成全靠 gateway”，选了“一次全部做完”“只用 gateway，不退回”。协议细节、方法表、坑在 protocol.md「SSH 连接走 Hermes gateway」。
+
+- **为什么**：API Server 只允许继续来源是 `api_server` / `bot_room` 的会话，电脑上建的会话在手机上只能分叉；gateway 是电脑版、TUI 用的同一个服务，没有这个限制，也不用 API Key。
+- **结构**：
+  - `data/remote/HermesApi.kt`：从 `HermesClient` 抽出的接口，Repository 和通知助手只认它。直连 / HTTPS / 本机仍是 `HermesClient`（API Server）。
+  - `GatewayBridge.kt`：经 SSH 跑在 Hermes 的 Python 里的桥（stdin/stdout 一行一个 JSON；只读的会话列表、技能、工具集、定时任务在桥里直接调 Hermes 函数）。
+  - `GatewayChannel.kt`：一条桥通道，死了下次调用重开（读线程结束 / 写失败 / 超时）。`RoomClient`（群聊）也改用它。
+  - `GatewayHermesApi.kt`：用 gateway 方法实现 `HermesApi`。每个会话记 revision / execution_generation（`Fence`），同一个会话的修改排队发，被拒时照错误里的新值重试（最多 4 次）；
+    runId 是 `"会话|admission"`；`runEvents` 先收实时事件再用 `session.events.since` 补发，翻成以前 SSE 的形状，所以 `RunEvents` / 工作过程 / 审批卡片的代码没动。
+  - `RemoteHermesRepository`：SSH 连接 `openClient` 建 `GatewayHermesApi`；检查连接是 4 步（SSH 连接、SSH 登录、连上 Hermes gateway、读取会话）；
+    SSH 不再要 bot 的 API Key；下拉刷新先 `ping`，不通才重建 SSH；工具集开关用 `--platform cli`。`sshHealthFailure` 删了。
+  - 连接编辑页：SSH 不显示 API Key、「远端 Hermes 端口」「粘贴已有 API Key」「粘贴配置结果」，不要求 Key；配置命令（`configure.py`）对 SSH 只授权公钥、看一眼 gateway 是否在运行，
+    **不改 `.env`、不重启**。回执只用来核对主机指纹。
+- **没删的**：`SshTunnel` 的端口转发（`forward` / `probeForward` / 本地监听）SSH 连接已经不用了，代码还在（`readConnectionSetup` 和文件互通只用它的登录和执行命令）。
+  `sharedControls` / `SessionControlFeed`（API Server 下的跨设备审批卡片同步）对 SSH 直接返回，直连还在用。
+- **验证**（集成测试环境：Hermes 06671b7 + 假模型 + 真 OpenSSH）：
+  - `GatewayIT`（5 项，真 Hermes）：审批 / 追问 / 停止 / 插话 / 工作过程；改名、置顶、归档、分叉、删除；模型 + 推理强度（读 `session.resume` 的 `info.reasoning_effort` 确认）；
+    **接着聊电脑上建的会话**（用 gateway 以 `tui` 来源建会话、先说一句，再从 App 读记录、接着发；不被标成只读）。
+  - `OpenSshIT`（10 项）全部改走 gateway 后通过：技能、工具集开关、群聊、bot、Bot 屏幕、项目、管理、发图、发文件。
+  - 真 Hermes 上出现过一次：改名和置顶同时发、Hermes 又正好在起标题，改名重试一次后还冲突、丢了。改成排队 + 多试几次后，单独连跑 3 次、全量再跑都过；
+    `GatewayFlowTest.renameAndPinTogetherSurviveRevisionsChangingUnderneath` 用假 gateway 复现。
+  - 单元：`GatewayFlowTest`（8 项，`FakeGateway`：断线期间这一轮结束→重连补发或查结果、revision 过期重试、重名提示、gateway 没运行的说明……）、`SshTunnelTest`、`EasySetupTest`、`tools/runtime-tests/test_setup.py`。
+  - 配置脚本在测试环境里对真 gateway 跑过：能分辨“在运行 / 没运行”，`.env` 前后 md5 和修改时间不变。
+  - **没验证**：用户自己的 Hermes（v0.22 canary 新式安装）上桥能不能 import `hermes_cli.gateway_client` / `gateway_runtime`、owner 连接的方法是否一样（测试环境是 10-17 的 06671b7，上游 10-30 的 690da2b7 的 canonical 协议只多不少，但没实测）；
+    用户手机上的一切。旧版 Hermes 没有这些模块时会提示“这个版本的 Hermes 不支持经 gateway 连接”，**不会退回 API Server**（用户要求）。
+- 全量（`tools/it-env/run_it.sh`）306 项通过，只有要真模型 Key 的 `RealHermesIT` 按规矩跳过；`tools/runtime-tests/test_setup.py` 19 项通过；`assembleDebug` 通过。
+- 本环境编的 APK（`hermes-mobile-0.14.0.apk`，SHA-256 `8c2fe28d…69bb`）签名证书是 `7c55603a…a773`，**不是**用户现在装的 `d985fcaf…` 那把，不能覆盖安装；
+  要发给用户的包得用 `d985fcaf…` 那把签名重新出（Codex 那边有）。
+
 ## 0.13.15：gateway 断线自动恢复、推理强度、模型分组折叠
 
 - **“和 Hermes gateway 的连接断了”一直出现、刷新没用**（Bot 页和聊天页的“互动卡片同步暂时失败”是同一个原因）：`RoomClient` 只在通道有退出码时才重开，
@@ -176,7 +207,7 @@
 ## 用户和他的环境
 
 - **用中文回复用户**。用户不是开发者，说明要讲清楚“要改什么、为什么、怎么用”，少用术语。
-- Hermes 跑在局域网里的一台电脑上，手机经 **SSH** 连（SSH 隧道 + 在那台电脑上执行命令）。Hermes 是 **v0.22 canary、新式源码安装**
+- Hermes 跑在局域网里的一台电脑上，手机经 **SSH** 连（0.14 起聊天走 SSH 上的 gateway 桥，管理功能在那台电脑上执行命令）。Hermes 是 **v0.22 canary、新式源码安装**
   （`hermes` 启动器是“自带 Python + `-I` + 引导代码”，裸跑那个 Python import 不到 Hermes，见下面的 hermesPython）。
 - 手机是 vivo。用户也用 Hermes 电脑版（Desktop），希望手机和电脑版互通（同一份 bot、群聊、项目）。
 - 用户定下的规矩：
@@ -194,6 +225,7 @@
 | `data/HermesRepository.kt` | 界面用的唯一接口（很多方法有默认实现，演示版只实现一部分） |
 | `data/remote/RemoteHermesRepository.kt` | 真实实现：连接、会话、聊天（`/v1/runs` + SSE）、缓存、bot 切换、群聊列表…… 很大，按 `// ---- xxx ----` 分节 |
 | `data/remote/HermesClient.kt`、`Sse.kt`、`RunEvents.kt`、`Capabilities.kt` | Hermes API Server（8642）的 REST / SSE；按服务器能力探测，不比版本号 |
+| `data/remote/HermesApi.kt`、`GatewayHermesApi.kt`、`GatewayChannel.kt`、`GatewayBridge.kt` | SSH 连接：经 SSH 上的桥走 Hermes gateway（`/api/ws`），实现同一个 `HermesApi` |
 | `data/remote/HermesAdmin.kt` | **所有经 SSH 的功能**：记忆、MCP、config、日志、项目、Bot、Bot 屏幕、群聊桥。Python 脚本都在它的 companion 里 |
 | `data/remote/RoomClient.kt` | 群聊：经 SSH 上的桥调 gateway 的 `groups.*` JSON-RPC |
 | `data/ssh/` | sshj：隧道、执行命令、SFTP、长连接通道（`RemoteStream`） |

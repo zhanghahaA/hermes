@@ -43,7 +43,7 @@ class ConnectionSetupSshTest {
                 assertFalse(error.message.orEmpty().contains(key))
             } else {
                 val result = assertNotNull(repo.readConnectionSetup(profile, pair.privateKey, "test-nonce"))
-                assertEquals(key, result.apiKey)
+                assertEquals("", result.apiKey, "SSH 走 gateway：旧助手写进回执的密钥也不再取用")
                 assertEquals(8765, result.port)
                 assertTrue(assertNotNull(result.hostKey).startsWith("SHA256:"))
                 assertTrue(ssh.logins.get() >= 1)
@@ -57,6 +57,6 @@ class ConnectionSetupSshTest {
         }
     }
 
-    @Test fun authenticatedSshReturnsKeyPortAndPinsTheObservedHost() = runCase(false)
+    @Test fun authenticatedSshPinsTheObservedHost() = runCase(false)
     @Test fun unrelatedReceiptsAreRejectedWithoutExposingTheKey() = runCase(true)
 }

@@ -40,7 +40,8 @@ object ConnectionSetup {
         require(profile.type != ConnectionType.Local || profile.id != com.hermes.mobile.data.local.LocalRuntimeManager.ConnectionId) {
             "此连接由本机运行中心管理，请在那里配置"
         }
-        require(apiKey.length in 16..4096 && apiKey.none { it.isISOControl() }) { "连接密钥至少 16 位，也可以留空让 App 自动生成" }
+        // SSH 走 Hermes gateway，不用 API Server 的连接密钥
+        if (profile.type != ConnectionType.Ssh) require(apiKey.length in 16..4096 && apiKey.none { it.isISOControl() }) { "连接密钥至少 16 位，也可以留空让 App 自动生成" }
         if (profile.type == ConnectionType.Ssh && profile.sshAuth == SshAuthMethod.Key) require(publicKey.isNotBlank()) { "请先生成或导入 SSH 密钥" }
         val parameters = Parameters(nonce, profile.type.name, profile.host, profile.port,
             profile.profile.orEmpty(), profile.sshUser.orEmpty(), profile.sshPort,
@@ -106,10 +107,11 @@ object ConnectionSetup {
             require(result.nonce == nonce && result.type == expected.type.name && result.host == expected.host &&
                 result.port == expected.port && result.profile == expected.profile.orEmpty() &&
                 result.sshUser == expected.sshUser.orEmpty() && result.sshPort == expected.sshPort)
-            require(result.apiKey.length in 16..4096 && result.apiKey.none { it.isISOControl() })
+            // SSH 的回执只用来确认主机（gateway 不用 API Key）；旧版助手写进去的密钥也不再用
+            if (expected.type != ConnectionType.Ssh) require(result.apiKey.length in 16..4096 && result.apiKey.none { it.isISOControl() })
             val actualPort = result.effectivePort.takeIf { it != 0 } ?: result.port
             require(actualPort in 1..65535)
-            return Result(result.apiKey, actualPort)
+            return Result(if (expected.type == ConnectionType.Ssh) "" else result.apiKey, actualPort)
         } catch (_: Exception) { error("连接码不完整或不属于本页设置。请复制当前命令执行后输出的完整一行连接码。") }
     }
 

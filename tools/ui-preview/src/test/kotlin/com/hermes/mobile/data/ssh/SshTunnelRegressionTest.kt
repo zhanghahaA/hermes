@@ -80,28 +80,6 @@ class SshTunnelRegressionTest {
         sshAuth = SshAuthMethod.Password,
     )
 
-    @Test fun sshHealthBypassesAnHttpProxyAndReachesTheRealTunnel() = runBlocking {
-        val hermes = FakeHermesServer(FakeHermesServer.Version.Modern).start().also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val proxy = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(502).setBody("{}")
-            }
-            start()
-        }.also { cleanup += { it.shutdown() } }
-        val selector = object : ProxySelector() {
-            override fun select(uri: URI): List<Proxy> = listOf(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxy.port)))
-            override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) = Unit
-        }
-        val http = OkHttpClient.Builder().proxySelector(selector).build()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(),
-            clientFactory = { url, key, profile -> HermesClient(url, key, profile, http) })
-        val result = withTimeout(20_000) { repo.testConnection(profile(ssh, hermes.server.port), hermes.key, ssh.password).last() }
-        assertTrue(result.all { it.status == TestStepStatus.Passed }, result.toString())
-        assertEquals(0, proxy.requestCount, "SSH 的本地入口不能经 HTTP 代理")
-        assertTrue(hermes.requests.any { it.path == "/health" && it.method == "GET" }, "必须真的通过隧道收到 GET /health")
-    }
-
     @Test fun refusingOneChannelDoesNotResetAnAuthenticatedSession() {
         val reject = AtomicBoolean(false)
         val ssh = ssh(TestSshServer().apply {
@@ -139,21 +117,6 @@ class SshTunnelRegressionTest {
         }
     }
 
-    @Test fun httpFailureThroughSshIsNotReportedAsAnUnreachableServer() = runBlocking {
-        val http = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(500).setBody("{}")
-            }
-            start()
-        }.also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
-        val result = withTimeout(20_000) { repo.testConnection(profile(ssh, http.port), "test-key", ssh.password).last() }
-        assertEquals(TestStepStatus.Passed, result[2].status, result.toString())
-        assertEquals(TestStepStatus.Failed, result[3].status, result.toString())
-        assertTrue(result[3].detail.orEmpty().contains("500"), result.toString())
-    }
-
     @Test fun ipv4ProbeAndHealthHaveSeparateByteLevelEvidence() = runBlocking {
         val hermes = FakeHermesServer(FakeHermesServer.Version.Modern).start().also { cleanup += { it.shutdown() } }
         val ssh = ssh()
@@ -173,119 +136,6 @@ class SshTunnelRegressionTest {
             assertTrue(report.contains(stage), "$stage 缺失：$report")
         }
         assertTrue(!report.contains(hermes.key) && !report.contains(ssh.password))
-    }
-
-    @Test fun unauthorizedHealthAndMalformedJsonAreNotNetworkFailures() = runBlocking {
-        for (status in listOf(401, 403, 200)) {
-            val server = MockWebServer().apply {
-                enqueue(MockResponse().setResponseCode(status).setBody("{}"))
-                start()
-            }.also { cleanup += { it.shutdown() } }
-            val ssh = ssh()
-            val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
-            val result = withTimeout(20_000) { repo.testConnection(profile(ssh, server.port), "test-key", ssh.password).last() }
-            assertEquals(TestStepStatus.Passed, result[2].status, result.toString())
-            if (status != 200) {
-                assertEquals(TestStepStatus.Failed, result[4].status, result.toString())
-                assertTrue(result[4].detail.orEmpty().contains(status.toString()))
-            } else assertEquals(TestStepStatus.Failed, result[3].status, result.toString())
-        }
-    }
-
-    @Test fun responseTimeoutIncludesTheActualHttpPhase() = runBlocking {
-        val server = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest) = MockResponse().setBody("{}").setHeadersDelay(1, TimeUnit.SECONDS)
-            }
-            start()
-        }.also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val http = OkHttpClient.Builder().readTimeout(150, TimeUnit.MILLISECONDS).build()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(),
-            clientFactory = { url, key, profile -> HermesClient(url, key, profile, http) })
-        val result = withTimeout(20_000) { repo.testConnection(profile(ssh, server.port), "test-key", ssh.password).last() }
-        assertEquals(TestStepStatus.Failed, result[2].status)
-        assertTrue(result[2].detail.orEmpty().contains("超时") && result[2].detail.orEmpty().contains("等待 HTTP 响应"), result.toString())
-        assertTrue(repo.diagnosticsReport().contains("SocketTimeoutException"))
-    }
-
-    @Test fun prematureEofIsReportedWithoutSayingTheServerWasNotListening() = runBlocking {
-        val server = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest) = MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
-            }
-            start()
-        }.also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val http = OkHttpClient.Builder().retryOnConnectionFailure(false).build()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(),
-            clientFactory = { url, key, profile -> HermesClient(url, key, profile, http) })
-        val result = withTimeout(20_000) { repo.testConnection(profile(ssh, server.port), "test-key", ssh.password).last() }
-        assertTrue(result[2].detail.orEmpty().contains("提前结束"), result.toString())
-    }
-
-    @Test fun policyFailureIsClassifiedAndDoesNotLeakItsMessage() = runBlocking {
-        val hermes = FakeHermesServer(FakeHermesServer.Version.Modern).start().also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val http = OkHttpClient.Builder().addInterceptor {
-            throw java.net.UnknownServiceException("CLEARTEXT blocked: must-not-log-private-value")
-        }.build()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(),
-            clientFactory = { url, key, profile -> HermesClient(url, key, profile, http) })
-        val result = withTimeout(20_000) { repo.testConnection(profile(ssh, hermes.server.port), hermes.key, ssh.password).last() }
-        assertTrue(result[2].detail.orEmpty().contains("明文 HTTP"), result.toString())
-        val report = repo.diagnosticsReport()
-        assertTrue(report.contains("ProbePassed") && report.contains("HealthFailed"))
-        assertTrue(!report.contains("LocalAccepted") && !report.contains("must-not-log-private-value"), report)
-    }
-
-    @Test fun cancellingHealthClosesTheTemporaryTunnel() = runBlocking {
-        val requestSeen = CompletableDeferred<Unit>()
-        val server = MockWebServer().apply {
-            dispatcher = object : Dispatcher() {
-                override fun dispatch(request: RecordedRequest): MockResponse {
-                    requestSeen.complete(Unit)
-                    return MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
-                }
-            }
-            start()
-        }.also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
-        val job = launch { repo.testConnection(profile(ssh, server.port), "test-key", ssh.password).collect {} }
-        withTimeout(5000) { requestSeen.await() }
-        withTimeout(5000) { job.cancelAndJoin() }
-        val report = repo.diagnosticsReport()
-        assertTrue(report.contains("TestCancelled") && report.contains("TunnelClosed"), report)
-    }
-
-    @Test fun cancellingAfterHeadersUnblocksAStalledBody() = runBlocking {
-        val server = MockWebServer().apply {
-            enqueue(MockResponse().setBody("{\"status\":\"ok\"}").setBodyDelay(3, TimeUnit.SECONDS))
-            start()
-        }.also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox())
-        val job = launch { repo.testConnection(profile(ssh, server.port), "test-key", ssh.password).collect {} }
-        withTimeout(5000) {
-            while (!repo.diagnosticsReport().contains("HealthResponse HTTP=200")) delay(10)
-        }
-        withTimeout(1500) { job.cancelAndJoin() }
-        assertTrue(repo.diagnosticsReport().contains("TunnelClosed"))
-    }
-
-    @Test fun bodyTimeoutIsReportedAsHttpFailureRatherThanEscapingTheTestFlow() = runBlocking {
-        val server = MockWebServer().apply {
-            enqueue(MockResponse().setBody("{\"status\":\"ok\"}").setBodyDelay(1, TimeUnit.SECONDS))
-            start()
-        }.also { cleanup += { it.shutdown() } }
-        val ssh = ssh()
-        val http = OkHttpClient.Builder().readTimeout(150, TimeUnit.MILLISECONDS).build()
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(),
-            clientFactory = { url, key, profile -> HermesClient(url, key, profile, http) })
-        val result = withTimeout(5000) { repo.testConnection(profile(ssh, server.port), "test-key", ssh.password).last() }
-        assertEquals(TestStepStatus.Failed, result[2].status)
-        assertTrue(result[2].detail.orEmpty().contains("超时"), result.toString())
     }
 
     @Test fun remoteHalfCloseDoesNotCutOffAnUploadAfterTwoSeconds() {

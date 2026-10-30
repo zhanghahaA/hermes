@@ -18,7 +18,7 @@ internal val HermesJson = Json {
 }
 
 @Serializable
-internal data class HealthDto(
+data class HealthDto(
     val status: String? = null,
     val platform: String? = null,
     val version: String? = null,
@@ -28,10 +28,10 @@ internal data class HealthDto(
 }
 
 @Serializable
-internal data class EndpointDto(val method: String? = null, val path: String? = null)
+data class EndpointDto(val method: String? = null, val path: String? = null)
 
 @Serializable
-internal data class CapabilitiesDto(
+data class CapabilitiesDto(
     val platform: String? = null,
     val model: String? = null,
     val features: JsonObject? = null,
@@ -39,7 +39,7 @@ internal data class CapabilitiesDto(
 )
 
 @Serializable
-internal data class SessionDto(
+data class SessionDto(
     val id: String,
     val source: String? = null,
     val model: String? = null,
@@ -56,16 +56,16 @@ internal data class SessionDto(
 )
 
 @Serializable
-internal data class SessionListDto(
+data class SessionListDto(
     val data: List<SessionDto> = emptyList(),
     val has_more: Boolean? = null,
 )
 
 @Serializable
-internal data class SessionEnvelopeDto(val session: SessionDto? = null)
+data class SessionEnvelopeDto(val session: SessionDto? = null)
 
 @Serializable
-internal data class MessageDto(
+data class MessageDto(
     val id: JsonElement? = null,
     val role: String? = null,
     /** 字符串，或者 OpenAI 风格的分段数组。 */
@@ -77,24 +77,24 @@ internal data class MessageDto(
 )
 
 @Serializable
-internal data class MessageListDto(
+data class MessageListDto(
     val session_id: String? = null,
     val data: List<MessageDto> = emptyList(),
 )
 
 @Serializable
-internal data class ErrorBodyDto(val error: ErrorDto? = null)
+data class ErrorBodyDto(val error: ErrorDto? = null)
 
 @Serializable
-internal data class ErrorDto(val message: String? = null, val type: String? = null, val code: String? = null)
+data class ErrorDto(val message: String? = null, val type: String? = null, val code: String? = null)
 
 // ---- 阶段 2：聊天 ----
 
 @Serializable
-internal data class RunAcceptedDto(val run_id: String? = null, val status: String? = null)
+data class RunAcceptedDto(val run_id: String? = null, val status: String? = null)
 
 @Serializable
-internal data class RunStatusDto(
+data class RunStatusDto(
     val run_id: String? = null,
     val status: String? = null,
     val session_id: String? = null,
@@ -114,7 +114,7 @@ internal data class RunStatusDto(
 
 /** GET /api/model/options：各 Provider 和它们的模型（和 Hermes 网页版、TUI 的模型选择器是同一份数据）。 */
 @Serializable
-internal data class ModelOptionsDto(
+data class ModelOptionsDto(
     val providers: List<ProviderDto> = emptyList(),
     /** Hermes 当前的默认模型和 Provider。 */
     val model: String? = null,
@@ -122,7 +122,7 @@ internal data class ModelOptionsDto(
 )
 
 @Serializable
-internal data class ProviderDto(
+data class ProviderDto(
     val slug: String,
     val name: String? = null,
     val is_current: Boolean? = null,
@@ -136,17 +136,17 @@ internal data class ProviderDto(
 
 /** GET /v1/skills：已安装的技能。 */
 @Serializable
-internal data class SkillListDto(val data: List<SkillDto> = emptyList())
+data class SkillListDto(val data: List<SkillDto> = emptyList())
 
 @Serializable
-internal data class SkillDto(val name: String, val description: String? = null, val category: String? = null)
+data class SkillDto(val name: String, val description: String? = null, val category: String? = null)
 
 /** GET /v1/toolsets：API Server 这个平台能用的工具集。 */
 @Serializable
-internal data class ToolsetListDto(val data: List<ToolsetDto> = emptyList())
+data class ToolsetListDto(val data: List<ToolsetDto> = emptyList())
 
 @Serializable
-internal data class ToolsetDto(
+data class ToolsetDto(
     val name: String,
     /** 带 emoji 的显示名，如 "🔍 Web Search & Scraping"。 */
     val label: String? = null,
@@ -160,13 +160,13 @@ internal data class ToolsetDto(
 // ---- 阶段 4：定时任务 ----
 
 @Serializable
-internal data class JobListDto(val jobs: List<JobDto> = emptyList())
+data class JobListDto(val jobs: List<JobDto> = emptyList())
 
 @Serializable
-internal data class JobEnvelopeDto(val job: JobDto? = null)
+data class JobEnvelopeDto(val job: JobDto? = null)
 
 @Serializable
-internal data class JobDto(
+data class JobDto(
     val id: String,
     val name: String? = null,
     val prompt: String? = null,
@@ -184,7 +184,7 @@ internal data class JobDto(
 )
 
 @Serializable
-internal data class ScheduleDto(
+data class ScheduleDto(
     /** cron / interval / once */
     val kind: String? = null,
     val expr: String? = null,

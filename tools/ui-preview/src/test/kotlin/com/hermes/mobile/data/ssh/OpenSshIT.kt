@@ -77,8 +77,9 @@ class OpenSshIT {
             val items = runBlocking {
                 withTimeout(60_000) { repo.chatItems(chat).first { list -> list.any { it is ChatItem.Message && it.role == Role.Assistant } } }
             }
-            println("经 OpenSSH 隧道的回复：${items.filterIsInstance<ChatItem.Message>().filter { it.role == Role.Assistant }.map { it.text }}")
-            assertTrue(items.any { it is ChatItem.Message && it.text == "收到：隧道你好" })
+            println("经 OpenSSH + gateway 的回复：${items.filterIsInstance<ChatItem.Message>().filter { it.role == Role.Assistant }.map { it.text }}")
+            // 假模型复述它收到的话：走 gateway 时 App 的补充说明跟在用户原话后面一起给模型
+            assertTrue(items.any { it is ChatItem.Message && it.role == Role.Assistant && it.text.startsWith("收到：隧道你好") })
             runBlocking { repo.session(chat).first() }?.id?.let(repo::deleteSession)
             Thread.sleep(1000)
 
@@ -267,7 +268,7 @@ class OpenSshIT {
             }
             val reply = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.Assistant }.text
             println("模型看到的（假模型复述）：${reply.take(400)}")
-            val path = Regex("📎 图片文件：(\\S+?)（").find(reply)?.groupValues?.get(1)
+            val path = Regex("📎 图片文件：(.+?)（").find(reply)?.groupValues?.get(1)
             assertTrue(path != null, "模型收到了原文件路径")
             assertTrue(File(path!!).readBytes().contentEquals(photo.readBytes()), "服务器上的原文件和发出的一样：$path")
             val mine = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
@@ -651,7 +652,8 @@ class OpenSshIT {
                 }
             }
             println("testbot 回复：" + items.filterIsInstance<ChatItem.Message>().last { it.role == Role.Assistant }.text.take(120))
-            val real = runBlocking { repo.session(chat).first() }!!
+            // 会话列表是另外读的，可能比回复晚到一点
+            val real = runBlocking { withTimeout(20_000) { repo.session(chat).first { it != null } } }!!
             assertEquals("Bot Chat", real.title, "固定对话的标题是 Bot Chat（桌面版按它认）")
             // 这条对话存在 testbot 自己的库里
             runBlocking { repo.refreshBots() }

@@ -1,6 +1,8 @@
 # 让手机连上你的 Hermes
 
-App 通过 Hermes 自带的 API Server 通信。每台要连接的 Hermes 都按下面做一次。
+直连、HTTPS、本机 Termux 通过 Hermes 自带的 API Server 通信，每台要连接的 Hermes 都按下面做一次。
+**SSH 连接（0.14 起）不用 API Server**：手机经 SSH 连到那台电脑上正在运行的 Hermes gateway（和电脑版是同一个服务），
+只要 gateway 在运行、手机的公钥加进了 SSH 授权就行，跳到下面的「SSH」一节。
 
 **0.13.1 开始优先使用 App 中的配置向导：**填地址和账号，点「生成并复制配置命令」，在对应机器终端粘贴执行后，回手机点「检查并连接」。API Key 与手机公钥不需要自己编写；已有有效密钥和端口会保留。详细步骤与适用范围见 [简化配置指南](easy-setup.md)。下面保留手动配置方法供高级用户排查。
 
@@ -28,7 +30,7 @@ API Server 默认只监听本机（`127.0.0.1`）的 8642 端口，手机访问�
 | **Tailscale / ZeroTier**（推荐） | `.env` 加 `API_SERVER_HOST=<这台机器的 Tailscale IP>`，例如 `100.101.22.8` | 直连，地址填这个 IP，端口 8642 |
 | **家里局域网** | `API_SERVER_HOST=<局域网 IP>`，例如 `192.168.1.20` | 直连 |
 | **反向代理 / Tailscale Serve** | 保持监听 `127.0.0.1`，由代理对外提供 HTTPS | HTTPS，填完整网址 |
-| **SSH** | 保持监听 `127.0.0.1` | SSH 隧道（见下文） |
+| **SSH** | 不用开 API Server，gateway 在运行就行 | SSH（见下文） |
 | **手机本机 Termux** | 保持默认 | 本机 Termux |
 
 不建议用 `0.0.0.0` 把它暴露到公网：API Server 能在这台机器上执行命令，只靠一个密钥保护。
@@ -46,27 +48,31 @@ API Server 默认只监听本机（`127.0.0.1`）的 8642 端口，手机访问�
 | API Key 鉴权 | Key 填错了，或者和 `.env` 里的 `API_SERVER_KEY` 不一致 |
 | 能力探测 | Hermes 版本太旧（早于 2026.6），没有会话接口，建议升级 |
 
-## SSH 隧道
+## SSH
 
-适合：家里的电脑/NAS 开着 SSH，不想让 Hermes 的端口直接对外。App 通过 SSH 把请求转发到那台机器的 `127.0.0.1:8642`，
-Hermes 不用改 `API_SERVER_HOST`。
+适合：家里的电脑/NAS 开着 SSH。0.14 起手机经 SSH 直接连那台电脑上的 **Hermes gateway**（`hermes gateway` 启动的那个服务，电脑版、TUI 连的也是它），
+**不需要开 API Server，也不需要 API Key**；电脑上建的对话在手机上能直接接着聊。
 
-1. 设置 → 添加连接 → SSH 隧道，填 SSH 主机（Tailscale IP 也行）、端口、用户名。
-2. 登录方式选**密钥**（推荐）：
-   - 点「在手机上生成新密钥」，再点「复制命令」，在那台机器上以这个用户执行一次（把公钥加进 `~/.ssh/authorized_keys`）；
-   - 或者「导入文件」/「粘贴」你已有的私钥（OpenSSH、PEM、PuTTY 格式都行；暂不支持带口令的私钥，可用 `ssh-keygen -p` 去掉口令）。
+1. 设置 → 添加连接 → SSH，填 SSH 主机（Tailscale IP 也行）、用户名（端口在高级设置里，默认 22）。
+2. 点「生成并复制配置命令」，在那台电脑上以这个用户打开终端，粘贴执行。它只做两件事：
+   把手机的公钥加进 `~/.ssh/authorized_keys`，再看一眼 Hermes gateway 是否在运行。**不改 Hermes 的配置，不重启服务。**
+   - 也可以在高级设置里「导入文件」/「粘贴」你已有的私钥（OpenSSH、PEM、PuTTY 格式都行；暂不支持带口令的私钥，可用 `ssh-keygen -p` 去掉口令），或改用密码登录。
    私钥只加密保存在手机上（Android Keystore），不会发给任何人。
-3. 「远端 Hermes 端口」一般是 8642，再填 API Key，点「测试连接」。
-   第一次连接会显示服务器的主机指纹，可以在服务器上用 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` 对一下；
-   保存后 App 记住这个指纹，**以后指纹变了会拒绝连接**（防止有人冒充你的服务器）。重装过服务器的话，在连接设置里点「重置」。
+3. 回到手机点「检查并连接」。第一次连接会记住服务器的主机指纹（执行过配置命令的话，App 会核对就是那台机器），
+   可以在服务器上用 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` 对一下；**以后指纹变了会拒绝连接**（防止有人冒充你的服务器）。重装过服务器的话，在连接设置里点「重置」。
 
-断网、换网络、服务器重启后，隧道会在下一个请求时自动重新登录，不需要手动操作。
+Hermes gateway 要一直开着：在电脑上运行 `hermes gateway`，或者 `hermes gateway install` 装成开机自启的服务。
+断网、换网络、服务器重启后，App 会在下一次操作时自动重新登录、重新连上 gateway，断线期间回完的消息会补上。
 
-| 测试连接卡在哪一步 | 一般是什么原因 |
+| 检查连接卡在哪一步 | 一般是什么原因 |
 |---|---|
 | SSH 连接 | 地址/端口不对、SSH 服务没开；或者主机指纹变了 |
 | SSH 登录 | 公钥没加到 `authorized_keys`、用户名不对；密码登录被服务器关闭了 |
-| 网络可达 | SSH 能登录，但那台机器上 8642 端口没有 Hermes：gateway 没启动或 API Server 没开 |
+| 连上 Hermes gateway | 提示“gateway 没在运行”：在电脑上运行 `hermes gateway`；提示“这个版本的 Hermes 不支持”：Hermes 太旧，需要升级 |
+| 读取会话 | gateway 连上了但读不了对话记录，把提示原文发给开发者 |
+
+以前（0.13 及更早）SSH 方式是把 API Server 的 8642 端口转发到手机，所以要开 API Server、填 API Key；现在都不需要了。
+已经写进 `.env` 的 `API_SERVER_*` 不影响 SSH 连接，留着也没关系（直连 / HTTPS 还在用的话不要删）。
 
 ## 发图片、拍照、发文件
 
@@ -95,18 +101,17 @@ App 每次发消息都会告诉模型“这个客户端能收文件，用 `MEDIA
 
 Hermes 的 API 不提供下载，所以 App 要能经 SSH 读那台机器上的文件：
 
-- **SSH 隧道连接**：自动就能用。
+- **SSH 连接**：自动就能用。
 - **本机 Termux / 直连**：在连接设置里打开「文件互通（可选）」，填那台机器的 SSH 账号。
   本机 Termux 填 Termux 自己的 sshd：端口 8022，用户名随便（Termux 不检查），推荐在 App 里生成密钥，
   把「复制命令」得到的那行在 Termux 里执行一次。聊天仍然直接连 Hermes，SSH 只用来传文件。
   打开后就能发文件了：文件经 SFTP 传到上面说的位置。
 
-### 测试连接里 SSH 的常见问题
+### 「文件互通」里 SSH 的常见问题
 
 | 提示 | 处理 |
 |---|---|
-| SSH 服务器不允许端口转发 | 在 sshd_config 里加 `AllowTcpForwarding local`（或 `yes`），重载 sshd。只用「文件互通」时不需要转发 |
-| SSH 已登录，但服务器上 127.0.0.1:端口 没有服务在监听 | Hermes gateway 没启动、API Server 没开，或者端口填错了 |
+| SSH 登录失败 | 公钥没加进 Termux / 那台机器的 `authorized_keys`，或者用户名、端口不对 |
 
 ### 直连
 

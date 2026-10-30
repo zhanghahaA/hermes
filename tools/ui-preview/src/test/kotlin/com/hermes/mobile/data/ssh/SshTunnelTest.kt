@@ -29,7 +29,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** 阶段 3：SSH 隧道。用真的 SSH 服务器把请求转发到模拟的 Hermes。 */
+/** SSH 连接：真的 SSH 服务器 + 假 gateway 桥（0.14 起 SSH 全走 gateway，不再转发 API 端口）。 */
 class SshTunnelTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val cleanup = mutableListOf<() -> Unit>()
@@ -43,7 +43,11 @@ class SshTunnelTest {
     private val keys = SshKeys.generate()
 
     private fun hermes() = FakeHermesServer(FakeHermesServer.Version.Modern).start().also { s -> cleanup += { s.shutdown() } }
-    private fun sshd(server: TestSshServer = TestSshServer(authorizedKey = keys.publicKey)) = server.start().also { s -> cleanup += { s.stop() } }
+    /** SSH 连接全走 Hermes gateway：测试 SSH 服务器上装一个假的 gateway 桥。 */
+    private val gateway = FakeGateway()
+    private fun sshd(server: TestSshServer = TestSshServer(authorizedKey = keys.publicKey)) =
+        (if (server.sshd.commandFactory == null) gateway.install(server) else server).start().also { s -> cleanup += { s.stop() } }
+    private fun submits() = gateway.requests.filter { it["method"]?.toString() == "\"prompt.submit\"" }.map { it["params"]!!.toString() }
 
     private fun profile(ssh: TestSshServer, hermes: FakeHermesServer, auth: SshAuthMethod = SshAuthMethod.Key, pin: String? = null) = ConnectionProfile(
         id = "ssh1", name = "家里 NAS", type = ConnectionType.Ssh,
@@ -73,14 +77,16 @@ class SshTunnelTest {
         val repo = repo()
         val profile = profile(ssh, hermes)
 
-        val result = steps(repo.testConnection(profile, hermes.key, keys.privateKey))
-        assertEquals(listOf("SSH 连接", "SSH 登录", "网络可达", "识别 Hermes", "API Key 鉴权", "能力探测"), result.map { it.title })
+        // SSH 连接不需要 API Key
+        val result = steps(repo.testConnection(profile, null, keys.privateKey))
+        assertEquals(listOf("SSH 连接", "SSH 登录", "连上 Hermes gateway", "读取会话"), result.map { it.title })
         assertTrue(result.all { it.status == TestStepStatus.Passed }, result.toString())
         assertTrue(result[0].detail!!.contains("首次连接") && result[0].detail!!.contains("SHA256:"), result[0].detail)
 
-        repo.saveConnection(profile, hermes.key, keys.privateKey)
+        repo.saveConnection(profile, null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected, repo.connectionState.value.toString())
         runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
+        assertTrue(hermes.requests.isEmpty(), "不碰 API Server")
         val pinned = repo.connections.value.single().sshHostKey
         assertNotNull(pinned, "第一次连上就记住主机指纹")
         assertTrue(pinned.startsWith("SHA256:"))
@@ -111,7 +117,7 @@ class SshTunnelTest {
         val hermes = hermes()
         val ssh = sshd()
         val repo = repo()
-        val ok = steps(repo.testConnection(profile(ssh, hermes, SshAuthMethod.Password), hermes.key, ssh.password))
+        val ok = steps(repo.testConnection(profile(ssh, hermes, SshAuthMethod.Password), null, ssh.password))
         assertTrue(ok.all { it.status == TestStepStatus.Passed }, ok.toString())
 
         val bad = steps(repo.testConnection(profile(ssh, hermes, SshAuthMethod.Password), hermes.key, "wrong"))
@@ -147,14 +153,14 @@ class SshTunnelTest {
     }
 
     @Test
-    fun wrongHermesPortIsExplained() {
+    fun gatewayNotRunningIsExplained() {
         val hermes = hermes()
         val ssh = sshd()
-        val profile = profile(ssh, hermes).copy(port = 1) // 远端没有服务
-        val result = steps(repo().testConnection(profile, hermes.key, keys.privateKey))
+        gateway.running = false
+        val result = steps(repo().testConnection(profile(ssh, hermes), null, keys.privateKey))
         assertEquals(TestStepStatus.Passed, result[1].status)
         assertEquals(TestStepStatus.Failed, result[2].status)
-        assertTrue(result[2].detail!!.contains("SSH 已登录"), result[2].detail)
+        assertTrue(result[2].detail!!.contains("gateway 没在运行"), result[2].detail)
     }
 
     @Test
@@ -162,7 +168,7 @@ class SshTunnelTest {
         val hermes = hermes()
         val ssh = sshd()
         val repo = repo()
-        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
 
@@ -182,18 +188,26 @@ class SshTunnelTest {
         assertTrue(repo.connectionState.value is ConnectionState.Connected)
     }
 
+    /** 下拉刷新：连接是通的就不重建（重建会打断正在读的记录、正在跟的回复）；SSH 断了才重新登录。 */
     @Test
-    fun pullRefreshReopensSshWithoutSwitchingConnection() = runBlocking {
+    fun pullRefreshKeepsAHealthyGatewayAndReopensADeadOne() = runBlocking {
         val hermes = hermes()
-        val ssh = sshd()
+        var ssh = sshd()
         val repo = repo()
-        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         withTimeout(5000) { repo.sessions.first { it.isNotEmpty() } }
         val before = ssh.logins.get()
         withTimeout(10_000) { repo.refreshSessions() }
-        assertTrue(ssh.logins.get() > before, "刷新主动重建 SSH，而不是继续使用旧连接")
+        assertEquals(before, ssh.logins.get(), "通的就不重新登录")
         assertTrue(repo.connectionState.value is ConnectionState.Connected)
+
+        val port = ssh.port
+        ssh.stop()
+        ssh = sshd(TestSshServer(authorizedKey = keys.publicKey, hostKeyFile = ssh.hostKeyFile, port = port))
+        withTimeout(30_000) { repo.refreshSessions() }
+        assertTrue(ssh.logins.get() >= 1, "SSH 断了：刷新时重新登录")
+        assertTrue(repo.connectionState.value is ConnectionState.Connected, repo.connectionState.value.toString())
         assertTrue(repo.sessions.value.isNotEmpty())
         assertEquals("ssh1", repo.activeConnectionId.value)
     }
@@ -203,7 +217,7 @@ class SshTunnelTest {
         val hermes = hermes()
         val ssh = sshd()
         val repo = repo()
-        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         repo.sendMessage("s1", "给我选项", emptyList())
         val items = withTimeout(10_000) { repo.chatItems("s1").first { list -> list.any { it is ChatItem.Clarify } } }
@@ -211,7 +225,7 @@ class SshTunnelTest {
         assertEquals(listOf("蓝色", "绿色"), card.options)
         repo.answerClarify("s1", card.id, "蓝色")
         withTimeout(10_000) { repo.chatItems("s1").first { list -> list.any { it is ChatItem.Message && it.text == "最终回复：给我选项" } } }
-        assertTrue(hermes.requests.any { it.path?.endsWith("/clarify") == true })
+        assertTrue(gateway.requests.any { it["method"]?.toString() == "\"clarify.respond\"" })
     }
 
     @Test
@@ -251,7 +265,7 @@ class SshTunnelTest {
         val hermes = hermes()
         val ssh = sshd()
         val repo = repo()
-        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
         assertTrue(repo.canSendAnyFile(), "SSH 连接可以发任意文件")
@@ -273,7 +287,7 @@ class SshTunnelTest {
         val uploaded = ssh.home.resolve("hermes-uploads/data pack.zip")
         assertTrue(java.nio.file.Files.isRegularFile(uploaded), "保留原文件名：" + java.nio.file.Files.list(ssh.home.resolve("hermes-uploads")).use { it.toList() })
         assertTrue(java.nio.file.Files.readAllBytes(uploaded).contentEquals(bytes), "上传的内容完整")
-        val input = hermes.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
+        val input = submits().first()
         assertTrue(input.contains("📎 附件：data pack.zip（已保存到 /hermes-uploads/data pack.zip，"), input)
         val mine = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
         assertEquals("解压看看", mine.text)
@@ -287,7 +301,7 @@ class SshTunnelTest {
         val hermes = hermes()
         val ssh = sshd()
         val repo = repo()
-        repo.saveConnection(profile(ssh, hermes).copy(uploadDir = "~/inbox/hermes"), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes).copy(uploadDir = "~/inbox/hermes"), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
 
@@ -309,7 +323,7 @@ class SshTunnelTest {
         val dir = ssh.home.resolve("inbox/hermes")
         assertEquals(yaml, java.nio.file.Files.readString(dir.resolve("config.yaml")))
         assertEquals(yaml, java.nio.file.Files.readString(dir.resolve("config (1).yaml")), "重名的加序号，不覆盖")
-        val inputs = hermes.requests.filter { it.path == "/v1/runs" }.map { it.body.clone().readUtf8() }
+        val inputs = submits()
         assertTrue(inputs.none { "DO-NOT-INLINE" in it }, "文件内容不写进消息：$inputs")
         assertTrue(inputs[0].contains("📎 附件：config.yaml（已保存到 /inbox/hermes/config.yaml，"), inputs[0])
         assertTrue(inputs[1].contains("/inbox/hermes/config (1).yaml"), inputs[1])
@@ -321,7 +335,7 @@ class SshTunnelTest {
         val hermes = hermes()
         val ssh = sshd()
         val repo = repo()
-        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         runBlocking { withTimeout(5_000) { repo.sessions.first { it.isNotEmpty() } } }
 
@@ -338,8 +352,9 @@ class SshTunnelTest {
         }
         val uploaded = ssh.home.resolve("hermes-uploads/image.jpg")
         assertTrue(java.nio.file.Files.readAllBytes(uploaded).contentEquals(bytes), "原文件完整")
-        val input = hermes.requests.first { it.path == "/v1/runs" }.body.clone().readUtf8()
-        assertTrue(input.contains("📎 图片文件：/hermes-uploads/") && input.contains("image_url"), "模型既能看图，也知道文件在哪：$input")
+        val input = submits().first()
+        assertTrue(input.contains("📎 图片文件：/hermes-uploads/") && input.contains("\"attachments\""), "模型既能看图，也知道文件在哪：$input")
+        assertTrue(gateway.requests.any { it["method"]?.toString() == "\"image.attach_bytes\"" }, "图片先交给 gateway 暂存")
         val mine = items.filterIsInstance<ChatItem.Message>().last { it.role == Role.User }
         assertEquals("用这张图填表", mine.text, "气泡里不显示路径那一行")
         assertEquals(1, mine.images.size)
@@ -354,7 +369,7 @@ class SshTunnelTest {
         val png = ByteArray(5000) { (it % 200).toByte() }
         java.nio.file.Files.write(ssh.home.resolve("gen/cat.png"), png)
         val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), mediaDir = kotlin.io.path.createTempDirectory("m").toFile(), backoff = { 50L })
-        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         val local = runBlocking { repo.fetchRemoteMedia("/gen/cat.png") }
         assertNotNull(local, "经 SFTP 下载到本机")
@@ -383,26 +398,13 @@ class SshTunnelTest {
     }
 
     @Test
-    fun refusedForwardingIsExplained() {
-        val hermes = hermes()
-        val ssh = TestSshServer(authorizedKey = keys.publicKey).apply {
-            sshd.forwardingFilter = org.apache.sshd.server.forward.RejectAllForwardingFilter.INSTANCE
-        }
-        sshd(ssh)
-        val result = steps(repo().testConnection(profile(ssh, hermes), hermes.key, keys.privateKey))
-        assertEquals(TestStepStatus.Passed, result[1].status)
-        assertEquals(TestStepStatus.Failed, result[2].status)
-        assertTrue(result[2].detail!!.contains("不允许端口转发"), result[2].detail)
-    }
-
-    @Test
     fun generatedFilesOpenOverSftp() {
         val hermes = hermes()
         val ssh = sshd()
         java.nio.file.Files.createDirectories(ssh.home.resolve("scratch"))
         java.nio.file.Files.writeString(ssh.home.resolve("scratch/one-character.md"), "糖")
         val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), mediaDir = kotlin.io.path.createTempDirectory("m").toFile(), backoff = { 50L })
-        repo.saveConnection(profile(ssh, hermes), hermes.key, keys.privateKey)
+        repo.saveConnection(profile(ssh, hermes), null, keys.privateKey)
         assertTrue(repo.awaitState() is ConnectionState.Connected)
         val file = com.hermes.mobile.data.model.FileRef("one-character.md", remotePath = "/scratch/one-character.md")
         val local = assertNotNull(runBlocking { repo.fileForOpening(file) })

@@ -241,6 +241,8 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 
 ## SSH 隧道与连接诊断
 
+> 0.14 起 SSH 连接不再转发 API 端口（见下一节「SSH 连接走 Hermes gateway」）。这一节的转发、`probeForward`、HTTP 诊断现在只在历史版本里有意义；`SshTunnel` 的端口转发代码还在，但 SSH 连接已经不用了。
+
 - 本地监听和 HTTP URL 一律使用 IPv4 `127.0.0.1`；SSH 目标仍是服务器自己的 `127.0.0.1:<API 端口>`，不需要把 API 暴露到公网。
 - 仅 SSH 隧道客户端显式设置 `Proxy.NO_PROXY`，REST 和 SSE 都直达本地入口；直连、HTTPS、本机 Termux 的代理配置保持原行为。主机指纹、认证和 SFTP 不变。
 - `probeForward()` 只开关一条 direct-tcpip 通道，不发送 HTTP。真正的网络检查必须由 OkHttp 发送 `GET /health` 并读取响应。收到 401/403/404/5xx 或不符合预期的 JSON，不能再统一提示远端端口没有监听。
@@ -248,6 +250,63 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 - `ConnectionDiagnostics` 仅在内存保留最近 4 次 SSH 测试 / 正式连接，每次最多 180 个事件；构造参数 `enabled=false` 可关闭记录。记录匿名 id、相对耗时、回环端口、HTTP 状态、代理类型、上下行首批 / 总字节、结束类型和异常类名，绝不记录真实主机、凭据、Header、正文、聊天、文件名或异常 message。设置中「导出诊断信息」包含这些事件。
 - 看不到 `LocalAccepted`：请求尚未进入本地转发器；有通道但无 `UpFirstBytes`：尚未转发请求字节；有上行无下行：检查远端响应和 SSH 通道；有 `HTTP=200` 后失败：检查读取 / JSON 解析阶段。不要把仅有 TCP 握手当成健康检查已到达。
 - HTTP 收到响应头后的正文读取和 SSE 也响应协程取消，释放响应并解除阻塞；正文超时保留原始异常类别。Android 实机自检步骤见 [ssh-tests.md](ssh-tests.md)。JVM 测试通过不能代替 Android / 用户网络验证。
+
+## SSH 连接走 Hermes gateway（0.14 起）
+
+SSH 连接不再把 API Server 的 8642 端口转发到手机，聊天、会话、审批、模型全走 gateway 的 `/api/ws`（canonical 协议 `hermes-gateway-v1`，
+和电脑版、TUI 是同一个服务）。不需要 API Server，也不需要 API Key；电脑上（来源 `local` / `desktop` / `cli`）建的会话可以直接接着聊——
+API Server 只允许继续来源是 `api_server` / `bot_room` 的会话，这是以前“只能分叉”的原因。用户选的是“只用 gateway，不退回”：gateway 不在运行就连接失败并说明原因，不会再去试 8642。
+
+### 桥（`GatewayBridge.Script`）
+
+- 经 SSH 用 `HermesAdmin.hermesPython` 跑在 Hermes 自己的 Python 里，`HERMES_HOME` 是当前连接的目录（bot 是 `profiles/<bot>`）。
+  `discover_gateway_endpoint(gateway_profile_home(home))` 找正在跑的 gateway（不启动它），控制 socket 换 `scope="host"` 的票据，`GatewayClient` 连 `/api/ws`。
+- stdin / stdout 一行一个 JSON：
+  - 手机 → 桥：`{id, method, params, timeout}` 原样转给 gateway；`{id, local: "sessions|session|skills|toolsets|jobs", params}` 在桥里直接调 Hermes 的 Python 函数（和 API Server 那几个接口调的是同一批）。
+  - 桥 → 手机：第一行 `{ready: true, code_sha, capabilities, home}` 或 `{ready: false, error}`；之后 `{id, result}` / `{id, error: {reason, code, data}}`、gateway 推来的 `{event: params}`；gateway 断开时 `{closed}` 后退出。
+- **会话列表在桥里读**：owner 连接上的 `session.list` 只列 gateway 正管着的（live / legacy）会话，读不到标题、置顶、归档。桥用只读的 `SessionDB.list_sessions_rich` 读 `state.db`（Hermes 自己的命令行客户端也是“读走 state.db、写走 gateway”）。
+  第一次读要 import 数据库模块（好几秒），所以 `ready` 之后在后台 `warm_up()` 先 import。
+- `skills` 兼容旧版 `_find_all_skills` 没有 `include_editorial` 参数；`toolsets` 读的是 **`cli` 平台**的工具集（gateway 会话用 cli，不是 api_server），手机上开关工具集也改 `--platform cli`。
+- Kotlin 侧 `GatewayChannel`：一条通道一个读线程；读线程结束、写失败、调用超时（默认 45 秒）都把通道标成死的，下次调用重开（`generation` +1）。
+  只读方法断线时自动重试一次。下拉刷新先 `ping`，不通才重建 SSH（以前直接重建会把正在进行的调用打断）。
+
+### owner 连接上能用的方法（在 Hermes 06671b7 上验证过）
+
+| 方法 | 要点 |
+|---|---|
+| `session.create` | `source` 只能是 cli / tui / gui / acp / tool / oneshot，存下来的来源是 `local`。分叉（`session.mutate` 的 `branch`）返回的是占位草稿 id，要再读一次会话拿正式 id |
+| `session.resume` | 订阅这个会话的事件（`prompt.submit` 之前必须订阅过）；`omit_messages` 不带记录。带记录时每条有 `row_id`，App 用它当消息 id。`info.reasoning_effort` 是当前推理强度 |
+| `prompt.submit` | `text`（进记录）、`api_text`（给模型的，App 把客户端说明拼在这里，不进记录）、`submission_id`（幂等）、`model_override {model, provider}`（更新的版本还有 `reasoning`）、`attachments [{path, mime}]` |
+| `image.attach_bytes` | 发图：附件必须在 Hermes 的 `cache/images` 暂存目录里、只能是图片 mime，所以先用它把字节放进去再引用路径 |
+| `prompt.receipt {include_result}` | 查这一轮的结果（`final_response` / `response` / `output` / `text`），用来在断线后确认结束 |
+| `approval.respond` / `clarify.respond` | 带 `session_id`、`execution_generation`、`prompt_id`，加 `choice` / `answer` |
+| `session.steer` / `session.interrupt` | 插话 / 停止，带 `execution_generation`；`stale_generation` 时用错误里带回的新值重试一次 |
+| `session.events.since {last_sequence, replay_epoch}` | 断线重连后从上次的 `seq` 补发 |
+| `session.mutate {request_id, expected_revision, [expected_generation], operation, payload}` | rename / sidebar（置顶）/ archive / delete / branch / model / reasoning / workspace / import。`revision_conflict` / `stale_generation` 的错误数据里带新的 revision / generation，App 照着重试（最多 4 次：Hermes 回完一轮会自己起标题，revision 会变）。同一个会话的修改排队发，否则“改名紧接着置顶”两个拿同一个 revision，必有一个冲突 |
+| `model.options` | 模型清单，`capabilities[model].reasoning` 决定显不显示推理强度 |
+| `ping`、`groups.*` | 健康检查；群聊（见下面「群聊」） |
+
+没有的：`session.title`、`session.history`（`unknown_method`）。
+
+坑：
+- **标题不能重复**：改成已有的标题时 gateway 只回一个笼统的 `request_failed`，App 提示“可能已经有对话叫「…」了（Hermes 要求标题不重复）”。
+- **推理强度存在运行策略里**，不在 `model_config`；每次发消息前如果和上次设的不同，先 `session.mutate reasoning`（`appliedEffort` 记住，不重复改）。
+- 发图后 gateway 存进记录的用户消息是视觉描述：`[The user sent an image~ …]\n[If you need a closer look, use vision_analyze with image_url: <路径> ~]`，`ImageMarkers.parse` 把它去掉、从路径里取回图片（sha 是目录名）。
+
+### 事件
+
+每个事件带这个会话自己的 `seq` 和 `admission_id`（一轮一个）。App 的 runId 是 `"<session>|<admission>"`，`GatewayHermesApi.runEvents` 把事件翻成以前 API Server SSE 的形状，后面的代码不用改：
+
+- `message.start` / `message.delta` / `message.complete`（`outcome`：completed / interrupted / cancelled）→ 回复文字和 run.completed / cancelled / failed；
+- `reasoning.delta` → 思考；`thinking.delta` 只是转圈提示，忽略；
+- `tool.start` / `tool.complete`（`result`、`is_error`）→ 工作过程里的工具步骤；
+- `approval.request` / `approval.settled`、`clarify.request` / `clarify.settled` → 审批 / 追问卡片；`session.info` → 会话信息。
+- 先开始收实时事件、再用 `session.events.since` 补发，按 `seq` 去重，所以断线期间结束的一轮重连后也能补到回复（`GatewayFlowTest.aTurnThatFinishesWhileDisconnectedIsReplayedAfterReconnecting`）。
+
+### 配置命令（`assets/setup/configure.py`）
+
+类型是 `Ssh` 时只把手机公钥加进 `authorized_keys`，再用 Hermes 自己的 Python 看一眼 `discover_gateway_endpoint` 是否 attachable，打印“正在运行 / 没检测到 / 没能确认”。
+**不读写 `.env`、不备份、不重启 gateway。** 回执里 `apiKey` 为空，手机只用它证明这台主机执行过命令、记住主机指纹；`ConnectionSetup.readResult` 对 SSH 忽略回执里的密钥（旧版助手写过的也不用）。
 
 ## 管理功能（阶段 5，经 SSH）
 

@@ -82,9 +82,8 @@ class FakeHermesRepository(
     }
 
     override fun testConnection(profile: ConnectionProfile, apiKey: String?, sshSecret: String?): Flow<List<ConnectionTestStep>> = flow {
-        val titles = buildList {
+        val titles = if (profile.type == ConnectionType.Ssh) listOf("SSH 连接", "SSH 登录", "连上 Hermes gateway", "读取会话") else buildList {
             add("网络可达")
-            if (profile.type == ConnectionType.Ssh) add("建立 SSH 隧道")
             if (profile.type == ConnectionType.Https) add("TLS 证书")
             add("健康检查 /health")
             add("API Key 鉴权")

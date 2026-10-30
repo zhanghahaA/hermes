@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 enum class ConnectionType(val label: String, val description: String) {
     Direct("直连", "局域网 / Tailscale / ZeroTier"),
     Https("HTTPS", "反向代理或 Tailscale Serve"),
-    Ssh("SSH 隧道", "经 SSH 转发到远端 8642 端口"),
+    Ssh("SSH", "经 SSH 连 Hermes gateway"),
     Local("本机 Termux", "连接手机上的 127.0.0.1"),
 }
 

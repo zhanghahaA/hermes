@@ -42,7 +42,7 @@ class EasySetupTest {
         return Json.decodeFromString(ConnectionSetup.Parameters.serializer(), Base64.getDecoder().decode(encoded).toString(Charsets.UTF_8))
     }
 
-    @Test fun copyGeneratesBothKeysAndSuccessfulCheckSavesWithoutAnotherSaveButton() = runComposeUiTest {
+    @Test fun sshCopyGeneratesOnlyTheLoginKeyAndSuccessfulCheckSavesWithoutAnotherSaveButton() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val repo = Repo(scope, true)
@@ -54,12 +54,15 @@ class EasySetupTest {
             assertTrue(DesktopSetupClipboard.sensitive)
             assertFalse(DesktopSetupClipboard.text.contains("PRIVATE KEY"))
             val parameters = parameters()
-            assertTrue(parameters.apiKey.isBlank(), "SSH 配置命令不携带连接密钥，由认证后的 SSH 读取")
+            assertTrue(parameters.apiKey.isBlank(), "SSH 走 gateway，配置命令不带连接密钥")
+            onNodeWithText("API Key").assertDoesNotExist()
+            onNodeWithText("粘贴已有 API Key").assertDoesNotExist()
+            onNodeWithText("粘贴配置结果").assertDoesNotExist()
             onNodeWithText("检查并连接").performClick()
             waitUntil(timeoutMillis = 5000) { closed }
             val (profile, key, privateKey) = assertNotNull(repo.saved)
             assertEquals(repo.tested?.id, profile.id, "测试和保存必须使用同一个稳定 ID，才能记住主机指纹")
-            assertEquals(repo.resolvedKey, key)
+            assertNull(key, "SSH 连接不保存 API Key")
             assertEquals("SHA256:test-host", profile.sshHostKey)
             assertEquals(parameters.publicKey, SshKeys.publicKeyLine(assertNotNull(privateKey)))
         } finally { scope.cancel() }
@@ -79,13 +82,15 @@ class EasySetupTest {
         } finally { scope.cancel() }
     }
 
-    @Test fun pasteServerResultReusesItsExistingKeyAndPort() = runComposeUiTest {
+    @Test fun directPasteServerResultReusesItsExistingKeyAndPort() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         try {
             val repo = Repo(scope, true)
             var closed = false
-            setContent { HermesTheme { ConnectionEditorScreen(repo, null, "Ssh") { closed = true } } }
-            fillAndCopy()
+            setContent { HermesTheme { ConnectionEditorScreen(repo, null, "Direct") { closed = true } } }
+            onNodeWithText("地址").performTextInput("127.0.0.1")
+            onNodeWithText("生成并复制配置命令").performScrollTo().performClick()
+            assertTrue(parameters().apiKey.length >= 16, "直连仍由 App 生成 API Server 密钥")
             val existing = ConnectionSetup.generateApiKey()
             val response = parameters().copy(apiKey = existing, publicKey = "", effectivePort = 8765)
             DesktopSetupClipboard.text = ConnectionSetup.ReceiptPrefix + Base64.getUrlEncoder().encodeToString(

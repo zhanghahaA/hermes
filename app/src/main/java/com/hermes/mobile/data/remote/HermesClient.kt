@@ -67,7 +67,7 @@ class HermesClient(
     private val profile: String? = null,
     http: OkHttpClient = SharedHttp,
     private val diagnostics: ConnectionTrace? = null,
-) {
+) : HermesApi {
     private val base: HttpUrl = baseUrl.trim().trimEnd('/').toHttpUrlOrNull()
         ?: throw HermesError.BadUrl("地址格式不对：$baseUrl")
     private val http = http
@@ -75,9 +75,9 @@ class HermesClient(
     /** 事件流用的客户端：服务器每 10 秒发一次心跳，30 秒没有任何数据就认为连接已死。 */
     private val streamHttp: OkHttpClient = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).build()
 
-    internal fun evictIdleConnections() { http.connectionPool.evictAll() }
+    override fun evictIdleConnections() { http.connectionPool.evictAll() }
 
-    internal suspend fun health(): HealthDto = try {
+    override suspend fun health(): HealthDto = try {
         get("/health", HealthDto.serializer(), auth = false, profileScoped = false).also {
             // 随便一个返回 JSON 的服务也能解析成功（字段全是可选的），至少要有 status 或 platform 才算 Hermes
             if (it.status == null && it.platform == null) throw HermesError.NotHermes()
@@ -115,40 +115,39 @@ class HermesClient(
         return HermesClient(base.toString(), apiKey, profile, tunnelHttp, trace)
     }
 
-    internal suspend fun capabilities(): CapabilitiesDto = get("/v1/capabilities", CapabilitiesDto.serializer())
+    override suspend fun capabilities(): CapabilitiesDto = get("/v1/capabilities", CapabilitiesDto.serializer())
 
-    internal suspend fun sessions(limit: Int = 100, offset: Int = 0): SessionListDto =
+    override suspend fun sessions(limit: Int, offset: Int): SessionListDto =
         get("/api/sessions?limit=$limit&offset=$offset", SessionListDto.serializer())
 
-    internal suspend fun session(id: String): SessionDto? =
+    override suspend fun session(id: String): SessionDto? =
         get("/api/sessions/${id.encode()}", SessionEnvelopeDto.serializer()).session
 
-    internal suspend fun messages(sessionId: String): MessageListDto =
+    override suspend fun messages(sessionId: String): MessageListDto =
         get("/api/sessions/${sessionId.encode()}/messages", MessageListDto.serializer())
 
-    internal suspend fun patchSession(id: String, fields: JsonObject): SessionDto? =
+    override suspend fun patchSession(id: String, fields: JsonObject): SessionDto? =
         send("PATCH", "/api/sessions/${id.encode()}", fields, SessionEnvelopeDto.serializer()).session
 
-    suspend fun deleteSession(id: String) {
+    override suspend fun deleteSession(id: String) {
         execute(request("/api/sessions/${id.encode()}").delete().build()).close()
     }
 
-    internal suspend fun createSession(title: String?): SessionDto? =
+    override suspend fun createSession(title: String?): SessionDto? =
         send("POST", "/api/sessions", patch { if (title != null) put("title", title) }, SessionEnvelopeDto.serializer()).session
 
-    internal suspend fun forkSession(id: String): SessionDto? =
+    override suspend fun forkSession(id: String): SessionDto? =
         send("POST", "/api/sessions/${id.encode()}/fork", JsonObject(emptyMap()), SessionEnvelopeDto.serializer()).session
 
-    /** 提交一轮对话。[idempotencyKey] 相同的重试不会让 Hermes 重复执行。 */
-    internal suspend fun startRun(
+    override suspend fun startRun(
         sessionId: String,
         input: JsonElement,
         idempotencyKey: String,
-        instructions: String? = null,
-        model: String? = null,
-        provider: String? = null,
-        workspace: String? = null,
-        reasoningEffort: String? = null,
+        instructions: String?,
+        model: String?,
+        provider: String?,
+        workspace: String?,
+        reasoningEffort: String?,
     ): RunAcceptedDto {
         val body = patch {
             put("input", input)
@@ -174,23 +173,23 @@ class HermesClient(
         return decode(execute(request), RunAcceptedDto.serializer())
     }
 
-    internal suspend fun runStatus(runId: String): RunStatusDto = get("/v1/runs/${runId.encode()}", RunStatusDto.serializer())
+    override suspend fun runStatus(runId: String): RunStatusDto = get("/v1/runs/${runId.encode()}", RunStatusDto.serializer())
 
-    internal suspend fun respondApproval(runId: String, body: JsonObject) {
+    override suspend fun respondApproval(runId: String, body: JsonObject) {
         execute(request("/v1/runs/${runId.encode()}/approval").post(body.toString().toRequestBody(JsonMedia)).build()).close()
     }
 
-    internal suspend fun respondClarify(runId: String, body: JsonObject) {
+    override suspend fun respondClarify(runId: String, body: JsonObject) {
         execute(request("/v1/runs/${runId.encode()}/clarify").post(body.toString().toRequestBody(JsonMedia)).build()).close()
     }
 
     /** 在 Hermes 回复的过程中插一句话（它会在下一步看到，不打断当前工作）。 */
-    internal suspend fun steerRun(runId: String, text: String) {
+    override suspend fun steerRun(runId: String, text: String) {
         val body = kotlinx.serialization.json.buildJsonObject { put("input", kotlinx.serialization.json.JsonPrimitive(text)) }.toString()
         execute(request("/v1/runs/${runId.encode()}/steer").post(body.toRequestBody(JsonMedia)).build()).close()
     }
 
-    internal suspend fun stopRun(runId: String) {
+    override suspend fun stopRun(runId: String) {
         execute(request("/v1/runs/${runId.encode()}/stop").post("{}".toRequestBody(JsonMedia)).build()).close()
     }
 
@@ -198,7 +197,7 @@ class HermesClient(
      * 订阅一轮对话的事件（SSE）。[afterSeq] 是已经处理过的最后一个序号，服务器会补发之后的事件。
      * 流正常结束（任务结束）时 Flow 完成；网络断开时抛 [HermesError]，由调用方决定是否重连。
      */
-    internal fun runEvents(runId: String, afterSeq: Long): Flow<SseEvent> = flow {
+    override fun runEvents(runId: String, afterSeq: Long): Flow<SseEvent> = flow {
         val request = request("/v1/runs/${runId.encode()}/events")
             .header("Accept", "text/event-stream")
             .apply { if (afterSeq >= 0) header("Last-Event-ID", afterSeq.toString()) }
@@ -220,10 +219,10 @@ class HermesClient(
 
     // ---- 模型 ----
 
-    internal suspend fun modelOptions(): ModelOptionsDto = get("/api/model/options", ModelOptionsDto.serializer())
+    override suspend fun modelOptions(): ModelOptionsDto = get("/api/model/options", ModelOptionsDto.serializer())
 
     /** 把会话锁定到某个模型（之后这个会话的每一轮都用它）。 */
-    internal suspend fun lockSessionModel(sessionId: String, model: String, provider: String) {
+    override suspend fun lockSessionModel(sessionId: String, model: String, provider: String) {
         val body = patch {
             put("model", model)
             put("provider", provider)
@@ -234,31 +233,31 @@ class HermesClient(
     // ---- 定时任务 ----
 
     /** `/health/detailed`：gateway 的运行状态、各平台连接情况、今天的用量。字段随版本变化，原样返回。 */
-    internal suspend fun healthDetailed(): JsonObject = get("/health/detailed", JsonObject.serializer())
+    override suspend fun healthDetailed(): JsonObject = get("/health/detailed", JsonObject.serializer())
 
-    internal suspend fun skills(): SkillListDto = get("/v1/skills", SkillListDto.serializer())
+    override suspend fun skills(): SkillListDto = get("/v1/skills", SkillListDto.serializer())
 
-    internal suspend fun toolsets(): ToolsetListDto = get("/v1/toolsets", ToolsetListDto.serializer())
+    override suspend fun toolsets(): ToolsetListDto = get("/v1/toolsets", ToolsetListDto.serializer())
 
-    internal suspend fun jobs(): JobListDto = get("/api/jobs?include_disabled=true", JobListDto.serializer())
+    override suspend fun jobs(): JobListDto = get("/api/jobs?include_disabled=true", JobListDto.serializer())
 
-    internal suspend fun createJob(fields: JsonObject): JobDto? = send("POST", "/api/jobs", fields, JobEnvelopeDto.serializer()).job
+    override suspend fun createJob(fields: JsonObject): JobDto? = send("POST", "/api/jobs", fields, JobEnvelopeDto.serializer()).job
 
-    internal suspend fun updateJob(id: String, fields: JsonObject): JobDto? =
+    override suspend fun updateJob(id: String, fields: JsonObject): JobDto? =
         send("PATCH", "/api/jobs/${id.encode()}", fields, JobEnvelopeDto.serializer()).job
 
-    internal suspend fun deleteJob(id: String) {
+    override suspend fun deleteJob(id: String) {
         execute(request("/api/jobs/${id.encode()}").delete().build()).close()
     }
 
     /** pause / resume / run */
-    internal suspend fun jobAction(id: String, action: String): JobDto? =
+    override suspend fun jobAction(id: String, action: String): JobDto? =
         send("POST", "/api/jobs/${id.encode()}/$action", JsonObject(emptyMap()), JobEnvelopeDto.serializer()).job
 
-    internal suspend fun job(id: String): JobDto? = get("/api/jobs/${id.encode()}", JobEnvelopeDto.serializer()).job
+    override suspend fun job(id: String): JobDto? = get("/api/jobs/${id.encode()}", JobEnvelopeDto.serializer()).job
 
     /** 用一个必须鉴权、又在所有版本都有的接口验证 Key（旧版本没有 /v1/capabilities 时用）。 */
-    suspend fun verifyKey() {
+    override suspend fun verifyKey() {
         execute(request("/v1/models").get().build()).close()
     }
 

@@ -25,7 +25,8 @@ class SetupTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="hermes-setup-test-")
         self.root = Path(self.temp.name) / "hermes"
         self.ssh = Path(self.temp.name) / "ssh"
-        self.params = dict(nonce="test-nonce", type="Ssh", host="example.invalid", port=8642,
+        # 会写 API Server 配置的是直连 / 本机 Termux；SSH 走 gateway，单独测
+        self.params = dict(nonce="test-nonce", type="Local", host="example.invalid", port=8642,
                            profile="", sshUser="test-user", sshPort=22,
                            apiKey=secrets.token_hex(32), publicKey="ssh-ed25519 " + base64.b64encode(struct.pack(">I", 11) + b"ssh-ed25519" + struct.pack(">I", 32) + bytes(range(32))).decode() + " test")
 
@@ -60,7 +61,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(value["effectivePort"], 8765)
         self.assertEqual(value["apiKey"], old_key)
 
-    def test_ssh_creates_key_on_server_and_keeps_receipt_private(self):
+    def test_missing_key_is_created_on_server_and_receipt_kept_private(self):
         _, receipt = module.configure(self.root, self.ssh, dict(self.params, apiKey=""))
         result = self.root / ".mobile-setup-results" / hashlib.sha256(b"test-nonce").hexdigest()
         self.assertEqual(result.read_text().strip(), receipt)
@@ -201,6 +202,35 @@ class SetupTests(unittest.TestCase):
         self.assertFalse((self.root / ".env").exists())
         module.configure(self.root, self.ssh, dict(self.params, type="Direct", host="127.0.0.1"))
         self.assertIn("127.0.0.1", (self.root / ".env").read_text())
+
+    def test_ssh_only_authorizes_the_phone_and_never_touches_hermes_config(self):
+        self.root.mkdir()
+        original = "# keep\nOTHER_SETTING=value\n"
+        (self.root / ".env").write_text(original)
+        before = (self.root / ".env").stat().st_mtime_ns
+        reused, receipt = module.configure(self.root, self.ssh, dict(self.params, type="Ssh", apiKey=""))
+        self.assertFalse(reused)
+        self.assertEqual((self.root / ".env").read_text(), original)
+        self.assertEqual((self.root / ".env").stat().st_mtime_ns, before)
+        self.assertFalse((self.root / ".env.before-mobile-setup").exists())
+        self.assertEqual((self.ssh / "authorized_keys").read_text(), "no-agent-forwarding,no-X11-forwarding,no-pty " + self.params["publicKey"] + "\n")
+        value = json.loads(base64.urlsafe_b64decode(receipt.split(":", 1)[1]))
+        self.assertEqual(value["apiKey"], "", "SSH 回执里没有连接密钥")
+
+    def test_ssh_setup_without_env_does_not_create_one(self):
+        module.configure(self.root, self.ssh, dict(self.params, type="Ssh", apiKey=""))
+        self.assertFalse((self.root / ".env").exists())
+
+    def test_gateway_check_only_reports_and_never_restarts(self):
+        for output, expected in (("running\n", "正在运行"), ("stopped:no_endpoint\n", "没检测到"), ("", "没能确认")):
+            done = mock.Mock(stdout=output)
+            with mock.patch.object(module, "hermes_python", return_value=["/venv/bin/python"]), \
+                    mock.patch.object(module.subprocess, "run", return_value=done) as run, \
+                    mock.patch.object(module.subprocess, "Popen") as start, mock.patch("builtins.print") as shown:
+                module.report_gateway(self.root)
+                start.assert_not_called()
+                self.assertEqual(run.call_args.args[0][:2], ["/venv/bin/python", "-c"])
+                self.assertIn(expected, shown.call_args.args[0])
 
 
 if __name__ == "__main__":

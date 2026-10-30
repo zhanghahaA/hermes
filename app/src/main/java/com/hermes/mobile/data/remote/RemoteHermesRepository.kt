@@ -155,7 +155,7 @@ class RemoteHermesRepository(
     override val features: StateFlow<Set<AppFeature>> = _features.asStateFlow()
 
     /** 当前连接的客户端和能力；切换连接时整体替换。 */
-    private var client: HermesClient? = null
+    private var client: HermesApi? = null
     private var capabilities: ServerCapabilities? = null
     private var connectedId: String? = null
     private var connectJob: Job? = null
@@ -266,6 +266,8 @@ class RemoteHermesRepository(
     }
 
     private fun closeTunnel() {
+        gatewayChannel?.close()
+        gatewayChannel = null
         val old = tunnel ?: return
         tunnel = null
         scope.launch(Dispatchers.IO) { old.close() }
@@ -392,8 +394,9 @@ class RemoteHermesRepository(
         val trace = if (ssh) connectionDiagnostics.begin(ConnectionDiagnostics.Use.Test) else null
         val testSecret = if (ssh || fileSsh) sshSecret?.takeIf { it.isNotEmpty() } ?: sshSecretOf(profile.id) else null
         val privateValues = listOfNotNull(profile.host.takeIf { it.isNotBlank() }, key, testSecret)
-        val titles = (if (ssh) listOf("SSH 连接", "SSH 登录") else emptyList()) + listOf("网络可达", "识别 Hermes", "API Key 鉴权", "能力探测") +
-            (if (fileSsh) listOf("文件互通（SSH）") else emptyList())
+        // SSH 连接全走 Hermes gateway（不需要 API Server 和 Key）；其它连接走 API Server
+        val titles = if (ssh) listOf("SSH 连接", "SSH 登录", "连上 Hermes gateway", "读取会话") else
+            listOf("网络可达", "识别 Hermes", "API Key 鉴权", "能力探测") + (if (fileSsh) listOf("文件互通（SSH）") else emptyList())
         var steps = titles.map { ConnectionTestStep(it, TestStepStatus.Pending) }
         suspend fun mark(i: Int, status: TestStepStatus, detail: String? = null) {
             val safeDetail = if (status == TestStepStatus.Failed && detail != null) {
@@ -447,12 +450,24 @@ class RemoteHermesRepository(
                 seen?.let { seenHostKeys[profile.id] = it }
                 mark(0, TestStepStatus.Passed, hostKeyDetail(pinned, t.hostKey))
                 mark(1, TestStepStatus.Passed, "用户 ${profile.sshUser.trim()}")
-                // 先单独试一下转发，能分清“服务器禁止转发”和“端口上没服务”
-                withContext(Dispatchers.IO) { t.probeForward() }?.let { reason ->
-                    mark(2, TestStepStatus.Failed, reason)
+                mark(2, TestStepStatus.Running)
+                val started = clock()
+                val gateway = GatewayHermesApi(GatewayChannel { HermesAdmin(t, profile.profile).openGateway() })
+                val health = try {
+                    gateway.health()
+                } catch (e: HermesError) {
+                    mark(2, TestStepStatus.Failed, e.message)
                     return@flow
                 }
-                clientFactory(t.localBaseUrl, key, profile.profile).throughSshTunnel(checkNotNull(trace))
+                mark(2, TestStepStatus.Passed, listOfNotNull(health.knownVersion()?.let { "Hermes $it" }, "${clock() - started} ms").joinToString(" · "))
+                mark(3, TestStepStatus.Running)
+                try {
+                    val count = gateway.sessions(limit = 200).data.size
+                    mark(3, TestStepStatus.Passed, "读到 $count 个会话 · 聊天、审批、文件都走 gateway")
+                } catch (e: HermesError) {
+                    mark(3, TestStepStatus.Failed, e.message)
+                }
+                return@flow
             } else {
                 try {
                     clientFor(profile, key)
@@ -484,7 +499,7 @@ class RemoteHermesRepository(
                 mark(base + 1, TestStepStatus.Failed, "服务器已收到请求，健康检查返回 HTTP ${e.status}")
                 return@flow
             } catch (e: HermesError) {
-                mark(base, TestStepStatus.Failed, if (trace != null) sshHealthFailure(e, trace) else e.message)
+                mark(base, TestStepStatus.Failed, e.message)
                 return@flow
             }
             mark(base, TestStepStatus.Passed, "${clock() - started} ms")
@@ -544,33 +559,6 @@ class RemoteHermesRepository(
         }
     }
 
-    private fun sshHealthFailure(error: HermesError, trace: ConnectionTrace): String {
-        val causes = generateSequence(error.cause) { it.cause }.take(8).toList()
-        val cause = causes.lastOrNull()
-        val reason = when (trace.forwardFailure) {
-            ConnectionTrace.ForwardFailure.Denied -> "SSH 已登录，但服务器拒绝了转发通道"
-            ConnectionTrace.ForwardFailure.RemoteConnect -> "SSH 已登录，但转发通道无法连接服务器上的 Hermes 端口"
-            ConnectionTrace.ForwardFailure.SessionLost -> "SSH 会话已断开，未能完成健康检查，请重新连接"
-            ConnectionTrace.ForwardFailure.Other -> "SSH 转发通道建立失败，健康检查未完成"
-            null -> when {
-                error is HermesError.Timeout -> "SSH 已登录，隧道内 HTTP 健康检查超时"
-                error is HermesError.Tls -> "SSH 已登录，但隧道内 HTTP/TLS 协议检查失败"
-                causes.any { it is java.net.ConnectException } -> "手机本地隧道入口连接失败，请重新建立 SSH 连接"
-                causes.any { it.message?.contains("CLEARTEXT", ignoreCase = true) == true } -> "Android 的明文 HTTP 策略拦截了本地健康检查"
-                causes.any { it is java.io.EOFException } -> "隧道内 HTTP 响应提前结束"
-                causes.any { it is java.net.ProtocolException } -> "隧道内 HTTP 响应协议不正确"
-                else -> "SSH 已登录，但隧道内 HTTP 请求中断"
-            }
-        }
-        val phase = when (trace.httpPhase) {
-            ConnectionTrace.Event.HealthStart, ConnectionTrace.Event.HealthConnectStart -> "连接手机本地入口"
-            ConnectionTrace.Event.HealthConnected, ConnectionTrace.Event.HealthHeadersStart -> "发送 HTTP 请求"
-            ConnectionTrace.Event.HealthHeadersSent, ConnectionTrace.Event.HealthResponseStart -> "等待 HTTP 响应"
-            else -> "读取健康检查响应"
-        }
-        return "$reason（阶段：$phase；异常：${cause?.javaClass?.simpleName ?: error.javaClass.simpleName}）"
-    }
-
     private fun hostKeyDetail(pinned: String?, seen: String?): String = when {
         seen == null -> "已连接"
         pinned == null -> "首次连接，主机指纹 $seen（保存后记住，以后变了会拒绝连接）"
@@ -583,7 +571,7 @@ class RemoteHermesRepository(
     }
 
     /** 建立到这个连接的客户端；SSH 连接先建隧道（[onHostKey]：第一次见到的主机指纹）。 */
-    private suspend fun openClient(profile: ConnectionProfile, key: String?, sshSecret: String?, onHostKey: (String) -> Unit): HermesClient {
+    private suspend fun openClient(profile: ConnectionProfile, key: String?, sshSecret: String?, onHostKey: (String) -> Unit): HermesApi {
         if (profile.type != ConnectionType.Ssh) {
             val c = clientFor(profile, key)
             if (hasFileSsh(profile)) openFileSsh(profile, sshSecret, onHostKey)
@@ -613,8 +601,17 @@ class RemoteHermesRepository(
             throw HermesError.Ssh(e.message ?: "SSH 连接失败", hostKeyChanged = e.stage == SshException.Stage.HostKey)
         }
         tunnel = t
-        return clientFactory(t.localBaseUrl, key, profile.profile).throughSshTunnel(trace)
+        // SSH 连接全走 Hermes gateway：经 SSH 在服务器上开一个小桥，不需要 API Server 和 Key
+        val admin = HermesAdmin(t, profile.profile)
+        adminFor = t to admin
+        return GatewayHermesApi(GatewayChannel { admin.openGateway() }.also { gatewayChannel = it })
     }
+
+    /** SSH 连接（全走 gateway）时的通道。 */
+    @Volatile private var gatewayChannel: GatewayChannel? = null
+
+    /** 当前连接走的是 Hermes gateway（SSH 连接），不是 API Server。 */
+    private val viaGateway: Boolean get() = client is GatewayHermesApi
 
     /** 本机 Termux / 直连也可以配一个 SSH（只用来传文件：显示 Hermes 生成的图片、发任意文件）。 */
     private fun hasFileSsh(profile: ConnectionProfile): Boolean =
@@ -722,8 +719,10 @@ class RemoteHermesRepository(
             } else {
                 try {
                     // 后台久置可能留下半断开的 SSH；主动刷新应重建传输，不清空待发送消息和任务。
+                    // 走 gateway 时先 ping 一下：通的就不重建（重建会打断正在读的聊天记录、正在跟的回复）
                     val transport = tunnel
-                    withContext(Dispatchers.IO) { transport?.reset() }
+                    val alive = current is GatewayHermesApi && runCatching { current.ping() }.isSuccess
+                    if (!alive) withContext(Dispatchers.IO) { transport?.reset() }
                     current.evictIdleConnections()
                     val started = clock()
                     val health = current.health()
@@ -750,7 +749,7 @@ class RemoteHermesRepository(
         _sessions.update { list -> list.map { if (it.id == id) transform(it) else it } }
 
     /** 先在本地改（界面立刻变），再发给服务器；失败就改回去并提示。 */
-    private fun optimistic(id: String, transform: (Session) -> Session, call: suspend HermesClient.() -> Unit) {
+    private fun optimistic(id: String, transform: (Session) -> Session, call: suspend HermesApi.() -> Unit) {
         val before = _sessions.value
         updateSession(id, transform)
         scope.launch {
@@ -927,6 +926,8 @@ class RemoteHermesRepository(
     private val sharedControls = ConcurrentHashMap<String, SharedControl>()
 
     private suspend fun watchSharedControls(uiSessionId: String) {
+        // 走 gateway 时审批 / 追问卡片跟着这一轮的事件一起来，不用另外同步
+        if (viaGateway || (_connections.value.firstOrNull { it.id == _activeConnectionId.value }?.type == ConnectionType.Ssh)) return
         val connection = _activeConnectionId.value
         var reported = false
         while (_activeConnectionId.value == connection) {
@@ -1446,7 +1447,7 @@ class RemoteHermesRepository(
             }
         }
         return when (profile?.type) {
-            ConnectionType.Ssh -> throw HermesError.Ssh("SSH 隧道没连上")
+            ConnectionType.Ssh -> throw HermesError.Ssh("SSH 没连上")
             ConnectionType.Local -> localFileExporter?.invoke(file.path, file.name, file.mime)
                 ?: throw HermesError.NotSupported("把文件交给本机 Termux")
             else -> throw HermesError.NotSupported("发送文件（这个连接没有 SSH。Hermes 的接口只收文字和图片，文件要经 SSH 传到电脑上：在连接设置里打开 SSH 或「文件互通」）")
@@ -1555,7 +1556,7 @@ class RemoteHermesRepository(
     }
 
     /** 查状态；已结束就收尾并返回 true，还在进行就补上等待中的审批/追问。 */
-    private suspend fun settleFromStatus(run: ActiveRun, c: HermesClient): Boolean {
+    private suspend fun settleFromStatus(run: ActiveRun, c: HermesApi): Boolean {
         val status = try {
             c.runStatus(run.runId)
         } catch (e: CancellationException) {
@@ -2063,7 +2064,10 @@ class RemoteHermesRepository(
         connections.value.firstOrNull { it.id == connectedId }?.let(::effectiveProfile)?.profile?.trim()?.takeIf { it.isNotEmpty() }
             ?.let { " -p " + it.replace(Regex("[^A-Za-z0-9_.-]"), "") }.orEmpty()
 
-    /** API 不能改工具集，经 SSH 运行 `hermes tools enable|disable … --platform api_server`（改的是 config.yaml，下一条消息起生效）。 */
+    /**
+     * 经 SSH 运行 `hermes tools enable|disable …`（改的是 config.yaml，下一条消息起生效）。API Server 上的会话用 api_server 平台的工具集，
+     * 走 gateway 的会话（SSH 连接）用 cli 平台的，和电脑版、TUI 一样。
+     */
     override fun toggleToolset(name: String) {
         val t = tunnel ?: return notYet("不经 SSH 开关工具集")
         val toolset = _toolsets.value.firstOrNull { it.name == name } ?: return
@@ -2074,7 +2078,7 @@ class RemoteHermesRepository(
             try {
                 val safe = name.replace(Regex("[^A-Za-z0-9_.:-]"), "")
                 val (code, output) = withContext(Dispatchers.IO) {
-                    t.exec("hermes${profileFlag()} tools ${if (enable) "enable" else "disable"} $safe --platform api_server")
+                    t.exec("hermes${profileFlag()} tools ${if (enable) "enable" else "disable"} $safe --platform ${if (viaGateway) "cli" else "api_server"}")
                 }
                 if (code != 0) {
                     val hint = if (code == 127 || "command not found" in output) "服务器上找不到 hermes 命令" else output.lines().lastOrNull { it.isNotBlank() }?.take(200) ?: "退出码 $code"
@@ -2121,7 +2125,7 @@ class RemoteHermesRepository(
 
     /** 同一任务按点击顺序提交，防止旧回包覆盖改名或把已删除任务加回列表。 */
     private fun jobCall(what: String, lockId: String, rollback: List<CronJob>? = null,
-        applied: (JobDto?) -> Unit = ::replaceJob, call: suspend HermesClient.() -> JobDto?) {
+        applied: (JobDto?) -> Unit = ::replaceJob, call: suspend HermesApi.() -> JobDto?) {
         val expectedClient = client
         val expectedConnection = connectedId
         scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
@@ -2448,8 +2452,8 @@ class RemoteHermesRepository(
         val profile = _connections.value.firstOrNull { it.id == connection } ?: return com.hermes.mobile.data.model.BotSwitch.Failed("找不到这个连接")
         if (name == (_activeBot.value ?: baseBot(profile)) && _connectionState.value is ConnectionState.Connected) return com.hermes.mobile.data.model.BotSwitch.Done
         if (name != baseBot(profile)) {
-            // 用 bot 自己的 key：手机上没有就去服务器上读（可能电脑版已经配过）
-            if (botKeyOf(connection, name) == null) {
+            // 用 bot 自己的 key：手机上没有就去服务器上读（可能电脑版已经配过）。SSH 连接走 gateway，不用 key
+            if (profile.type != ConnectionType.Ssh && botKeyOf(connection, name) == null) {
                 val key = try {
                     admin()?.botKey(name)
                 } catch (e: AdminException) {

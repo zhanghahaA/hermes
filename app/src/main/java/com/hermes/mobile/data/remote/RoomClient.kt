@@ -6,12 +6,6 @@ import com.hermes.mobile.data.model.RoomEvent
 import com.hermes.mobile.data.model.RoomMember
 import com.hermes.mobile.data.model.RoomStatus
 import com.hermes.mobile.data.ssh.RemoteStream
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -24,8 +18,6 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 
 /** 群聊要用的操作。真实的走 SSH 上的 [RoomClient]，演示数据有自己的实现。 */
 interface RoomApi {
@@ -55,101 +47,21 @@ data class RoomLog(val events: List<RoomEvent>, val latestSeq: Long, val hasMore
  * 互动卡片同步（[SessionControlFeed]）也走这条通道。
  * 一条 SSH 通道一直开着；断了下次调用时重新开。
  */
-class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.io.Closeable {
-    private val lock = Mutex()
-    @Volatile private var stream: RemoteStream? = null
-    /**
-     * 当前通道还活着。SSH 底层断掉（息屏、换网络）时服务器发不回退出码，`exitCode` 一直是 null，
-     * 只看它会把死通道一直拿来用，每次都报“连接断了”、刷新也没用。读线程结束、写失败、等回复超时都算死。
-     */
-    @Volatile private var alive = false
-    private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonObject>>()
-    private val ids = AtomicLong()
-
-    /** 拿到能用的通道：没有或已经断了就新开一条，等桥说 ready。 */
-    private suspend fun channel(): RemoteStream = lock.withLock {
-        stream?.takeIf { alive && it.exitCode == null }?.let { return it }
-        stream?.let { runCatching { it.close() } }
-        stream = null
-        val s = open()
-        val ready = CompletableDeferred<JsonObject>()
-        val reader = Thread({
-            try {
-                s.output.bufferedReader(Charsets.UTF_8).forEachLine { line ->
-                    val obj = runCatching { HermesJson.parseToJsonElement(line) as? JsonObject }.getOrNull() ?: return@forEachLine
-                    if ("ready" in obj) {
-                        ready.complete(obj)
-                        return@forEachLine
-                    }
-                    val id = (obj["id"] as? JsonPrimitive)?.longOrNull ?: return@forEachLine
-                    pending.remove(id)?.complete(obj)
-                }
-            } catch (_: Exception) {
-            } finally {
-                if (stream === s) alive = false
-                val gone = AdminException("和 Hermes gateway 的连接断了")
-                ready.completeExceptionally(gone)
-                pending.values.forEach { it.completeExceptionally(gone) }
-                pending.clear()
-            }
-        }, "hermes-rooms")
-        reader.isDaemon = true
-        reader.start()
-        val hello = try {
-            withTimeout(60_000) { ready.await() }
-        } catch (e: Exception) {
-            runCatching { s.close() }
-            val why = if (s.exitCode != null) s.errorText().lines().lastOrNull { it.isNotBlank() } else null
-            throw AdminException(why?.take(300) ?: "连不上 Hermes 的群聊服务")
-        }
-        if ((hello["ready"] as? JsonPrimitive)?.booleanOrNull != true) {
-            runCatching { s.close() }
-            throw AdminException((hello["error"] as? JsonPrimitive)?.contentOrNull ?: "连不上 Hermes 的群聊服务")
-        }
-        stream = s
-        alive = true
-        s
-    }
-
-    /** 这条通道不能再用了：下次调用重新开。 */
-    private fun drop(s: RemoteStream) {
-        if (stream === s) alive = false
-        runCatching { s.close() }
-    }
+class RoomClient(open: suspend () -> RemoteStream) : RoomApi, java.io.Closeable {
+    private val channel = GatewayChannel(open)
 
     internal suspend fun call(method: String, params: JsonObject = JsonObject(emptyMap())): JsonObject {
-        val s = channel()
-        val id = ids.incrementAndGet()
-        val answer = CompletableDeferred<JsonObject>()
-        pending[id] = answer
-        val line = buildJsonObject {
-            put("id", id)
-            put("method", method)
-            put("params", JsonObject(params + ("profile" to (params["profile"] ?: JsonPrimitive("default")))))
-        }.toString() + "\n"
-        try {
-            withContext(Dispatchers.IO) {
-                synchronized(s.input) {
-                    s.input.write(line.toByteArray(Charsets.UTF_8))
-                    s.input.flush()
-                }
-            }
-        } catch (e: Exception) {
-            pending.remove(id)
-            drop(s)
-            throw AdminException("和 Hermes gateway 的连接断了")
+        val withProfile = JsonObject(params + ("profile" to (params["profile"] ?: JsonPrimitive("default"))))
+        val result = try {
+            channel.call(method, withProfile)
+        } catch (e: GatewayException) {
+            if (e.disconnected) throw AdminException(e.message ?: "和 Hermes gateway 的连接断了")
+            throw AdminException(errorText(buildJsonObject {
+                put("reason", e.reason)
+                e.data?.let { put("data", it) }
+            }))
         }
-        val reply = try {
-            withTimeout(45_000) { answer.await() }
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            // 一直没回音多半是底层连接已经半死不活了，换一条
-            drop(s)
-            throw AdminException("Hermes gateway 45 秒没有回应，下次会重新连接")
-        } finally {
-            pending.remove(id)
-        }
-        (reply["error"] as? JsonObject)?.let { throw AdminException(errorText(it)) }
-        return reply["result"] as? JsonObject ?: JsonObject(emptyMap())
+        return result as? JsonObject ?: JsonObject(emptyMap())
     }
 
     override suspend fun rooms(): List<Room> {
@@ -261,10 +173,7 @@ class RoomClient(private val open: suspend () -> RemoteStream) : RoomApi, java.i
         call("groups.discard", actionParams(roomId, action))
     }
 
-    override fun close() {
-        stream?.let { runCatching { it.close() } }
-        stream = null
-    }
+    override fun close() = channel.close()
 
     companion object {
         private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }

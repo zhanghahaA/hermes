@@ -76,6 +76,8 @@ internal object ImageMarkers {
     private val attachedAt = Regex("""^\[Image attached at: (.+)]$""")
     private val attachedUrl = Regex("""^\[Image attached: (.+)]$""")
     private val screenshot = Regex("""^\[screenshot( detail=\w+)?]$""")
+    /** 经 gateway 发的图：Hermes 先让看图模型写一段描述放在消息最前面，再附一行原图路径。 */
+    private val visionHint = Regex("""^\[If you need a closer look, use vision_analyze with image_url: (\S+)\s*~?]$""")
     private val sha = Regex("""[0-9a-f]{64}""")
 
     /**
@@ -85,11 +87,24 @@ internal object ImageMarkers {
     data class Found(val sha256: String?, val url: String?, val path: String? = null)
 
     fun parse(text: String): Pair<String, List<Found>> {
-        if (!text.contains("[Image attached") && !text.contains("[screenshot")) return text to emptyList()
+        if (!text.contains("[Image attached") && !text.contains("[screenshot") && !text.contains("vision_analyze") && !text.contains("[The user sent")) {
+            return text to emptyList()
+        }
         val found = mutableListOf<Found>()
         var screenshots = 0
+        var inDescription = false
         val kept = text.lines().filter { raw ->
             val line = raw.trim()
+            // “[The user sent an image~ Here's what I can see: …]” 可能有好几行，整段去掉
+            if (inDescription || line.startsWith("[The user sent")) {
+                inDescription = !line.endsWith("]")
+                return@filter false
+            }
+            visionHint.find(line)?.let { m ->
+                val path = m.groupValues[1].trim()
+                found += Found(sha.findAll(path).lastOrNull()?.value, null, path)
+                return@filter false
+            }
             attachedAt.find(line)?.let { m ->
                 val path = m.groupValues[1].trim()
                 found += Found(sha.findAll(path).lastOrNull()?.value, null, path)

@@ -7,7 +7,7 @@
 [English](README.md) | 中文
 
 功能：
-- **连接**：直连 / HTTPS / **SSH 隧道**（手机上生成密钥或导入私钥、密码登录、主机指纹锁定、断线自动重连）/ 本机 Termux；
+- **连接**：直连 / HTTPS / **SSH**（经 SSH 连电脑上的 Hermes gateway，和电脑版同一个服务，不用开 API Server、不用 API Key，电脑上的对话能接着聊；手机上生成密钥或导入私钥、密码登录、主机指纹锁定、断线自动重连）/ 本机 Termux；
 - **聊天**：默认只显示最终回复，可选持续累积的逐字回复、可收起的服务器思考与工具过程；审批和追问卡片、停止、Hermes 回复时**插话**、断线和 App 被杀后接着等回复、后台回复通知；
   Markdown 排版（表格、公式、任务列表……）；会话内搜索；
 - **会话**：新建 / 分叉 / 重命名 / 置顶 / **归档** / 删除，自动起标题；按 Hermes 的**项目**分组，新建项目、把对话移进项目、在项目里开新对话；
@@ -32,7 +32,7 @@
 | 定时任务 | `ui/jobs/` | 任务卡片（开关、立即运行、上次结果）、新建/编辑（频率、星期、时间、cron、结果发送到） |
 | 能力 | `ui/capabilities/` | 默认模型、技能、工具集，以及需要 SSH 的“更多”功能入口 |
 | 设置 | `ui/settings/SettingsScreen.kt` | 连接管理、主题/动态取色、聊天行为、通知、诊断 |
-| 连接编辑 | `ui/settings/ConnectionEditorScreen.kt` | 直连 / HTTPS / SSH 隧道 / 本机 Termux 四种方式，逐项“测试连接” |
+| 连接编辑 | `ui/settings/ConnectionEditorScreen.kt` | 直连 / HTTPS / SSH / 本机 Termux 四种方式，逐项“测试连接” |
 | 欢迎页 | `ui/welcome/WelcomeScreen.kt` | 首次使用时选择 Hermes 在哪里运行 |
 
 ## 视觉与交互
@@ -57,8 +57,8 @@ app/src/main/java/com/hermes/mobile/
 ├─ data/
 │  ├─ HermesRepository.kt     界面依赖的唯一接口
 │  ├─ model/Models.kt         连接、会话、消息、审批、任务等数据模型
-│  ├─ remote/                 真实实现：API Server（REST + SSE）、经 SSH 的管理功能
-│  ├─ ssh/                    SSH 隧道、命令、SFTP
+│  ├─ remote/                 真实实现：API Server（REST + SSE）、SSH 连接用的 gateway 桥、经 SSH 的管理功能
+│  ├─ ssh/                    SSH 登录、命令、SFTP、长连接通道
 │  └─ fake/                   演示和截图用的假数据
 └─ ui/
    ├─ HermesApp.kt            导航（类型安全路由）+ 全局提示

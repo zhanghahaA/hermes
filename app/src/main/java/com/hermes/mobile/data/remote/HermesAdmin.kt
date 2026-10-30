@@ -357,6 +357,18 @@ class HermesAdmin(private val shell: RemoteShell, val profileName: String?) : Ad
         }
     }
 
+    /** 开一条到 Hermes gateway 的小桥（[GatewayBridge]），HERMES_HOME 是当前 bot 的目录：聊天、会话都走它。 */
+    suspend fun openGateway(): com.hermes.mobile.data.ssh.RemoteStream = withContext(Dispatchers.IO) {
+        val command = hermesPython(home(), GatewayBridge.Script, emptyList())
+        try {
+            shell.openStream(command)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw GatewayException("SSH 打不开通道：${e.message ?: e.javaClass.simpleName}", disconnected = true)
+        }
+    }
+
     override suspend fun openRooms(): com.hermes.mobile.data.ssh.RemoteStream = withContext(Dispatchers.IO) {
         val command = hermesPython(home(), GroupBridgeScript, emptyList())
         try {
