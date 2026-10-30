@@ -141,6 +141,8 @@ private val scenes = listOf(
     Scene("41c-work-process-dark", dark = true) { repo, _ -> StreamingPreview(repo, process = true) },
     Scene("41d-streaming-completed") { repo, _ -> StreamingPreview(repo, process = false, completed = true) },
     Scene("41e-process-completed") { repo, _ -> StreamingPreview(repo, process = true, completed = true) },
+    Scene("41f-process-completed-open") { repo, _ -> StreamingPreview(repo, process = true, completed = true, expandAll = true) },
+    Scene("41g-process-completed-open-dark", dark = true) { repo, _ -> StreamingPreview(repo, process = true, completed = true, expandAll = true) },
     Scene("42-dock-glass") { repo, _ -> mainScreen(repo, MainTab.Chats)() },
     Scene("42b-dock-glass-dark", dark = true) { repo, _ -> mainScreen(repo, MainTab.Chats)() },
     Scene("43-process-settings") { repo, _ -> mainScreen(repo, MainTab.Settings)() },
@@ -288,18 +290,29 @@ private val scenes = listOf(
 
 /** 演示固定的服务器事件快照；正文、过程卡片和三个点都走真正聊天页。 */
 @Composable
-private fun StreamingPreview(base: HermesRepository, process: Boolean, completed: Boolean = false) {
+private fun StreamingPreview(base: HermesRepository, process: Boolean, completed: Boolean = false, expandAll: Boolean = false) {
     val repo = remember(base, process, completed) {
         val now = System.currentTimeMillis()
         val activity = com.hermes.mobile.data.model.ChatItem.Activity(
             "preview-work", now,
             steps = listOf(
-                com.hermes.mobile.data.model.WorkStep("r", com.hermes.mobile.data.model.WorkStep.Kind.Reasoning, "思考", "先检查现有的回复事件，再核对工具调用时的文字保留。", finished = true),
-                com.hermes.mobile.data.model.WorkStep("t", com.hermes.mobile.data.model.WorkStep.Kind.Tool, "读取项目", "查看聊天页面和事件处理代码", finished = true),
+                com.hermes.mobile.data.model.WorkStep("r", com.hermes.mobile.data.model.WorkStep.Kind.Reasoning, "思考",
+                    "用户说逐字回复会消失。先找到处理回复事件的地方，看看工具调用时是不是把前面的文字清空了，再确认最终回复和过程里的文字不会重复。", finished = true),
+                com.hermes.mobile.data.model.WorkStep("t1", com.hermes.mobile.data.model.WorkStep.Kind.Tool, "search_files", "ReplyStream app/src", finished = true,
+                    output = "app/src/main/java/.../ReplyStream.kt:7\napp/src/main/java/.../RemoteHermesRepository.kt:1578", durationMs = 420),
+                com.hermes.mobile.data.model.WorkStep("t2", com.hermes.mobile.data.model.WorkStep.Kind.Tool, "read_file", "app/src/main/java/com/hermes/mobile/data/remote/ReplyStream.kt", finished = true,
+                    output = "internal data class ReplyStream(\n    val earlier: List<String> = emptyList(),\n    val current: String = \"\",\n    ...", durationMs = 180),
+                com.hermes.mobile.data.model.WorkStep("t3", com.hermes.mobile.data.model.WorkStep.Kind.Tool, "terminal", "./gradlew test --tests '*ReplyStream*'", finished = completed,
+                    output = if (completed) "BUILD SUCCESSFUL in 41s\n12 tests completed" else "", durationMs = if (completed) 41_300 else null),
             ),
             earlierReply = if (completed) "我已经找到文字消失的位置，会保留之前出现的内容。" else "",
             status = if (completed) com.hermes.mobile.data.model.ActivityStatus.Completed else com.hermes.mobile.data.model.ActivityStatus.Working,
+            finishedAt = if (completed) now + 64_000 else null,
         )
+        if (expandAll) {
+            com.hermes.mobile.ui.chat.WorkProcessFolds.expanded["preview-work"] = true
+            com.hermes.mobile.ui.chat.WorkProcessFolds.expanded["preview-work/t3"] = true
+        }
         object : HermesRepository by base {
             override val settings = kotlinx.coroutines.flow.MutableStateFlow(base.settings.value.copy(streamReplies = true, showWorkProcess = process))
             override fun chatItems(sessionId: String) = kotlinx.coroutines.flow.flowOf(listOfNotNull(

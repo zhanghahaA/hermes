@@ -8,13 +8,16 @@ REPO=$(cd "$(dirname "$0")/../.." && pwd)
 export HERMES_HOME=$IT_ROOT/hermes-home
 
 if ! curl -s -m2 http://127.0.0.1:9900/v1/models >/dev/null; then
-  (cd "$REPO/tools/fake-llm" && nohup "$IT_ROOT/hvenv/bin/python" fake_llm.py --port 9900 > "$IT_ROOT/fake_llm.log" 2>&1 &)
+  # 不用 ( … & ) 包一层：bash 有时把子 shell 直接 exec 成这个进程，脚本就会一直等它退出
+  (cd "$REPO/tools/fake-llm" && exec nohup "$IT_ROOT/hvenv/bin/python" fake_llm.py --port 9900 > "$IT_ROOT/fake_llm.log" 2>&1 < /dev/null) &
+  disown
   sleep 2
 fi
 if ! curl -s -m2 http://127.0.0.1:8642/health >/dev/null; then
   for pid in $(ps -eo pid,args | awk '$2 ~ /python/ && $0 ~ /hvenv\/bin\/hermes gateway/ {print $1}'); do kill "$pid"; done
   sleep 3
-  (nohup "$IT_ROOT/hvenv/bin/hermes" gateway > "$IT_ROOT/gateway.log" 2>&1 &)
+  nohup "$IT_ROOT/hvenv/bin/hermes" gateway > "$IT_ROOT/gateway.log" 2>&1 < /dev/null &
+  disown
   for i in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:8642/health >/dev/null && break; sleep 2; done
   curl -s -m 2 http://127.0.0.1:8642/health >/dev/null || { echo "hermes gateway 没起来"; tail -20 "$IT_ROOT/gateway.log"; exit 1; }
 fi

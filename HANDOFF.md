@@ -3,6 +3,17 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.13.14：工作过程改成时间线样式，修两处显示问题
+
+- **收起状态记住了**：以前用 `rememberSaveable`，离开聊天页再进来就又展开。现在记在 `WorkProcessFolds`（内存，和工作过程本身同生命周期）。没点过时：进行中展开、结束后收起。
+- **工作过程跑到回复下面**：本地卡片用“前面有几条消息”（`LocalEntry.anchor`）定位，而 `/api/sessions/{id}/messages` 默认只给最近 500 条（工具消息也算），长对话里前面的消息会滑出去，压缩上下文也会去掉前面的，条数变少后卡片排到末尾。
+  - 现在 `loadMessages` 按服务器消息 id 算出前面掉了几条（`droppedFromFront`），所有本地卡片跟着前移。
+  - App 重启后接着跟的轮次（`unplacedRuns`）第一次拉到记录时放在最后一条用户消息后面，和拉记录在同一次状态更新里（分两步会有一瞬间排在最上面）。
+- **新样式**（参照 Claude）：一行摘要“正在处理 · 第 N 步 / 已完成 N 个步骤 · 用时”，展开是带图标和竖线的时间线；工具名翻成中文（`stepTitle`，不认识的照原名），后面一行等宽字体的参数摘要和耗时；点一步展开看完整参数和结果。
+  - `WorkStep` 新增 `output`（`tool.completed` 的 preview，服务器已脱敏、≤500 字）和 `durationMs`（`duration` 秒）；`Activity.finishedAt` 用来算总用时。
+- 验证：`ChatFlowTest.processStaysAboveReplyWhenHistoryWindowSlides`（假服务器加了 `messageWindow`）、`runSurvivesAppRestart` 加了位置断言（两个测试在修之前都失败）、`StreamingProcessUiTest` 的收起保持 / 默认收起 / 点开看结果、`WorkActivityTest`。截图 41b–41g。**没在用户手机上实测**；用户说的“偶发跑到下面”是按代码推断的原因，没拿到用户那边的现场。
+- `tools/it-env/ensure_env.sh`：假模型没在跑时，`( … & )` 的写法会让 bash 把子 shell 直接变成假模型进程，脚本一直等它退出、IT 永远不开始。改成 `( … exec … ) &` + `disown`。
+
 ## 0.13.13：文件改为原样上传（不再贴内容、不再 PDF 转图）
 
 - 用户不认可“文本文件内容写进消息”“PDF 转成图片”的做法（Hermes 回复说它收到的是内容而不是文件）。Hermes 官方 API 本身不收文件（`input_file` 等返回 400，见 protocol.md）。

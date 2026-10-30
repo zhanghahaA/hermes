@@ -167,6 +167,34 @@ class ChatFlowTest {
         assertTrue(runBlocking { repo.chatItems("s1").first() }.filterIsInstance<ChatItem.Activity>().single().steps.isEmpty(), "重新打开不能恢复刚清掉的思考")
     }
 
+    /** 长对话：Hermes 只返回最近 N 条，这一轮里前面的消息滑出去了，工作过程仍要在这一轮的回复上面。 */
+    @Test fun processStaysAboveReplyWhenHistoryWindowSlides() {
+        val s = server()
+        s.messageWindow = 8
+        s.messages["w1"] = (1..8).map { i ->
+            """{"id":$i,"role":"${if (i % 2 == 1) "user" else "assistant"}","content":"第 $i 条","timestamp":${1760000000 + i}}"""
+        }.toMutableList()
+        val repo = connected(s)
+        repo.updateSettings { it.copy(showWorkProcess = true) }
+        repo.chatItems("w1").await("历史") { it.texts().size == 8 }
+        repo.sendMessage("w1", "慢任务", emptyList())
+        repo.chatItems("w1").await("开始工作") { list -> list.any { it is ChatItem.Activity } }
+        val run = s.runs.values.single()
+        // 这一轮的工具调用存进记录，最前面两条被挤出窗口；重新进聊天页会再拉一次
+        s.messages["w1"]!! += listOf(
+            """{"id":9,"role":"tool","content":"ls 输出","tool_call_id":"a"}""",
+            """{"id":10,"role":"tool","content":"cat 输出","tool_call_id":"b"}""",
+        )
+        repo.chatItems("w1").await("前面滑出去了") { list -> list.texts().firstOrNull()?.second == "第 3 条" }
+        run.complete()
+        val items = repo.chatItems("w1").await("回复对齐") { list ->
+            list.texts().any { it.second == "最终回复：慢任务" } && list.filterIsInstance<ChatItem.Message>().none { it.id.startsWith("reply-") }
+        }
+        val reply = items.indexOfFirst { (it as? ChatItem.Message)?.text == "最终回复：慢任务" }
+        assertTrue(items[reply - 1] is ChatItem.Activity, "工作过程在回复上面：${items.map { it.id }}")
+        assertEquals("慢任务", (items[reply - 2] as ChatItem.Message).text)
+    }
+
     @Test fun stoppingPreservesAlreadyVisibleText() {
         val s = server()
         val repo = connected(s)
@@ -286,7 +314,10 @@ class ChatFlowTest {
             runs = listOf(StoredRun("c1", "s1", "run_old")),
         ))
         val repo = connected(s, store)
-        repo.chatItems("s1").await("重启后拿到回复") { list -> list.texts().any { it.second == "最终回复：重启前发的" } }
+        repo.updateSettings { it.copy(showWorkProcess = true) }
+        val items = repo.chatItems("s1").await("重启后拿到回复") { list -> list.texts().any { it.second == "最终回复：重启前发的" } }
+        val reply = items.indexOfFirst { (it as? ChatItem.Message)?.text == "最终回复：重启前发的" }
+        assertTrue(items[reply - 1] is ChatItem.Activity, "恢复的工作过程排在回复上面：${items.map { it.id }}")
         repo.runPhase("s1").await("空闲") { it == RunPhase.Idle }
         Thread.sleep(200)
         assertTrue(store.state!!.runs.isEmpty(), "结束后从待办里删掉")

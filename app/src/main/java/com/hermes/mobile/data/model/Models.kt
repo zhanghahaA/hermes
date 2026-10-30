@@ -168,6 +168,8 @@ sealed interface ChatItem {
         val steps: List<WorkStep> = emptyList(),
         val earlierReply: String = "",
         val status: ActivityStatus = ActivityStatus.Working,
+        /** 这一轮结束的时间（本机时钟），用来显示“用时”。 */
+        val finishedAt: Long? = null,
     ) : ChatItem
 
     /**
@@ -214,6 +216,10 @@ enum class RunPhase { Idle, Working, AwaitingInput }
 
 enum class ActivityStatus { Working, Completed, Stopped, Failed }
 
+/**
+ * 过程里的一步。工具步骤：[title] 是 Hermes 的工具名，[text] 是参数摘要，[output] 是结果摘要
+ * （服务器已脱敏、最多 500 字），[durationMs] 是服务器给的耗时。
+ */
 data class WorkStep(
     val id: String,
     val kind: Kind,
@@ -221,6 +227,8 @@ data class WorkStep(
     val text: String,
     val finished: Boolean = false,
     val failed: Boolean = false,
+    val output: String = "",
+    val durationMs: Long? = null,
 ) {
     enum class Kind { Reasoning, Tool, Notice }
 }

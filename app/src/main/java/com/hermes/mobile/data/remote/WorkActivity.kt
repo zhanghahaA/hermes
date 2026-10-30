@@ -16,18 +16,24 @@ internal fun ChatItem.Activity.reasoning(event: RunEvent.Reasoning): ChatItem.Ac
     return copy(steps = next.takeLast(MaxSteps))
 }
 
+/** 工具开始时的 preview 是参数摘要，完成时的 preview 是结果摘要，分开存。 */
 internal fun ChatItem.Activity.tool(event: RunEvent.Step): ChatItem.Activity {
     val matching = steps.indexOfLast { it.kind == WorkStep.Kind.Tool &&
         if (event.callId != null) it.id == "tool-${event.callId}" else it.title == event.tool && !it.finished }
+    val body = event.text.take(MaxStepText)
     val step = WorkStep(
         "tool-${event.callId ?: event.seq ?: steps.size}", WorkStep.Kind.Tool, event.tool,
-        event.text.take(MaxStepText), event.finished, event.failed,
+        if (event.finished) "" else body, event.finished, event.failed,
+        output = if (event.finished) body else "", durationMs = event.durationMs,
     )
     val next = if (matching < 0) steps + step else steps.toMutableList().also { list ->
         val previous = list[matching]
-        list[matching] = previous.copy(
-            text = listOf(previous.text, event.text.take(MaxStepText)).filter { it.isNotBlank() }.distinct().joinToString("\n").take(MaxStepText),
-            finished = previous.finished || event.finished, failed = previous.failed || event.failed,
+        list[matching] = if (event.finished) previous.copy(
+            output = body.ifBlank { previous.output }, finished = true, failed = previous.failed || event.failed,
+            durationMs = event.durationMs ?: previous.durationMs,
+        ) else previous.copy(
+            text = listOf(previous.text, body).filter { it.isNotBlank() }.distinct().joinToString("\n").take(MaxStepText),
+            failed = previous.failed || event.failed,
         )
     }
     return copy(steps = next.takeLast(MaxSteps))

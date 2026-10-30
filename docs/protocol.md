@@ -67,6 +67,7 @@ App 遇到这个错误就隐藏对应操作。返回 `{"object":"hermes.session"
 {"object":"list","session_id":"...","data":[Message...],"pagination":{...}}
 ```
 注意返回的 `session_id` 可能和请求的不同（会话压缩后的续接），App 以返回值为准。
+500 条里工具消息也算，长对话前面的消息会滑出去（压缩上下文也会去掉前面的）。App 的本地卡片（工作过程、审批、追问）按“前面有几条消息”定位，每次拉记录时按消息 `id` 算出前面掉了几条，卡片跟着前移。
 
 Message 字段：`id`、`role`（`user` / `assistant` / `tool` / `system`）、`content`、`timestamp`、
 `tool_calls`、`tool_call_id`、`tool_name`、`reasoning`、`reasoning_content`、`finish_reason`、
@@ -113,7 +114,7 @@ SSE，每帧 `id: <seq>`，`data` 是 JSON，事件名在 `data.event` 里：
 | `message.delta` `{delta}` | 打开逐字显示或过程模式时实时累积正文；已显示文字保留，下方继续显示输入圆点（可关闭） |
 | `message.interim` `{text, already_streamed}` | 公开的阶段性回复；`already_streamed=true` 不重复拼接刚才的 delta，下一段另起段落 |
 | `reasoning.available` `{text}` / `reasoning.delta` `{text 或 delta}` | 仅开启“思考与工作过程”时收集、显示；不进入正式回复、引用或后续请求 |
-| `tool.started` / `tool.completed` / `tool.failed` | 仅分隔公开正文，绝不擦除；过程模式记录工具名、预览、完成或失败状态，用 `tool_call_id` 配对 |
+| `tool.started` / `tool.completed` / `tool.failed` | 仅分隔公开正文，绝不擦除；过程模式记录工具名、完成或失败状态，用 `tool_call_id` 配对。`tool.started` 的 `preview` 是参数摘要，`tool.completed` 的 `preview` 是结果摘要（服务器已脱敏，≤500 字），`duration` 是秒 |
 | `tool.progress` | 过程模式追加工具预览；`tool_name=_thinking` 视作思考内容，不是正文分段边界 |
 | `subagent.*`、未知事件 | 忽略，继续处理后续事件 |
 | `approval.request` | 显示审批卡片。字段：`command`、`description`、`choices`（`once/session/always/deny` 子集），新版还有 `prompt_id`、`execution_generation` |

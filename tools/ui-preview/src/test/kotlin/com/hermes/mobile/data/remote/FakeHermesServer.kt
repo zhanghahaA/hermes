@@ -185,6 +185,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
     val runs = java.util.concurrent.ConcurrentHashMap<String, FakeRun>()
     /** 会话 id → 动态追加的消息（JSON）。 */
     val messages = java.util.concurrent.ConcurrentHashMap<String, MutableList<String>>()
+    /** 和 Hermes 一样只返回最近这么多条（工具消息也算）；null 表示全给。 */
+    var messageWindow: Int? = null
     private var nextRun = 0
     private var nextSession = 0
 
@@ -447,7 +449,8 @@ class FakeHermesServer(val version: Version, val key: String = "test-key-0123456
             )
             path.endsWith("/messages") && path != "/api/sessions/s1/messages" -> {
                 val id = path.removePrefix("/api/sessions/").removeSuffix("/messages")
-                json("""{"object":"list","session_id":"$id","data":[${messages[id].orEmpty().joinToString(",")}]}""")
+                val all = messages[id].orEmpty().toList()
+                json("""{"object":"list","session_id":"$id","data":[${(messageWindow?.let { all.takeLast(it) } ?: all).joinToString(",")}]}""")
             }
             path == "/api/sessions/s1/messages" -> json(
                 """{"object":"list","session_id":"s1","data":[

@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.booleanOrNull
 
@@ -80,7 +81,7 @@ sealed interface RunEvent {
     data class ControlSettled(override val seq: Long?, val promptId: String?, val choice: String?) : RunEvent
     /** 只有工具生命周期会分隔正文；进度通知不能截断正在流式生成的一句话。 */
     data class Step(override val seq: Long?, val tool: String, val callId: String?, val text: String,
-        val finished: Boolean, val failed: Boolean, val boundary: Boolean) : RunEvent
+        val finished: Boolean, val failed: Boolean, val boundary: Boolean, val durationMs: Long? = null) : RunEvent
     data class Completed(override val seq: Long?, val output: String, val pendingSteer: String? = null) : RunEvent
     data class Failed(override val seq: Long?, val error: String) : RunEvent
     data class Cancelled(override val seq: Long?) : RunEvent
@@ -114,7 +115,8 @@ internal fun parseRunEvent(frame: SseEvent): RunEvent {
             else RunEvent.Step(seq, tool, obj.string("tool_call_id"), text,
                 name == "tool.completed" || name == "tool.failed",
                 name == "tool.failed" || (obj["error"] as? JsonPrimitive)?.booleanOrNull == true,
-                name != "tool.progress")
+                name != "tool.progress",
+                (obj["duration"] as? JsonPrimitive)?.doubleOrNull?.let { (it * 1000).toLong() })
         }
         else -> RunEvent.Ignored(seq)
     }

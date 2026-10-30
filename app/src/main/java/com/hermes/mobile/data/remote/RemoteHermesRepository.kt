@@ -1013,12 +1013,40 @@ class RemoteHermesRepository(
                 .linkQuotes()
                 .withSentImages(sessionId)
             val running = runs.containsKey(sessionId)
-            updateChat(sessionId) { st -> st.copy(server = items, local = st.local.reconcile(items, running), loaded = true) }
+            val placing = unplacedRuns.toSet()
+            updateChat(sessionId) { st ->
+                val shift = droppedFromFront(st.server, items)
+                val afterUser = items.indexOfLast { it.role == Role.User } + 1
+                val local = st.local.map { entry ->
+                    when {
+                        entry.runId in placing && entry.item is ChatItem.Activity -> entry.copy(anchor = afterUser)
+                        shift != 0 -> entry.copy(anchor = (entry.anchor - shift).coerceAtLeast(0))
+                        else -> entry
+                    }
+                }
+                st.copy(server = items, local = local.reconcile(items, running), loaded = true)
+            }
+            chats.value[sessionId]?.local?.mapNotNull { it.runId }?.let { unplacedRuns.removeAll(it.toSet()) }
             val connection = scopeId
             if (cache != null && connection != null) withContext(Dispatchers.IO) { cache.saveMessages(connection, sessionId, items) }
         } catch (e: HermesError) {
             _errors.tryEmit(e.message ?: "读取聊天记录失败")
         }
+    }
+
+    /**
+     * 服务器只返回最近 500 条记录（工具调用也算），对话长了前面的会滑出去，压缩上下文也会去掉前面的；
+     * 卡片按“前面有几条消息”定位，要跟着前移，不然会跑到回复下面。按服务器给的消息 id 对齐。
+     */
+    private fun droppedFromFront(old: List<ChatItem.Message>, new: List<ChatItem.Message>): Int {
+        if (old.isEmpty()) return 0
+        val oldIndex = old.withIndex().associate { (i, m) -> m.id to i }
+        new.forEachIndexed { i, m ->
+            if (m.id.startsWith("idx-")) return@forEachIndexed
+            val before = oldIndex[m.id] ?: return@forEachIndexed
+            return before - i
+        }
+        return 0
     }
 
     /**
@@ -1038,7 +1066,15 @@ class RemoteHermesRepository(
     }
 
     /** 已提交、还在等结果的一轮对话。 */
-    private class ActiveRun(val runId: String, val sessionId: String, var lastSeq: Long = -1)
+    /**
+     * App 重启后接着跟的轮次：建工作过程卡片时记录还没拉，按条数放会排到最前，
+     * 拉到时这一轮可能已经带上回复，又会排到回复下面。第一次拉到记录时放在最后一条用户消息后面
+     * （这一轮的用户消息早就在服务器上了）。
+     */
+    private val unplacedRuns = ConcurrentHashMap.newKeySet<String>()
+
+    /** [resumed]：App 重启后接着跟的轮次，见 [unplacedRuns]。 */
+    private class ActiveRun(val runId: String, val sessionId: String, var lastSeq: Long = -1, val resumed: Boolean = false)
 
     /** 会话 id → 正在进行的一轮。 */
     private val runs = ConcurrentHashMap<String, ActiveRun>()
@@ -1450,8 +1486,9 @@ class RemoteHermesRepository(
         }
     }
 
-    private fun track(sessionId: String, runId: String, fromSeq: Long) {
-        val run = ActiveRun(runId, sessionId, fromSeq)
+    private fun track(sessionId: String, runId: String, fromSeq: Long, resumed: Boolean = false) {
+        val run = ActiveRun(runId, sessionId, fromSeq, resumed)
+        if (resumed) unplacedRuns += runId
         runs[sessionId] = run
         publishRuns()
         updateSession(sessionId) { it.copy(running = true) }
@@ -1475,7 +1512,7 @@ class RemoteHermesRepository(
     /** App 被杀之前还没等到结果的轮次：重新订阅（服务器会从头补发事件），或者直接拿最终结果。 */
     private fun resumeStoredRuns(connectionId: String) {
         state.value.runs.filter { it.connectionId == connectionId }.forEach { stored ->
-            if (!runs.containsKey(stored.sessionId)) track(stored.sessionId, stored.runId, fromSeq = -1)
+            if (!runs.containsKey(stored.sessionId)) track(stored.sessionId, stored.runId, fromSeq = -1, resumed = true)
         }
     }
 
@@ -1484,7 +1521,7 @@ class RemoteHermesRepository(
      * 重连之前先查一下状态，可能已经结束了。
      */
     private suspend fun follow(run: ActiveRun) {
-        if (chats.value[run.sessionId]?.loaded != true) loadMessages(run.sessionId)
+        if (run.resumed || chats.value[run.sessionId]?.loaded != true) loadMessages(run.sessionId)
         var failures = 0
         while (runs[run.sessionId] === run) {
             val c = client ?: return
@@ -1671,6 +1708,7 @@ class RemoteHermesRepository(
                 .activity(run) { it.copy(
                     earlierReply = if (_settings.value.streamReplies || _settings.value.showWorkProcess) MediaTags.parse(earlier).first else "",
                     status = com.hermes.mobile.data.model.ActivityStatus.Completed,
+                    finishedAt = clock(),
                 ) }
         }
         val preview = text.replace('\n', ' ').take(80).ifEmpty { if (images.isNotEmpty()) "[图片]" else if (files.isNotEmpty()) "[文件]" else "" }
@@ -1693,6 +1731,7 @@ class RemoteHermesRepository(
             st.activity(run) { it.copy(
                 earlierReply = if (_settings.value.streamReplies || _settings.value.showWorkProcess) MediaTags.parse(st.replyStream.text).first else "",
                 status = if (error != null) com.hermes.mobile.data.model.ActivityStatus.Failed else com.hermes.mobile.data.model.ActivityStatus.Stopped,
+                finishedAt = clock(),
             ) }.copy(phase = RunPhase.Idle, streaming = null, replyStream = ReplyStream())
         }
         if (error != null) {
