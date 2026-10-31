@@ -44,7 +44,7 @@
   `capabilities[model].reasoning == false` 时面板不显示这一排。标题栏模型名后面显示“推理高”之类。
 - **模型按提供方折叠**：默认只展开当前模型那组（只有一组时展开），收起的组显示“N 个模型 · 正在用 …”，搜索时全部展开。能力页同一个列表也一样。
 - **电脑上的会话在手机上只能分叉**：不是 App 改出来的。Hermes 的 API 只允许继续来源是 `api_server` / `bot_room` 的会话（`gateway/session_api_turn.py`），
-  电脑端 / TUI 建的会话来源是 `desktop`，提交返回 409 `permission_denied`，App 照旧标只读、提供分叉。要从手机接着聊得改成像电脑端那样经 gateway 发消息，还没做，等用户决定。
+  电脑端 / TUI 建的会话来源是 `desktop`，提交返回 409 `permission_denied`，App 照旧标只读、提供分叉。要从手机接着聊得改成像电脑端那样经 gateway 发消息——**0.14.0 已经这样做了（SSH 连接）**，直连 / HTTPS 仍是这个限制。
 
 ## 0.13.14：工作过程改成时间线样式，修两处显示问题
 
