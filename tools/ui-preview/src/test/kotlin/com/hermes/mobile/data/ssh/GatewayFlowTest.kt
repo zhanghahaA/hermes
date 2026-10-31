@@ -44,8 +44,8 @@ class GatewayFlowTest {
     private fun sshd(server: TestSshServer = TestSshServer(authorizedKey = keys.publicKey)) =
         gateway.install(server).start().also { s -> cleanup += { s.stop() } }
 
-    private fun connected(ssh: TestSshServer): RemoteHermesRepository {
-        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), backoff = { 100L })
+    private fun connected(ssh: TestSshServer, clock: () -> Long = System::currentTimeMillis): RemoteHermesRepository {
+        val repo = RemoteHermesRepository(scope, MemoryLocalStore(), FakeSecretBox(), backoff = { 100L }, clock = clock)
         repo.saveConnection(ConnectionProfile(
             id = "gw", name = "家里电脑", type = ConnectionType.Ssh, host = "127.0.0.1", port = 8642,
             sshUser = ssh.user, sshPort = ssh.port, sshAuth = SshAuthMethod.Key,
@@ -67,6 +67,18 @@ class GatewayFlowTest {
 
     private fun List<ChatItem>.replies() = filterIsInstance<ChatItem.Message>().filter { it.role == Role.Assistant }.map { it.text }
     private fun methods() = gateway.requests.mapNotNull { it["method"]?.toString()?.trim('"') }
+
+    @Test fun refreshLatencyMeasuresEachGatewayPing() {
+        val roundTrips = listOf(170L, 380L, 95L)
+        // 模拟时间只在服务器收到 ping 时推进；本地缓存读取不耗时。
+        val repo = connected(sshd(), clock = { 1_000L + roundTrips.take(methods().count { it == "ping" }).sum() })
+        for (expected in roundTrips) {
+            runBlocking { repo.refreshSessions() }
+            assertEquals(expected.toInt(), (repo.connectionState.value as ConnectionState.Connected).latencyMs,
+                "每次刷新都显示这次 ping 的往返耗时，而不是缓存读取的 1 ms")
+        }
+        assertEquals(3, methods().count { it == "ping" }, "沿用每次刷新的原有 ping，不额外发送请求")
+    }
 
     @Test fun approvalDenyAndWorkProcessComeFromGatewayEvents() {
         val repo = connected(sshd())

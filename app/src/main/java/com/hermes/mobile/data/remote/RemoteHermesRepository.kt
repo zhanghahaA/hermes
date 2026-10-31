@@ -721,10 +721,12 @@ class RemoteHermesRepository(
                     // 后台久置可能留下半断开的 SSH；主动刷新应重建传输，不清空待发送消息和任务。
                     // 走 gateway 时先 ping 一下：通的就不重建（重建会打断正在读的聊天记录、正在跟的回复）
                     val transport = tunnel
+                    val pingStarted = clock()
                     val alive = current is GatewayHermesApi && runCatching { current.ping() }.isSuccess
                     if (!alive) withContext(Dispatchers.IO) { transport?.reset() }
                     current.evictIdleConnections()
-                    val started = clock()
+                    // gateway 的 health 只读缓存，延迟要从刚才真正往返的 ping 开始算。
+                    val started = if (alive) pingStarted else clock()
                     val health = current.health()
                     if (current !== client || _activeConnectionId.value != id) return@withTimeoutOrNull true
                     if (health.platform != null && health.platform != "hermes-agent") throw HermesError.NotHermes()
