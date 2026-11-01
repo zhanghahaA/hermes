@@ -10,7 +10,7 @@
   所以 `-PhermesDebugKeystore=<文件>` 就能用）。签名文件交给了用户保管，并存进仓库 Secret `HERMES_SIGNING_KEYSTORE_B64`（base64）；**不进仓库**。
   从旧版升到 0.14.2 必须先卸载（App 本地数据会丢，Hermes 上的对话不受影响），说明写在发布说明里。
 - **自动发布**：`.github/workflows/release.yml`，推 `v*` 标签时用 Secret 里的签名打包，核对证书指纹（不对就不发），用 `docs/releases/<标签>.md` 加 SHA-256 建 Release、附 APK。
-  之前的会话没有建 Release 的权限，现在推标签就行。发版步骤：改版本号 → 写 `docs/releases/v<版本>.md` → 推 main → 推标签。
+  之前的会话没有建 Release 的权限，现在推标签就行。发版步骤：改版本号 → 写 `docs/releases/v<版本>.md` → 推 main → 推标签；这个会话的 git 通道推不了标签，就在 Actions 里手动运行 Release（填标签名，GitHub 自己建标签）。
 
 ## 0.14.2：压缩过的长对话在手机上发不出去（`session_read_only`）——真正原因
 
