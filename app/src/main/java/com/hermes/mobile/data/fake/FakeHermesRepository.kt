@@ -10,6 +10,7 @@ import com.hermes.mobile.data.model.ConnectionTestStep
 import com.hermes.mobile.data.model.ConnectionType
 import com.hermes.mobile.data.model.CronJob
 import com.hermes.mobile.data.model.DeliveryStatus
+import com.hermes.mobile.data.model.Draft
 import com.hermes.mobile.data.model.Attachment
 import com.hermes.mobile.data.model.displayFiles
 import com.hermes.mobile.data.model.displayImages
@@ -144,6 +145,15 @@ class FakeHermesRepository(
     private fun updateSession(id: String, transform: (Session) -> Session) =
         _sessions.update { list -> list.map { if (it.id == id) transform(it) else it } }
 
+    /** 演示 / 测试用：把会话当成 Hermes 存档的旧对话（发消息会失败，见 RemoteHermesRepository 的 session_read_only）。 */
+    fun markStoredHistory(id: String) = updateSession(id) { it.copy(readOnly = true, storedHistory = true) }
+
+    // 草稿只记在内存里（会话列表的“[草稿]”标记不演示）
+    private val draftTexts = MutableStateFlow<Map<String, Draft>>(emptyMap())
+    override fun draft(sessionId: String): Draft = draftTexts.value[sessionId] ?: Draft()
+    override fun saveDraft(sessionId: String, draft: Draft) =
+        draftTexts.update { if (draft.isEmpty) it - sessionId else it + (sessionId to draft) }
+
     // ---- 聊天 ----
 
     private val items = MutableStateFlow<Map<String, List<ChatItem>>>(emptyMap())
@@ -182,6 +192,10 @@ class FakeHermesRepository(
         val images = attachments.displayImages()
         val message = ChatItem.Message(newId("m"), clock(), Role.User, text, images, DeliveryStatus.Sending, quote = quote, files = attachments.displayFiles())
         editItems(sessionId) { it + message }
+        if (_sessions.value.firstOrNull { it.id == sessionId }?.storedHistory == true) {
+            editItems(sessionId) { list -> list.map { if (it.id == message.id) message.copy(status = DeliveryStatus.Failed) else it } }
+            return
+        }
         updateSession(sessionId) { session ->
             session.copy(
                 preview = text.ifBlank { if (images.isNotEmpty()) "[图片]" else "[文件]" },

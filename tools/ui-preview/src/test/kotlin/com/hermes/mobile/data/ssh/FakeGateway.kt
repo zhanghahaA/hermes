@@ -50,6 +50,11 @@ class FakeGateway {
         @Volatile var busy = false
         /** 测试让“慢”的那一轮正常结束（比如在手机断线时）。 */
         @Volatile var released = false
+        /**
+         * 存档的旧对话（新版 Hermes 的 history mount）：能 resume 看记录，发消息、分叉、改模型都回 `session_read_only`，
+         * 只有删除、归档、置顶可以（gateway/session_history_mount.py、session_mutations.py）。
+         */
+        @Volatile var storedHistory = false
     }
 
     val sessions = ConcurrentHashMap<String, Session>()
@@ -67,7 +72,7 @@ class FakeGateway {
         sessions[s1.id] = s1
     }
 
-    private fun message(role: String, content: String, finish: String? = null) = buildJsonObject {
+    fun message(role: String, content: String, finish: String? = null) = buildJsonObject {
         put("role", role)
         put("content", content)
         put("row_id", rowIds.incrementAndGet())
@@ -160,6 +165,7 @@ class FakeGateway {
         private fun submit(p: JsonObject): JsonElement {
             val s = session(p)
             if (s.id !in subscriptions) throw Refusal("permission_denied")
+            if (s.storedHistory) throw Refusal("session_read_only")
             val submission = p.str("submission_id") ?: throw Refusal("invalid_params")
             submissions[submission]?.let { return buildJsonObject { put("admission_id", it); put("status", "queued") } }
             val admission = UUID.randomUUID().toString().replace("-", "")
@@ -183,6 +189,7 @@ class FakeGateway {
             })
             val payload = p["payload"]!!.jsonObject
             val op = p.str("operation")!!
+            if (s.storedHistory && op !in setOf("delete", "archive", "sidebar")) throw Refusal("session_read_only")
             if (op in setOf("delete", "branch", "model", "reasoning")) checkGeneration(s, buildJsonObject { put("execution_generation", p["expected_generation"] ?: JsonNull) })
             val extra = buildJsonObject {
                 when (op) {

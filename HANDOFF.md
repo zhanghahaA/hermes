@@ -3,6 +3,20 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 未发版：Hermes 存档的旧对话（`session_read_only`）
+
+- **现象**（用户截图，SSH 连接、默认 bot）：打开一个旧对话发消息，弹“发送失败：Hermes gateway：session_read_only”，点重试也一样。
+- **原因不在 App**：上游 Hermes 2026-10-23 起（`gateway/session_history_mount.py`，7525ed7cce / 690440524b）把“没有归属”的已存会话只读挂载：
+  没有 API 绑定的旧 API 会话、网页版 / 导入工具写的、子代理记录、旧的定时任务记录。只给 `session:read`，发消息、分叉、改模型都回 `session_read_only`，
+  只有删除 / 归档 / 置顶可以；电脑版遇到也一样，只提示“Start a new chat”。电脑上建的（local / cli / tui / desktop）和 0.14 起手机经 gateway 建的会话不受影响，两边都能接着聊。
+  10-26（29abd70464）、10-27（c5270d2fbb）上游又放开了两类：聊天平台里 `/new` 过的旧对话、以前网页版的对话。用户的 Hermes 如果在这两个提交之前，升级后这两类能恢复。
+  集成测试环境的 Hermes（06671b7，10-17）还没有这套逻辑，所以 `GatewayIT` 没碰到过。
+- **App 的改动**：`toHermesError` 认 `session_read_only` → `Conflict("session_read_only")`；发送失败时把会话标成 `readOnly` + 新字段 `Session.storedHistory`（刷新列表后保留），
+  提示说明原因；底部条改成「Hermes 存档的旧对话，只能查看 · 新建对话」，点了新建一个对话并把没发出去的那条放进输入框；这种会话的“分叉”菜单变灰（Hermes 会拒绝）。分叉被拒时也会标上。
+- **验证**：`GatewayFlowTest.storedHistoryIsExplainedAndMarkedReadOnly`（`FakeGateway.Session.storedHistory` 照上游行为拒绝；去掉映射时这个测试失败）、
+  `ChatInteractionsTest.storedHistoryOffersNewChatCarryingTheUnsentMessage`（假仓库加了 `markStoredHistory` 和内存草稿）、截图 08b / 08c。全量 `gradle test` 309 项 0 失败（真 Hermes / OpenSSH IT 没搭环境，未跑）；`assembleDebug` 通过。
+  **没在用户手机和用户的 Hermes 上验证**；也不知道用户那个对话具体是哪一类（标题栏副标题会显示来源）。
+
 ## 0.14.0：SSH 连接全走 Hermes gateway（不用 API Server、不用 API Key）
 
 用户要求“把 SSH 隧道的方式改成全靠 gateway”，选了“一次全部做完”“只用 gateway，不退回”。协议细节、方法表、坑在 protocol.md「SSH 连接走 Hermes gateway」。

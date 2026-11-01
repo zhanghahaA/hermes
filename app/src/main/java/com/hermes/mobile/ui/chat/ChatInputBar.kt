@@ -220,6 +220,11 @@ private fun SendStopButton(mode: SendButtonMode, canSend: Boolean, onSend: () ->
 fun ReadOnlyBar(backdrop: Backdrop, sourceLabel: String, onFork: () -> Unit) =
     NoticeBar(backdrop, "来自 $sourceLabel，只能查看", actionLabel = "分叉后继续", onAction = onFork)
 
+/** Hermes 存档的旧对话：只能看，连分叉也不行，只能新建对话。 */
+@Composable
+fun StoredHistoryBar(backdrop: Backdrop, onNewChat: () -> Unit) =
+    NoticeBar(backdrop, "Hermes 存档的旧对话，只能查看", actionLabel = "新建对话", onAction = onNewChat)
+
 /** 替代输入栏的悬浮提示条（只读会话、当前连接还不能发消息等）。 */
 @Composable
 fun NoticeBar(backdrop: Backdrop, text: String, actionLabel: String? = null, onAction: () -> Unit = {}) {

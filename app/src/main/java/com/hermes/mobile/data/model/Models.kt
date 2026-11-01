@@ -87,6 +87,11 @@ data class Session(
     val model: String? = null,
     /** 服务器拒绝从手机继续这个会话（返回过 409），只能看或分叉。 */
     val readOnly: Boolean = false,
+    /**
+     * Hermes 存档的旧对话（gateway 回过 `session_read_only`）：以前经 API 建的、网页版或导入的记录等，
+     * Hermes 只让看，发消息、分叉都不行，只能新建对话。为 true 时 [readOnly] 也是 true。
+     */
+    val storedHistory: Boolean = false,
 ) {
     /** 不是在 App / API 里建的会话（CLI、Telegram……），列表里显示来源标签。 */
     val external: Boolean get() = source != SessionSource.Api

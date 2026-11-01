@@ -290,6 +290,9 @@ API Server 只允许继续来源是 `api_server` / `bot_room` 的会话，这是
 
 坑：
 - **标题不能重复**：改成已有的标题时 gateway 只回一个笼统的 `request_failed`，App 提示“可能已经有对话叫「…」了（Hermes 要求标题不重复）”。
+- **存档的旧对话只读**（上游 2026-10-23 起，`gateway/session_history_mount.py`）：没有归属的已存会话（没有 API 绑定的旧 API 会话、网页版 / 导入的、子代理、旧定时任务记录）
+  `session.resume` 能读，`prompt.submit`、`session.mutate` 的 branch / model 等回 `session_read_only`，只有 delete / archive / sidebar 可以。会话列表里看不出来，只能发了才知道；
+  App 把它标成只读（`Session.storedHistory`），提供“新建对话”而不是分叉。电脑版也是让用户新开对话。
 - **推理强度存在运行策略里**，不在 `model_config`；每次发消息前如果和上次设的不同，先 `session.mutate reasoning`（`appliedEffort` 记住，不重复改）。
 - 发图后 gateway 存进记录的用户消息是视觉描述：`[The user sent an image~ …]\n[If you need a closer look, use vision_analyze with image_url: <路径> ~]`，`ImageMarkers.parse` 把它去掉、从路径里取回图片（sha 是目录名）。
 

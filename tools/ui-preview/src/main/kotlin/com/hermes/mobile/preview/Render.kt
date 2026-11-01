@@ -164,6 +164,12 @@ private val scenes = listOf(
     ) { repo, _ -> ChatScreen(repo, "s-3", onBack = {}, onOpenChat = {}) },
     Scene("07-chat-new", prepare = { it.createSession()!! }) { repo, id -> ChatScreen(repo, id!!, onBack = {}, onOpenChat = {}) },
     Scene("08-chat-readonly") { repo, _ -> ChatScreen(repo, "s-4", onBack = {}, onOpenChat = {}) },
+    Scene("08b-chat-stored-history", prepare = { it.markStoredHistory("s-2"); it.sendMessage("s-2", "?", emptyList()); null }) { repo, _ ->
+        ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {})
+    },
+    Scene("08c-chat-stored-history-dark", dark = true, prepare = { it.markStoredHistory("s-2"); it.sendMessage("s-2", "?", emptyList()); null }) { repo, _ ->
+        ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {})
+    },
     Scene("09-sheet-model") { repo, _ ->
         SheetOver({ ChatScreen(repo, "s-1", onBack = {}, onOpenChat = {}) }) {
             com.hermes.mobile.ui.chat.ModelSheetBody(SampleData.models, selectedName = "Claude Sonnet", onSelect = {}, effort = "high", onEffort = {})

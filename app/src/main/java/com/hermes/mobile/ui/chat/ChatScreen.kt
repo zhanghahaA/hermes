@@ -74,6 +74,7 @@ import com.hermes.mobile.data.HermesRepository
 import com.hermes.mobile.data.model.reasoningEffortLabel
 import com.hermes.mobile.data.model.ChatItem
 import com.hermes.mobile.data.model.Attachment
+import com.hermes.mobile.data.model.DeliveryStatus
 import com.hermes.mobile.data.model.Draft
 import com.hermes.mobile.data.model.FileRef
 import com.hermes.mobile.data.model.ImageRef
@@ -369,7 +370,16 @@ fun ChatScreen(
                     .onSizeChanged { bottomBarHeight = it.height },
             ) {
                 val current = session
-                if (current != null && current.readOnly) {
+                if (current != null && current.storedHistory) {
+                    // Hermes 连分叉也不让：新建一个对话，把没发出去的那条带过去
+                    StoredHistoryBar(backdrop, onNewChat = {
+                        repository.createSession()?.let { id ->
+                            val unsent = items.filterIsInstance<ChatItem.Message>().lastOrNull { it.role == Role.User && it.status == DeliveryStatus.Failed }
+                            if (unsent != null) repository.saveDraft(id, Draft(unsent.text))
+                            onOpenChat(id)
+                        }
+                    })
+                } else if (current != null && current.readOnly) {
                     ReadOnlyBar(backdrop, current.source.label, onFork = { repository.forkSession(sessionId, null)?.let(onOpenChat) })
                 } else if (AppFeature.SendMessages !in features) {
                     NoticeBar(backdrop, "这台 Hermes 版本太旧，不能从 App 发消息（需要 /v1/runs 接口），升级 Hermes 后再试")
@@ -545,8 +555,10 @@ fun ChatScreen(
                     clipboard.setText(AnnotatedString(message.text))
                     showMessage("已复制")
                 }))
-                // Hermes 只能分叉整个会话（复制全部记录）
-                add(SheetAction("分叉这个会话", Icons.Rounded.AccountTree, { repository.forkSession(sessionId, null)?.let(onOpenChat) }))
+                // Hermes 只能分叉整个会话（复制全部记录）；存档的旧对话连分叉也不行
+                if (session?.storedHistory != true) {
+                    add(SheetAction("分叉这个会话", Icons.Rounded.AccountTree, { repository.forkSession(sessionId, null)?.let(onOpenChat) }))
+                }
                 if (!readOnly) {
                     add(SheetAction("删除", Icons.Rounded.Delete, { repository.deleteItem(sessionId, message.id) }, destructive = true))
                 }
@@ -707,6 +719,7 @@ private fun ChatTopBar(
                         DropdownMenuItem(
                             text = { Text("分叉会话") },
                             leadingIcon = { Icon(Icons.Rounded.AccountTree, null) },
+                            enabled = session?.storedHistory != true,
                             onClick = { menu = false; onFork() },
                         )
                         if (onOpenScreen != null) {

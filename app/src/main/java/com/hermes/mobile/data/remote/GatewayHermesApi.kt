@@ -587,6 +587,8 @@ internal fun GatewayException.toHermesError(): HermesError = when {
     disconnected -> HermesError.Unreachable(message ?: "和 Hermes gateway 的连接断了")
     reason == "unknown_method" -> HermesError.NotSupported("这个版本的 Hermes gateway 没有这个功能")
     reason == "permission_denied" -> HermesError.Conflict("permission_denied", "没有权限（这个会话可能属于别的 bot 或别的用户）")
+    // 新版 Hermes（2026-10-23 起）把没有归属的旧记录（以前经 API 建的、网页版或导入的……）只读打开：能看，发消息、分叉都拒绝
+    reason == "session_read_only" -> HermesError.Conflict("session_read_only", "这是 Hermes 存档的旧对话，只能查看，不能接着聊，也不能分叉")
     reason == "session_busy" || reason == "admission_conflict" -> HermesError.Conflict("session_active_turn", "这个会话正在别处回复中，等它结束再发")
     reason == "not_found" -> HermesError.NotSupported("找不到这个会话")
     reason == "queue_full" -> HermesError.Server(429, "queue_full", "Hermes 同时处理的任务太多了")

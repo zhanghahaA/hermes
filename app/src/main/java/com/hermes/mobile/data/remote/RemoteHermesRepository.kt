@@ -689,8 +689,9 @@ class RemoteHermesRepository(
                 newer + fetched.map { s ->
                     s.copy(
                         running = runs.containsKey(s.id),
-                        // 服务器不告诉我们哪些会话不能继续，只能记住 409 过的
+                        // 服务器不告诉我们哪些会话不能继续，只能记住 409 / session_read_only 过的
                         readOnly = before[s.id]?.readOnly == true,
+                        storedHistory = before[s.id]?.storedHistory == true,
                     )
                 }
             }
@@ -860,6 +861,7 @@ class RemoteHermesRepository(
                 draftSessions.update { it - placeholder }
                 loadMessages(forked.id)
             } catch (e: HermesError) {
+                if (e is HermesError.Conflict && e.code == "session_read_only") updateSession(source) { it.copy(readOnly = true, storedHistory = true) }
                 draftSessions.update { m -> m[placeholder]?.let { m + (placeholder to it.copy(preview = "分叉失败")) } ?: m }
                 _errors.tryEmit("分叉失败：${e.message}")
             }
@@ -1460,6 +1462,10 @@ class RemoteHermesRepository(
         e is HermesError.Conflict && e.code == "permission_denied" -> {
             updateSession(sessionId) { it.copy(readOnly = true) }
             "这个会话不能从手机继续，可以分叉一份再聊"
+        }
+        e is HermesError.Conflict && e.code == "session_read_only" -> {
+            updateSession(sessionId) { it.copy(readOnly = true, storedHistory = true) }
+            "这是 Hermes 存档的旧对话，Hermes 只让查看、不让接着聊。点下面的「新建对话」把这条消息发到新对话里"
         }
         e is HermesError.Conflict && e.code == "session_active_turn" -> "这个会话正在别处回复中，等它结束再发"
         e is HermesError.Server && e.status == 429 -> "Hermes 同时处理的任务太多了，稍后点消息重发"

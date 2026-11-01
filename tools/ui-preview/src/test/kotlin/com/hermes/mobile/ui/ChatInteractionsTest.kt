@@ -12,6 +12,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.hasSetTextAction
@@ -311,5 +312,31 @@ class ChatInteractionsTest {
         onNodeWithContentDescription("结束搜索").performClick()
         waitForIdle()
         onNodeWithText("周末去杭州的行程").assertIsDisplayed()
+    }
+
+    /** Hermes 存档的旧对话（session_read_only）：不再提供必然失败的分叉，改成新建对话，并把没发出去的那条带过去。 */
+    @Test
+    fun storedHistoryOffersNewChatCarryingTheUnsentMessage() = withRepo { repo ->
+        repo.markStoredHistory("s-2")
+        repo.sendMessage("s-2", "装上吧", emptyList())
+        var opened: String? = null
+        show { ChatScreen(repo, "s-2", onBack = {}, onOpenChat = { opened = it }) }
+        waitForIdle()
+        onNodeWithText("Hermes 存档的旧对话，只能查看").assertIsDisplayed()
+        assertEquals(0, onAllNodesWithText("分叉后继续").fetchSemanticsNodes().size)
+        onNodeWithText("新建对话").performClick()
+        waitForIdle()
+        val id = assertNotNull(opened, "打开了新对话")
+        assertTrue(id != "s-2")
+        assertEquals("装上吧", repo.draft(id).text, "没发出去的那条带到新对话的输入框里")
+
+        opened = null
+        onNodeWithContentDescription("更多").performClick()
+        waitForIdle()
+        onNodeWithText("分叉会话").assertIsNotEnabled()
+        onNodeWithText("重命名").assertIsNotEnabled()
+        onNodeWithText("分叉会话").performClick() // 点了也不该分叉
+        waitForIdle()
+        assertNull(opened)
     }
 }

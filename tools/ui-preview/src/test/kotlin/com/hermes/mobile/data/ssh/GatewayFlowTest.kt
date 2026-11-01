@@ -205,6 +205,41 @@ class GatewayFlowTest {
         assertEquals(before, gateway.requests.count { it["method"]?.toString() == "\"session.mutate\"" })
     }
 
+    /**
+     * 用户手机上（新版 Hermes）出现过：打开一个旧对话发消息，弹“发送失败：Hermes gateway：session_read_only”。
+     * 那是 Hermes 存档的旧记录（以前经 API 建的等），只能看；App 要说清楚原因、标成只读，并且不再提供必然失败的分叉。
+     */
+    @Test fun storedHistoryIsExplainedAndMarkedReadOnly() {
+        val old = gateway.Session("old", "以前的对话", "api_server").apply {
+            storedHistory = true
+            messages += gateway.message("user", "要不要装上")
+            messages += gateway.message("assistant", "说一声就动手。", finish = "stop")
+        }
+        gateway.sessions[old.id] = old
+        val repo = connected(sshd())
+        val errors = java.util.Collections.synchronizedList(mutableListOf<String>())
+        scope.launch { repo.errors.collect { errors += it } }
+        repo.refreshSessionsBlocking()
+        repo.chatItems("old").await("能看记录") { list -> list.replies().any { it == "说一声就动手。" } }
+
+        repo.sendMessage("old", "?", emptyList())
+        repo.chatItems("old").await("这条标成发送失败") { list ->
+            list.filterIsInstance<ChatItem.Message>().any { it.role == Role.User && it.text == "?" && it.status == com.hermes.mobile.data.model.DeliveryStatus.Failed }
+        }
+        runBlocking { withTimeout(10_000) { while (errors.none { "存档的旧对话" in it }) kotlinx.coroutines.delay(20) } }
+        assertTrue(errors.none { "session_read_only" in it }, "不把 Hermes 的原始代码直接给用户看：$errors")
+        val marked = repo.session("old").await("标成存档的只读对话") { it?.storedHistory == true }!!
+        assertTrue(marked.readOnly)
+
+        // 刷新列表后还记得
+        repo.refreshSessionsBlocking()
+        assertTrue(runBlocking { repo.session("old").first() }!!.storedHistory, "刷新后不能忘了")
+        // 其它会话不受影响
+        assertTrue(!runBlocking { repo.session("s1").first() }!!.readOnly)
+    }
+
+    private fun RemoteHermesRepository.refreshSessionsBlocking() = runBlocking { refreshSessions() }
+
     @Test fun newChatIsCreatedThroughTheGatewayAndGetsItsTitle() {
         val repo = connected(sshd())
         val draft = repo.createSession()!!
