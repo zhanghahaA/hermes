@@ -61,6 +61,10 @@ class FakeGateway {
          * 真 gateway 会把这一段当成没有归属的存档只读挂上，回 `session_read_only`（gateway/session_controls.py、session_history_mount.py）。
          */
         @Volatile var listedAs: String? = null
+        /** 电脑版 BOT 界面把 Bot Chat 设成隐藏：会话列表里没有（桥用的 list_sessions_rich 默认不列隐藏的）。 */
+        @Volatile var hidden = false
+        /** 建会话时带的参数（看手机建 Bot Chat 时带了什么）。 */
+        @Volatile var createParams: JsonObject? = null
     }
 
     val sessions = ConcurrentHashMap<String, Session>()
@@ -101,7 +105,12 @@ class FakeGateway {
             return when (val method = req["method"]!!.jsonPrimitive.content) {
                 "ping" -> JsonObject(emptyMap())
                 "session.create" -> {
-                    val s = Session("local-" + UUID.randomUUID().toString().replace("-", ""), p["title"]?.jsonPrimitive?.contentOrNull, "local")
+                    val title = p["title"]?.jsonPrimitive?.contentOrNull
+                    // 真 Hermes：带标题建会话先按标题找已有的；被旧 API 对话占着时找不到能接管的，回 not_found
+                    if (title != null && sessions.values.any { it.title == title }) throw Refusal("not_found")
+                    val s = Session("local-" + UUID.randomUUID().toString().replace("-", ""), title, "local")
+                    s.hidden = p["hidden"]?.jsonPrimitive?.booleanOrNull == true
+                    s.createParams = p
                     sessions[s.id] = s
                     subscriptions += s.id
                     snapshot(s, withMessages = false)
@@ -350,11 +359,24 @@ class FakeGateway {
 
     private fun local(name: String, p: JsonObject): JsonElement = when (name) {
         "sessions" -> buildJsonObject {
-            put("data", JsonArray(sessions.values.filter { !it.archived }.sortedByDescending { it.started }.map { row(it) }))
+            put("data", JsonArray(sessions.values.filter { !it.archived && !it.hidden }.sortedByDescending { it.started }.map { row(it) }))
         }
         "session" -> buildJsonObject {
             val id = p.str("session_id")
             put("session", (sessions[id] ?: sessions.values.firstOrNull { it.listedAs == id })?.let(::row) ?: JsonNull)
+        }
+        // 照桥里的 local_displace_bot_chat：只挪开标题正好是 Bot Chat、来源是 API、谁也接不了的那一条
+        "displace_bot_chat" -> buildJsonObject {
+            val s = sessions[p.str("session_id")]
+            when {
+                s == null || s.title != "Bot Chat" -> { put("moved", false); put("reason", "not_bot_chat") }
+                s.source != "api_server" || !s.storedHistory -> { put("moved", false); put("reason", "not_api") }
+                else -> {
+                    s.title = "Bot Chat (API ${s.id})"
+                    s.hidden = false
+                    put("moved", true); put("title", s.title)
+                }
+            }
         }
         "skills" -> HermesJson.parseToJsonElement("""{"data":[{"name":"github-pr-review","description":"审 PR","category":"开发"}]}""")
         "toolsets" -> HermesJson.parseToJsonElement("""{"data":[{"name":"web","label":"Web","description":"web_search","enabled":true,"configured":true,"tools":["web_search"]}]}""")
@@ -366,7 +388,7 @@ class FakeGateway {
         put("id", s.listedAs ?: s.id); put("source", s.source); put("title", s.title)
         put("started_at", s.started); put("last_active", s.started); put("message_count", s.messages.size)
         put("preview", s.messages.firstOrNull { it.str("role") == "user" }?.str("content")?.take(60))
-        put("pinned", s.pinned); put("archived", s.archived); put("hidden", false)
+        put("pinned", s.pinned); put("archived", s.archived); put("hidden", s.hidden)
     }
 
     /** 测试 SSH 服务器上的命令：`hermes config path` 回个路径；桥脚本按 gateway 应答；别的回空。 */

@@ -158,6 +158,15 @@ interface HermesRepository {
     suspend fun enableBotAccess(name: String, progress: (String) -> Unit = {}): String? = "不支持"
     /** 当前 bot 的固定对话「Bot Chat」：有就返回它的 id，没有就新建一个（草稿，发第一条时建到服务器上）。 */
     fun openBotChat(): String? = null
+
+    /** [sessionId] 是被旧 API 对话占着的 Bot Chat（Hermes 只让看），可以换成一个新的（SSH 经 gateway 时）。 */
+    fun canReplaceBotChat(sessionId: String): Boolean = false
+
+    /**
+     * 用户确认后：旧的改名为「Bot Chat (API …)」保留记录，新建一个电脑版和手机都能接着聊的 Bot Chat，
+     * 没发出去的那条放进新对话的输入框。返回新对话的 id。
+     */
+    suspend fun replaceBotChat(sessionId: String): Result<String> = Result.failure(UnsupportedOperationException("不支持"))
     /** 读 bot 头像（服务器上的文件，读过的存在手机上）。 */
     suspend fun botAvatar(bot: com.hermes.mobile.data.model.Bot): ByteArray? = null
     /** 编辑页要的详细信息（描述、性格、模型），经 SSH 读。 */

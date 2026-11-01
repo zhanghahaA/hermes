@@ -293,6 +293,9 @@ API Server 只允许继续来源是 `api_server` / `bot_room` 的会话，这是
 - **压缩过的对话要用 `session.resume` 换出来的 id**：会话列表（`list_sessions_rich`）把压缩过的对话投影成最后一段的 id；
   `session.resume` 回包的 `session_id` 是它真正的归属（本地会话的 `local-…`、聊天平台的压缩链最早那段）。之后发消息、改会话都要用这个 id，
   拿列表里那段去发会被当成存档只读（`session_read_only`）。`GatewayHermesApi.owners` 记着这个对应关系。
+- **旧 API Bot Chat**：Bot Chat 是 `api_…`、没有 `gateway.api.binding.v1.<id>` 时谁也接不了（电脑版也不行，`validate_legacy_row` 拒绝 API 来源）。
+  Hermes 自己只在 bot 互发消息时把它改名为 `Bot Chat (API <id>)` 再建新的（`session_bot._displace_bot_chat`）；App 在用户确认后经桥做同样的事，再 `session.create` 带 `title/hidden/follow_profile_config`。
+  电脑版 BOT 界面建的 Bot Chat 是隐藏的，桥的会话列表里没有，打开时要单独读。
 - **存档的旧对话只读**（上游 2026-10-23 起，`gateway/session_history_mount.py`）：没有归属的已存会话（没有 API 绑定的旧 API 会话、网页版 / 导入的、子代理、旧定时任务记录）
   `session.resume` 能读，`prompt.submit`、`session.mutate` 的 branch / model 等回 `session_read_only`，只有 delete / archive / sidebar 可以。会话列表里看不出来，只能发了才知道；
   App 把它标成只读（`Session.storedHistory`），提供“新建对话”而不是分叉。电脑版也是让用户新开对话。

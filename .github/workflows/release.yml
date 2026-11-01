@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要发布的标签，比如 v0.14.3（还不存在时在当前分支最新提交上建）"
+        description: "要发布的标签，比如 v0.14.4（还不存在时在当前分支最新提交上建）"
         required: true
 
 permissions:
@@ -20,7 +20,7 @@ jobs:
     name: 签名打包并发布
     runs-on: ubuntu-latest
     env:
-      # 0.14.3 起的发布签名（证书 SHA-256，不是秘密）。换签名时同时改这里和 HANDOFF.md。
+      # 0.14.4 起的发布签名（证书 SHA-256，不是秘密）。换签名时同时改这里和 HANDOFF.md。
       EXPECTED_CERT_SHA256: 83f0e60956a14bbe8d227f880899965bea1330c0f3fd382ce4439e16a63fa799
       TAG: ${{ inputs.tag || github.ref_name }}
     steps:

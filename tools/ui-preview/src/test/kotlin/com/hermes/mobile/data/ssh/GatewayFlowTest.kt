@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -276,6 +277,58 @@ class GatewayFlowTest {
         val interrupt = gateway.requests.last { it["method"]?.toString() == "\"session.interrupt\"" }["params"]!!.jsonObject
         assertEquals("local-botchat", interrupt["session_id"]!!.jsonPrimitive.content, "停止也发到换过的 id")
         assertTrue(runBlocking { repo.chatItems(listed).first() }.filterIsInstance<ChatItem.Message>().none { it.status == com.hermes.mobile.data.model.DeliveryStatus.Failed }, "没有发送失败的消息")
+    }
+
+    /**
+     * 用户手机上真正的情况（自建 bot「小蓝」）：它的 Bot Chat 是以前手机经 API Server 建的 `api_…` 对话、没有 API 归属登记，
+     * 电脑版 BOT 界面把它设成了隐藏。新版 Hermes 只让看：发消息回 `session_read_only`。
+     * App 要：隐藏的也能显示状态、标成只读；用户确认之前不改服务器；确认后旧的改名保留、新建一个 Bot Chat，接着聊新的。
+     */
+    @Test fun aStoredApiBotChatIsReplacedOnlyAfterTheUserConfirms() {
+        val old = gateway.Session("api_1793115242_93c77de4", "Bot Chat", "api_server").apply {
+            storedHistory = true
+            hidden = true
+            messages += gateway.message("user", "帮我登录 B 站")
+            messages += gateway.message("assistant", "已经登录好了。", finish = "stop")
+        }
+        gateway.sessions[old.id] = old
+        val repo = connected(sshd())
+        repo.refreshSessionsBlocking()
+        assertTrue(repo.sessions.value.none { it.id == old.id }, "隐藏的 Bot Chat 不在列表里")
+
+        repo.chatItems(old.id).await("能看记录") { list -> list.replies().any { it == "已经登录好了。" } }
+        repo.session(old.id).await("不在列表里也读到了它的信息") { it?.title == "Bot Chat" }
+        repo.sendMessage(old.id, "装上吧", emptyList())
+        repo.session(old.id).await("发不出去后标成存档的只读对话") { it?.storedHistory == true && it.readOnly }
+        assertTrue(repo.canReplaceBotChat(old.id))
+        assertEquals("Bot Chat", old.title, "用户确认之前不改服务器")
+        assertTrue(gateway.requests.none { it["local"]?.toString() == "\"displace_bot_chat\"" })
+
+        val fresh = runBlocking { repo.replaceBotChat(old.id) }.getOrThrow()
+        assertEquals("Bot Chat (API ${old.id})", old.title, "旧的改名保留")
+        assertTrue(old.messages.size == 2, "旧的记录没动")
+        val created = gateway.sessions.getValue(fresh)
+        assertEquals("Bot Chat", created.title)
+        assertTrue(created.hidden, "和电脑版一样建成隐藏的")
+        assertEquals(true, created.createParams?.get("follow_profile_config")?.jsonPrimitive?.booleanOrNull, "跟随 bot 的配置")
+        assertEquals("装上吧", repo.draft(fresh).text, "没发出去的那条带过去")
+        assertEquals(fresh, repo.openBotChat(), "以后打开 Bot Chat 就是新的")
+
+        repo.sendMessage(fresh, "装上吧", emptyList())
+        repo.chatItems(fresh).await("新的 Bot Chat 能接着聊") { list -> list.replies().any { it == "最终回复：装上吧" } }
+        repo.sessions.await("旧的改名后出现在列表里") { list -> list.any { it.id == old.id && it.title.startsWith("Bot Chat (API") } }
+    }
+
+    /** 不是旧 API 对话的 Bot Chat（比如电脑上建的本机对话）不提供“换新的”，桥里也不会改。 */
+    @Test fun aWritableBotChatIsNotOfferedForReplacement() {
+        val local = gateway.Session("local-bot", "Bot Chat", "local").apply { hidden = true }
+        gateway.sessions[local.id] = local
+        val repo = connected(sshd())
+        repo.chatItems(local.id).await("打开") { true }
+        repo.session(local.id).await("读到信息") { it?.title == "Bot Chat" }
+        assertTrue(!repo.canReplaceBotChat(local.id))
+        assertTrue(runBlocking { repo.replaceBotChat(local.id) }.isFailure)
+        assertEquals("Bot Chat", local.title, "没改")
     }
 
     private fun RemoteHermesRepository.refreshSessionsBlocking() = runBlocking { refreshSessions() }

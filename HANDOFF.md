@@ -3,6 +3,26 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.14.4：自建 bot 的 Bot Chat 发不出去——真正原因（有用户数据）
+
+- **用户数据**（只读检查脚本的输出，用户 Hermes `v0.22.5+2582 eaf03cb`，10-28）：自建 bot `u5c0f-u84dd`（小蓝）的 Bot Chat 是
+  `api_1793115242_… src=api_server hidden=1 meta=无`——旧版手机 App 经 API Server 建的、没有 API 归属登记（`gateway.api.binding.v1.<id>`）。
+  默认 bot 下的 `Bot Chat #2/#3` 也是这种。
+- **原因**：这种会话新版 Hermes 只读挂载（`session_history_mount.py`），发消息回 `session_read_only`；电脑版也接不了（`validate_legacy_row` 只接管 cli/tui/desktop 等本机来源）。
+  它又是隐藏的，桥的列表（`list_sessions_rich` 默认不列隐藏）里没有，App 打开时 `session(id)` 是 null，所以 0.14.3 只弹提示、标不上只读（用户截图里底部还是输入框、标题栏“默认模型”）。
+  上面 0.14.2 修的“压缩后 id”是另一类问题（照 Hermes 源码推的，代码保留），不是用户这次的原因。
+- **Hermes 自己的处理**：bot 互发消息时（`gateway/session_bot.py` `_target` → `displaceable_bot_chat` → `_displace_bot_chat`）把这种 Bot Chat 改名为 `Bot Chat (API <id>)`、再建一个本机 Bot Chat。只有 bot 互发才触发。
+- **App 的做法**：
+  - `RemoteHermesRepository.offList`：打开了但不在列表里的对话，打开时用桥的 `local session` 读一次，状态（只读、标题）记在它身上；`openBotChat` 也会找这里的新 Bot Chat。
+  - 发送回 `session_read_only` 且标题正好是 `Bot Chat`、经 gateway 时，底部「旧的 Bot Chat，Hermes 只让查看 · 换新的 Bot Chat」→ 说明对话框 → 用户确认后
+    `GatewayHermesApi.replaceStoredBotChat`：桥 `displace_bot_chat`（调 Hermes 的 `_displace_bot_chat`；只动标题是 Bot Chat、来源 API、没有归属登记的那一条，否则返回原因不改）
+    → `session.create {source: gui, title: "Bot Chat", hidden: true, follow_profile_config: true}`（和电脑版 BOT 界面建的一样）。没发出去的那条放进新对话草稿。
+- **验证**：`GatewayFlowTest.aStoredApiBotChatIsReplacedOnlyAfterTheUserConfirms`（隐藏的 api Bot Chat：标成只读、确认前不改、改名保留、新建隐藏的跟随配置的 Bot Chat、能接着聊；去掉 offList 那一步这个测试失败）、
+  `aWritableBotChatIsNotOfferedForReplacement`、`ChatInteractionsTest.storedBotChatIsReplacedOnlyAfterConfirming`（取消不改、确认后改）、截图 08d；
+  桥里那段 Python 用模拟的 SessionDB + 从 eaf03cb 抄来的 `_displace_bot_chat` 跑过各分支（非 Bot Chat、本机来源、有归属登记、标题已变、正常挪开、重复调用）。
+  **没在真实 Hermes 上跑过**（这个环境不允许安装运行 Hermes），**没在用户手机上验证**。电脑版 BOT 界面换完后能不能直接认到新 Bot Chat 是按它的代码（按标题找）推的，没实测。
+- 这一版之前给用户的 0.14.2（两个包）、0.14.3 都是测试包、没发布；Release 用 0.14.4（`docs/releases/v0.14.4.md`）。
+
 ## 0.14.3：0.14.2 没发布，改版本号重出
 
 - 0.14.2 只是发给用户的测试包，出过两个同版本号的包（修复前 `55f2fd48…`、修复后 `45d2eb92…`），手机上分不出来，所以改成 0.14.3 / 56 重出；Release 也按 0.14.3 发（`docs/releases/v0.14.3.md`）。

@@ -44,6 +44,8 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -177,6 +179,8 @@ fun ChatScreen(
     var showModels by remember { mutableStateOf(false) }
     var showAttach by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
+    var showReplaceBotChat by remember { mutableStateOf(false) }
+    var replacingBotChat by remember { mutableStateOf(false) }
     var actionTarget by remember { mutableStateOf<ChatItem.Message?>(null) }
     var quote by remember(sessionId) { mutableStateOf<Quote?>(null) }
     var selection by remember { mutableStateOf<MessageSelection?>(null) }
@@ -370,7 +374,11 @@ fun ChatScreen(
                     .onSizeChanged { bottomBarHeight = it.height },
             ) {
                 val current = session
-                if (current != null && current.storedHistory) {
+                if (current != null && current.storedHistory && repository.canReplaceBotChat(sessionId)) {
+                    // bot 的 Bot Chat 被旧 API 对话占着：说明后换一个新的（电脑版 BOT 界面和手机都用新的）
+                    NoticeBar(backdrop, "旧的 Bot Chat，Hermes 只让查看", actionLabel = if (replacingBotChat) "正在换…" else "换新的 Bot Chat",
+                        onAction = { if (!replacingBotChat) showReplaceBotChat = true })
+                } else if (current != null && current.storedHistory) {
                     // Hermes 连分叉也不让：新建一个对话，把没发出去的那条带过去
                     StoredHistoryBar(backdrop, onNewChat = {
                         repository.createSession()?.let { id ->
@@ -531,6 +539,35 @@ fun ChatScreen(
                 if (source.startsWith("data:")) showMessage("这张图暂时不能分享，先保存到相册再分享")
                 else fileActions.share(source, imageFileName(image))
             },
+        )
+    }
+
+    if (showReplaceBotChat) {
+        AlertDialog(
+            onDismissRequest = { showReplaceBotChat = false },
+            title = { Text("换一个新的 Bot Chat？") },
+            text = {
+                Text(
+                    "这个 Bot Chat 是以前手机经 API Server 建的。新版 Hermes 只让查看、不让接着聊，电脑版 BOT 界面也接不上它。\n\n" +
+                        "换新的会改电脑上 Hermes 里的数据：\n" +
+                        "· 把这个旧对话改名为「Bot Chat (API …)」，聊天记录都保留，在对话列表里还能看；\n" +
+                        "· 新建一个 Bot Chat，电脑版 BOT 界面和手机以后都接着聊这一个。\n\n" +
+                        "旧对话里聊过的内容，新的 Bot Chat 里 bot 看不到。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showReplaceBotChat = false
+                    replacingBotChat = true
+                    scope.launch {
+                        repository.replaceBotChat(sessionId)
+                            .onSuccess(onOpenChat)
+                            .onFailure { showMessage("没换成：${it.message ?: "未知原因"}") }
+                        replacingBotChat = false
+                    }
+                }) { Text("换新的") }
+            },
+            dismissButton = { TextButton(onClick = { showReplaceBotChat = false }) { Text("取消") } },
         )
     }
 

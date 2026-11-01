@@ -125,8 +125,32 @@ def local_jobs(p):
         return {"job": J.trigger_job(p["job_id"])}
     raise ValueError("unknown jobs op")
 
+def local_displace_bot_chat(p):
+    # 用户确认后才调：Bot Chat 被一个谁也接不了的旧 API 对话占着（新版 Hermes 只读挂载、电脑版也不接管），
+    # 照 Hermes 自己的做法（gateway/session_bot.py 的 _displace_bot_chat）把它改名为「Bot Chat (API <id>)」，记录都保留。
+    # 只动标题正好是 Bot Chat、来源是 API、没有 API 归属登记的那一条；其它一律不动。
+    from pathlib import Path
+    from hermes_constants import get_hermes_home
+    from hermes_state import SessionDB
+    from gateway.session_bot import _displace_bot_chat
+    sid = p["session_id"]
+    db = SessionDB(Path(get_hermes_home()) / "state.db")
+    try:
+        row = db.get_session(sid)
+        if not row or row.get("title") != "Bot Chat":
+            return {"moved": False, "reason": "not_bot_chat"}
+        if str(row.get("source") or "") not in ("", "api_server", "bot_peer_dm") or str(row.get("chat_id") or "").startswith("local-"):
+            return {"moved": False, "reason": "not_api"}
+        with db._read_ctx() as conn:
+            if conn.execute("SELECT 1 FROM state_meta WHERE key=?", ("gateway.api.binding.v1." + sid,)).fetchone():
+                return {"moved": False, "reason": "bound"}
+        moved = _displace_bot_chat(db, sid)
+        return {"moved": bool(moved), "title": (db.get_session(sid) or {}).get("title")}
+    finally:
+        db.close()
+
 LOCAL = {"sessions": local_sessions, "session": local_session, "skills": local_skills,
-         "toolsets": local_toolsets, "jobs": local_jobs}
+         "toolsets": local_toolsets, "jobs": local_jobs, "displace_bot_chat": local_displace_bot_chat}
 
 def warm_up():
     # 第一次读会话列表要先 import Hermes 的数据库模块（要好几秒）：连上就在后台先 import，手机第一次要列表时不用等

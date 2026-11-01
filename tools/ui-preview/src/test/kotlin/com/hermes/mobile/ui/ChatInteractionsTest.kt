@@ -339,4 +339,33 @@ class ChatInteractionsTest {
         waitForIdle()
         assertNull(opened)
     }
+
+    /** bot 的 Bot Chat 被旧 API 对话占着：先说明，用户点“换新的”才改；取消什么都不动。 */
+    @Test
+    fun storedBotChatIsReplacedOnlyAfterConfirming() = withRepo { repo ->
+        repo.renameSession("s-2", "Bot Chat")
+        repo.markStoredHistory("s-2")
+        repo.sendMessage("s-2", "装上吧", emptyList())
+        var opened: String? = null
+        show { ChatScreen(repo, "s-2", onBack = {}, onOpenChat = { opened = it }) }
+        waitForIdle()
+        onNodeWithText("旧的 Bot Chat，Hermes 只让查看").assertIsDisplayed()
+        onNodeWithText("换新的 Bot Chat").performClick()
+        waitForIdle()
+        onNodeWithText("换一个新的 Bot Chat？").assertIsDisplayed()
+        onNodeWithText("取消").performClick()
+        waitForIdle()
+        assertNull(opened)
+        assertEquals("Bot Chat", runBlocking { repo.session("s-2").first() }!!.title, "取消后没改")
+
+        onNodeWithText("换新的 Bot Chat").performClick()
+        waitForIdle()
+        onNodeWithText("换新的").performClick()
+        waitUntil(timeoutMillis = 5_000) { opened != null }
+        val id = opened!!
+        assertTrue(id != "s-2")
+        assertEquals("Bot Chat", runBlocking { repo.session(id).first() }!!.title)
+        assertEquals("Bot Chat (API s-2)", runBlocking { repo.session("s-2").first() }!!.title, "旧的改名保留")
+        assertEquals("装上吧", repo.draft(id).text, "没发出去的那条带过去")
+    }
 }

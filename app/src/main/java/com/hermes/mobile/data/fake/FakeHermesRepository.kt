@@ -148,6 +148,20 @@ class FakeHermesRepository(
     /** 演示 / 测试用：把会话当成 Hermes 存档的旧对话（发消息会失败，见 RemoteHermesRepository 的 session_read_only）。 */
     fun markStoredHistory(id: String) = updateSession(id) { it.copy(readOnly = true, storedHistory = true) }
 
+    override fun canReplaceBotChat(sessionId: String): Boolean =
+        _sessions.value.firstOrNull { it.id == sessionId }?.let { it.storedHistory && it.title == "Bot Chat" } == true
+
+    override suspend fun replaceBotChat(sessionId: String): Result<String> {
+        if (!canReplaceBotChat(sessionId)) return Result.failure(IllegalStateException("不是旧的 Bot Chat"))
+        updateSession(sessionId) { it.copy(title = "Bot Chat (API $sessionId)") }
+        val id = newId("s")
+        _sessions.update { listOf(Session(id, "Bot Chat", "", clock(), model = currentModelName())) + it }
+        items.update { it + (id to emptyList()) }
+        itemsOf(sessionId).filterIsInstance<ChatItem.Message>().lastOrNull { it.role == Role.User && it.status == DeliveryStatus.Failed }
+            ?.let { saveDraft(id, Draft(it.text)) }
+        return Result.success(id)
+    }
+
     // 草稿只记在内存里（会话列表的“[草稿]”标记不演示）
     private val draftTexts = MutableStateFlow<Map<String, Draft>>(emptyMap())
     override fun draft(sessionId: String): Draft = draftTexts.value[sessionId] ?: Draft()

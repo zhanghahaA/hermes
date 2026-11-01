@@ -167,6 +167,9 @@ private val scenes = listOf(
     Scene("08b-chat-stored-history", prepare = { it.markStoredHistory("s-2"); it.sendMessage("s-2", "?", emptyList()); null }) { repo, _ ->
         ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {})
     },
+    Scene("08d-chat-stored-bot-chat", prepare = { it.renameSession("s-2", "Bot Chat"); it.markStoredHistory("s-2"); it.sendMessage("s-2", "装上吧", emptyList()); null }) { repo, _ ->
+        ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {})
+    },
     Scene("08c-chat-stored-history-dark", dark = true, prepare = { it.markStoredHistory("s-2"); it.sendMessage("s-2", "?", emptyList()); null }) { repo, _ ->
         ChatScreen(repo, "s-2", onBack = {}, onOpenChat = {})
     },

@@ -223,6 +223,7 @@ class RemoteHermesRepository(
         sessionsFresh = false
         val scope0 = scopeOf(id)
         _sessions.value = cache?.sessions(scope0).orEmpty()
+        offList.value = emptyMap()
         _sessionGroups.value = cache?.groups(scope0) ?: SessionGrouping()
         _archivedLocal.value = cache?.archived(scope0).orEmpty()
         _activeBot.value = botOf(id) ?: baseBot(profile)
@@ -381,6 +382,7 @@ class RemoteHermesRepository(
                 client = null
                 connectedId = null
                 _sessions.value = emptyList()
+                offList.value = emptyMap()
                 _activeRuns.value = emptySet()
                 _connectionState.value = ConnectionState.Disconnected
             }
@@ -660,15 +662,31 @@ class RemoteHermesRepository(
      */
     private val draftSessions = MutableStateFlow<Map<String, Session>>(emptyMap())
     private val aliases = MutableStateFlow<Map<String, String>>(emptyMap())
+    /**
+     * 打开了、但不在会话列表里的对话（比如 bot 的 Bot Chat：电脑版把它设成隐藏，列表不显示）。
+     * 打开时单独读一次，好让标题、只读这些状态也能记在它身上。
+     */
+    private val offList = MutableStateFlow<Map<String, Session>>(emptyMap())
 
     private fun resolve(id: String): String = aliases.value[id] ?: id
 
     /** 本机刚建出来的会话 → 建好的时间。见 [loadSessions]。 */
     private val createdAt = ConcurrentHashMap<String, Long>()
 
-    override fun session(id: String): Flow<Session?> = combine(_sessions, draftSessions, aliases) { list, draftMap, aliasMap ->
+    override fun session(id: String): Flow<Session?> = combine(_sessions, draftSessions, aliases, offList) { list, draftMap, aliasMap, hidden ->
         val real = aliasMap[id] ?: id
-        list.firstOrNull { it.id == real } ?: draftMap[id]
+        list.firstOrNull { it.id == real } ?: hidden[real] ?: draftMap[id]
+    }
+
+    /** [sessionId] 不在列表里（隐藏的对话）：读一次它的信息放进 [offList]。 */
+    private suspend fun rememberOffList(sessionId: String) {
+        if (sessionId.startsWith(DraftPrefix) || offList.value.containsKey(sessionId) || _sessions.value.any { it.id == sessionId }) return
+        val dto = try {
+            client?.session(sessionId)
+        } catch (e: HermesError) {
+            null
+        } ?: return
+        if (_sessions.value.none { it.id == sessionId }) offList.update { it + (sessionId to dto.toSession(clock())) }
     }
 
     private suspend fun loadSessions() {
@@ -748,8 +766,10 @@ class RemoteHermesRepository(
         }
     }
 
-    private fun updateSession(id: String, transform: (Session) -> Session) =
+    private fun updateSession(id: String, transform: (Session) -> Session) {
         _sessions.update { list -> list.map { if (it.id == id) transform(it) else it } }
+        offList.update { m -> m[id]?.let { m + (id to transform(it)) } ?: m }
+    }
 
     /** 先在本地改（界面立刻变），再发给服务器；失败就改回去并提示。 */
     private fun optimistic(id: String, transform: (Session) -> Session, call: suspend HermesApi.() -> Unit) {
@@ -1014,6 +1034,7 @@ class RemoteHermesRepository(
     private suspend fun loadMessages(sessionId: String) {
         val c = client ?: return
         if (capabilities?.sessionMessages == false) return
+        rememberOffList(sessionId)
         try {
             val now = clock()
             val items = c.messages(sessionId).data.mapIndexedNotNull { i, m -> m.toChatItem(i, now, ::cachedImage) }
@@ -2516,10 +2537,38 @@ class RemoteHermesRepository(
         }
     }
 
+    override fun canReplaceBotChat(sessionId: String): Boolean {
+        val id = resolve(sessionId)
+        val s = _sessions.value.firstOrNull { it.id == id } ?: offList.value[id] ?: return false
+        return client is GatewayHermesApi && s.storedHistory && s.title == BotChatTitle
+    }
+
+    override suspend fun replaceBotChat(sessionId: String): Result<String> {
+        val api = client as? GatewayHermesApi ?: return Result.failure(HermesError.NotSupported("换 Bot Chat（要经 SSH 连接）"))
+        val old = resolve(sessionId)
+        return try {
+            val created = api.replaceStoredBotChat(old)
+            // 旧的改了名、不再隐藏：刷新列表时会出现在列表里；新的是隐藏的，单独记着
+            createdAt[created.id] = clock()
+            offList.update { it - old + (created.id to created.toSession(clock())) }
+            _sessions.update { list -> list.filterNot { it.id == old } }
+            // 没发出去的那条带到新的 Bot Chat 里
+            chats.value[old]?.local?.lastOrNull { e -> (e.item as? ChatItem.Message)?.let { it.role == Role.User && it.status == DeliveryStatus.Failed } == true }
+                ?.let { e -> saveDraft(created.id, Draft((e.item as ChatItem.Message).text)) }
+            scope.launch { loadSessions() }
+            scope.launch { refreshBots() }
+            Result.success(created.id)
+        } catch (e: HermesError) {
+            Result.failure(e)
+        }
+    }
+
     override fun openBotChat(): String? {
         val bot = _bots.value?.bots?.firstOrNull { it.name == _activeBot.value }
         // 固定对话按标题找（和桌面版一样）：先看会话列表，再看 bot 列表里记的
         _sessions.value.firstOrNull { it.title == BotChatTitle }?.let { return it.id }
+        // Bot Chat 通常是隐藏的（不在列表里）：刚换过的新 Bot Chat 记在 offList
+        offList.value.values.firstOrNull { it.title == BotChatTitle && !it.storedHistory }?.let { return it.id }
         bot?.canonical?.id?.let { return it }
         val draft = createSession() ?: return null
         renameSession(draft, BotChatTitle)

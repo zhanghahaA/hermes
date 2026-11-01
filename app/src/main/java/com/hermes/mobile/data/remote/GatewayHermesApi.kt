@@ -104,7 +104,8 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
         link.local(name, params) as? JsonObject ?: JsonObject(emptyMap())
     } catch (e: GatewayException) {
         // 只读的（会话列表、技能、工具集、读任务）断了换条通道再问一次；改任务不重试
-        val readOnly = name != "jobs" || (params["op"] as? JsonPrimitive)?.contentOrNull in setOf("list", "get")
+        val readOnly = name in setOf("sessions", "session", "skills", "toolsets") ||
+            (name == "jobs" && (params["op"] as? JsonPrimitive)?.contentOrNull in setOf("list", "get"))
         if (!e.disconnected || !readOnly) throw e.toHermesError()
         try {
             link.local(name, params) as? JsonObject ?: JsonObject(emptyMap())
@@ -260,6 +261,35 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
         remember(id, snapshot)
         attached[id] = link.generation.value
         return SessionDto(id = id, source = "local", title = title)
+    }
+
+    /**
+     * 换掉被旧 API 对话占着的 Bot Chat（用户确认后才调）：桥里照 Hermes 自己的做法把旧的改名为「Bot Chat (API <id>)」，
+     * 再像电脑版 BOT 界面那样新建一个 Bot Chat（隐藏、跟随 bot 的配置），电脑版和手机都接着聊这个新的。
+     * 旧的不是这种（有 API 归属登记、来源不是 API、标题已经不是 Bot Chat）时什么都不改，抛出原因。
+     */
+    suspend fun replaceStoredBotChat(listedId: String): SessionDto {
+        val moved = local("displace_bot_chat", buildJsonObject { put("session_id", listedId) })
+        if ((moved["moved"] as? JsonPrimitive)?.booleanOrNull != true) {
+            throw HermesError.Conflict("bot_chat_not_replaced", when (moved.str("reason")) {
+                "not_bot_chat" -> "这个对话已经不是这个 bot 的 Bot Chat 了，刷新一下再看"
+                "not_api", "bound" -> "这个 Bot Chat 不是旧的 API 对话，没有改动"
+                else -> "Bot Chat 刚被别处改过，没有改动"
+            })
+        }
+        owners.remove(listedId)?.let { attached.remove(it); fences.remove(it) }
+        attached.remove(listedId)
+        link.ensure()
+        val snapshot = obj("session.create", buildJsonObject {
+            put("source", "gui")
+            put("title", BotChatTitle)
+            put("hidden", true)
+            put("follow_profile_config", true)
+        }, timeoutMillis = 90_000)
+        val id = snapshot.str("session_id") ?: throw HermesError.NotHermes()
+        remember(id, snapshot)
+        attached[id] = link.generation.value
+        return SessionDto(id = id, source = "local", title = BotChatTitle)
     }
 
     override suspend fun forkSession(id: String): SessionDto? {
@@ -596,6 +626,7 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
     override suspend fun job(id: String): JobDto? = jobOf(jobsOp("get") { put("job_id", id) })
 
     companion object {
+        const val BotChatTitle = "Bot Chat"
         private val TerminalEvents = setOf("run.completed", "run.failed", "run.cancelled")
         private val ReadOnlyMethods = setOf("session.resume", "session.events.since", "prompt.receipt", "model.options", "ping")
     }
