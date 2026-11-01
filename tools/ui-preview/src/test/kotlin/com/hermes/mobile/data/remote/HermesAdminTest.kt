@@ -308,4 +308,116 @@ class HermesAdminTest {
         assertEquals(0, code, out)
         assertTrue("RAN ['x']" in out, out)
     }
+
+    /**
+     * 照 Hermes 打包安装（Termux 的 hermes-agent 软件包）造一个假安装：$PREFIX/bin/hermes 是指向 lib/hermes-agent/bin/hermes 的链接，
+     * 后者是 sh 启动器，最后一行 exec 自带的 venv/bin/python。系统 python3 里没有 hermes_cli，只有在启动器的环境里才能导入。
+     * 三种写法照 hermes-agent 的 scripts/build/launchers.py（09-11 起）、scripts/bundles/payload.py（09-06）、scripts/termux/build_deb.sh（更早）。
+     */
+    private fun payloadInstall(launcher: (String) -> String): Pair<java.io.File, String> {
+        val prefix = kotlin.io.path.createTempDirectory("termux-usr").toFile()
+        val root = java.io.File(prefix, "lib/hermes-agent").apply { mkdirs() }
+        java.io.File(root, "app/hermes_cli").mkdirs()
+        java.io.File(root, "app/hermes_cli/__init__.py").writeText("MARK = 'bundled'\n")
+        java.io.File(root, "app/hermes_cli/main.py").writeText("import sys\ndef main():\n    print('usage: hermes', file=sys.stderr)\n    return 2\n")
+        val site = java.io.File(root, "venv/lib/python3/site-packages").apply { mkdirs() }
+        java.io.File(root, "extra").mkdirs()
+        java.io.File(root, "extra/pthmod.py").writeText("OK = True\n")
+        java.io.File(site, "extra.pth").writeText("../../../../extra\n")
+        java.io.File(root, "venv/bin").mkdirs()
+        java.nio.file.Files.createSymbolicLink(java.io.File(root, "venv/bin/python").toPath(), java.nio.file.Paths.get("/usr/bin/python3"))
+        java.io.File(root, "bin").mkdirs()
+        java.io.File(root, "bin/hermes").apply { writeText(launcher("python3")); setExecutable(true) }
+        java.io.File(prefix, "bin").mkdirs()
+        java.nio.file.Files.createSymbolicLink(java.io.File(prefix, "bin/hermes").toPath(), java.nio.file.Paths.get("../lib/hermes-agent/bin/hermes"))
+        return prefix to "${prefix.path}/bin:/usr/bin:/bin"
+    }
+
+    private val currentLauncher = { minor: String ->
+        """
+        #!/bin/sh
+        set -eu
+        self="§0"
+        while [ -L "§self" ]; do
+            target="§(readlink "§self")"
+            case "§target" in
+                /*) self="§target" ;;
+                *) self="§(dirname "§self")/§target" ;;
+            esac
+        done
+        root="§(cd "§(dirname "§self")/.." && pwd)"
+        PYTHON="§root"/venv/bin/python
+        REPO="§root"/app
+        SITE="§root"/venv/lib/$minor/site-packages
+        [ -x "§PYTHON" ] || { printf '%s\n' 'Bundled interpreter missing; reinstall Hermes.' >&2; exit 2; }
+        unset PYTHONPATH PYTHONHOME
+        export PYTHONPATH="§REPO:§SITE"
+        export HERMES_SITE="§SITE"
+        export PYTHONPYCACHEPREFIX="§{PYTHONPYCACHEPREFIX:-§{XDG_CACHE_HOME:-§HOME/.cache}/hermes-pycache}"
+        PREFIX="§{PREFIX:-/data/data/com.termux/files/usr}"
+        export PREFIX
+        export HERMES_PYTHON="§PYTHON"
+        exec "§PYTHON" -P -c 'import os, site, sys; sys.argv[0]='"'"'hermes'"'"'; site.addsitedir(os.environ['"'"'HERMES_SITE'"'"']); from hermes_cli.main import main; sys.exit(main())' "§@"
+        """.trimIndent().replace('§', '$') + "\n"
+    }
+
+    @Test
+    fun scriptsRunInsidePackagedLaunchers() {
+        val september6 = { minor: String ->
+            currentLauncher(minor).replace("export HERMES_SITE=\"§SITE\"\n".replace('§', '$'), "")
+                .replace(Regex("exec .*")) { "exec \"§PYTHON\" -P -c 'import sys; sys.argv[0]='\"'\"'hermes'\"'\"'; from hermes_cli.main import main; sys.exit(main())' \"§@\"".replace('§', '$') }
+        }
+        val trampoline = { _: String ->
+            """
+            #!/bin/sh
+            PREFIX="§{PREFIX:-/data/data/com.termux/files/usr}"
+            self="§{0}"
+            while [ -L "§self" ]; do
+                tgt="§(readlink "§self")"
+                case "§tgt" in
+                    /*) self="§tgt" ;;
+                    *) self="§(dirname "§self")/§tgt" ;;
+                esac
+            done
+            self_dir="§(cd "§(dirname "§self")" && pwd)"
+            LD_LIBRARY_PATH="§self_dir/../python§PREFIX/lib:§PREFIX/lib" \
+            export LD_LIBRARY_PATH
+            PYTHONPATH="§self_dir/../app" \
+            exec "§self_dir/../venv/bin/python" -m hermes_cli.main "§@"
+            """.trimIndent().replace('§', '$') + "\n"
+        }
+        for ((name, launcher) in listOf("current" to currentLauncher, "september6" to september6, "trampoline" to trampoline)) {
+            val (_, path) = payloadInstall(launcher)
+            val home = kotlin.io.path.createTempDirectory("hermes-home8").toFile()
+            val pth = if (name == "current") "import pthmod\n" else ""  // 只有 09-11 起的启动器处理 .pth（HERMES_SITE）
+            val script = "import sys, hermes_cli\n${pth}print('RAN', hermes_cli.MARK, sys.argv[1:], sys.stdin.read())"
+            // Termux 发的命令开头带 set -eu（TermuxRuntimeBackend.Header）
+            val command = "set -eu\n" + HermesAdmin.runtimePython(home.path, script, listOf("a b", "c'd"))
+            val pb = ProcessBuilder("bash", "-c", command).redirectErrorStream(true)
+            pb.environment()["PATH"] = path
+            pb.environment()["TMPDIR"] = home.path
+            val p = pb.start()
+            p.outputStream.use { it.write("{\"action\":\"inspect\"}".toByteArray()) }
+            val out = p.inputStream.readBytes().toString(Charsets.UTF_8)
+            assertEquals(0, p.waitFor(), "$name: $out")
+            assertTrue("RAN bundled ['a b', \"c'd\"] {\"action\":\"inspect\"}" in out, "$name: $out")
+            assertTrue(home.listFiles()!!.none { it.name.startsWith("hermes-mobile.") }, "$name: 临时脚本读完就删")
+        }
+    }
+
+    /** 自带 Python 坏了（启动器自己报错退出）时如实失败，不退回系统 python3 假装能跑。 */
+    @Test
+    fun brokenPackagedInterpreterIsReportedNotReplaced() {
+        val (prefix, path) = payloadInstall(currentLauncher)
+        java.io.File(prefix, "lib/hermes-agent/venv/bin/python").delete()
+        val home = kotlin.io.path.createTempDirectory("hermes-home9").toFile()
+        val pb = ProcessBuilder("bash", "-c", "set -eu\n" + HermesAdmin.runtimePython(home.path, "print('RAN')", emptyList())).redirectErrorStream(true)
+        pb.environment()["PATH"] = path
+        pb.environment()["TMPDIR"] = home.path
+        val p = pb.start()
+        val out = p.inputStream.readBytes().toString(Charsets.UTF_8)
+        assertEquals(2, p.waitFor(), out)
+        assertTrue("Bundled interpreter missing" in out && "RAN" !in out, out)
+        assertTrue(home.listFiles()!!.none { it.name.startsWith("hermes-mobile.") }, "失败时也删掉临时脚本")
+    }
 }

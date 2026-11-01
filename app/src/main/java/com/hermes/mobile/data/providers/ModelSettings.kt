@@ -127,7 +127,7 @@ class ModelSettingsManager(
         catch (e: Exception) {
             // 服务商错误可带凭据；仅显示我们自己产生的可预期说明，禁止回显原始回包或异常。
             val known = e.message.orEmpty()
-            mutable.update { it.copy(failed = true, message = if (known in SafeErrors) known else "模型设置未完成，请检查连接、授权和 Hermes 版本后重试。") }
+            mutable.update { it.copy(failed = true, message = if (isSafeError(known)) known else "模型设置未完成，请检查连接、授权和 Hermes 版本后重试。") }
         } finally { mutable.update { it.copy(busy = false) }; mutex.unlock() }
     }
 
@@ -139,5 +139,10 @@ class ModelSettingsManager(
             "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。", "请先在设置中为该连接配置 SSH，并连接成功后重试。",
             "模型设置未完成：请检查模型、密钥和端点，修改前的配置备份已保留。", "请先安装 Hermes，再配置模型提供方。",
             "请先完成 Termux 执行授权", "模型配置文件无法读取，请先修复，已有配置未覆盖。")
+        private val MissingModule = Regex("（缺少：[A-Za-z0-9_.]{1,100}）")
+
+        /** 已知说明原样显示；缺依赖的那条允许带上 Python 模块名（只有模块名，不含路径和回包）。 */
+        internal fun isSafeError(message: String): Boolean = message in SafeErrors ||
+            SafeErrors.any { message.startsWith(it) && MissingModule.matches(message.removePrefix(it)) }
     }
 }

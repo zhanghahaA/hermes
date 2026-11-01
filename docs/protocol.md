@@ -367,6 +367,12 @@ API 的会话列表里没有项目信息。Hermes 桌面版的分组来自两处
 新的源码安装里 `hermes` 启动器是“自带的 Python + `-I` + 引导代码（`hermes_bootstrap`）”，直接用那个 Python 是 import 不到 Hermes 的。
 App 先跑 `hermes --print-runtime-command`，拿到 Hermes 启动自己的那条命令（`[python, "-I", "-c", 引导代码]`），把引导代码最后的
 `runpy.run_module("hermes_cli.main")` 换成运行 App 的脚本；旧的安装方式（venv / pip）没有这个参数，就顺着启动脚本找 venv 里的 Python。
+打包安装（Termux 的 `hermes-agent` 软件包、桌面版自带的运行环境）也不认这个参数：`$PREFIX/bin/hermes` 链到 `lib/hermes-agent/bin/hermes`，
+是一个 sh 启动器，先设好自带 Python 要的 `LD_LIBRARY_PATH`、`PYTHONPATH`、`HERMES_SITE`，最后一行 `exec "<自带 Python>" [-P] (-c '…' | -m 模块) "$@"`
+（三代写法见 hermes-agent 的 `scripts/build/launchers.py`、更早的 `scripts/bundles/payload.py`、`scripts/termux/build_deb.sh`）。
+App 照原样执行这个启动器（`sh -c 脚本 启动器路径 参数…`，`$0` 是启动器自己），只把最后那行换成运行 App 的脚本，并照它的引导代码把 `HERMES_SITE` 加进 site 目录；
+认不出这一行才退回找 Python。以前退回到系统 `python3`，导入 `hermes_cli` 失败，模型设置页显示“当前 Hermes 缺少模型配置接口或其依赖”。
+Termux 的命令开头有 `set -e`，这几步的失败都要用 `|| HM_CODE=$?` 接住，否则表示“换个办法”的退出码 70 会直接结束整个命令。
 脚本先写进临时文件，读完就删，stdin/stdout 留给脚本。
 
 **删除 / 重命名项目**：`hermes_cli.projects_db.delete_project` / `update_project`（桌面版的 `projects.delete` / `projects.update` 调的也是它们）。

@@ -61,6 +61,8 @@ class ProviderFilesTest(unittest.TestCase):
             payload = json.loads(result.stdout.removeprefix("HMMODELS"))
             self.assertFalse(payload["ok"])
             self.assertEqual("不支持浏览器授权" in payload["error"], action == "login")
+            # 系统 Python 里没有 Hermes：报错带上缺的模块名，方便判断是不是没找到 Hermes 自带的 Python。
+            self.assertTrue(payload["error"].endswith("（缺少：hermes_cli）"), payload["error"])
             self.assertEqual(result.stderr, "")
 
     def test_private_receipts_are_atomic_and_not_world_readable(self):

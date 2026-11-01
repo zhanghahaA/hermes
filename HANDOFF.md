@@ -13,6 +13,18 @@
   现在从提交前已知的最新 seq 补发，第一次接上缺了也不提示。细节见 protocol.md gateway「事件」。`FakeGateway.since` 改成照真 gateway 判断缺失（`replayKept`）。
 - **只在测试里验证过**（FakeGateway + 真 SSH），没在用户手机 / 真 Hermes 上跑过。
 
+## 0.14.4：手机上的 Hermes 模型设置页报“缺少模型配置接口或其依赖”
+
+- **用户截图**：「模型与提供方 · 当前连接：这台手机」，选择提供方的按钮是灰的，下面红字「当前 Hermes 缺少模型配置接口或其依赖……」。这是 `providers/settings.py` 里 `ImportError` 的说明。
+- **原因（照 Hermes 源码推的，没在真机上复现）**：Termux 的 `hermes-agent` 软件包里 `hermes` 是 sh 启动器（`lib/hermes-agent/bin/hermes`，最后 `exec "$PYTHON" -P -c …`），
+  不认 `--print-runtime-command`，`FindHermesPython` 也认不出它，于是退回 Termux 的系统 `python3`，那里没有 `hermes_cli`。
+  所有经 `runtimePython` 跑的脚本在 Termux 上都是这样（模型设置、Inspect 判断“模型已配置”也是）。
+- **改法**：`HermesAdmin.runtimePython` 在 `--print-runtime-command` 之后、找 Python 之前，执行打包启动器、只把最后的 exec 换成运行我们的脚本（`PayloadLauncher` / `PayloadLoader`）；
+  三代启动器写法都认。顺手修了 `set -e` 下退出码 70 接不住的问题。`ImportError` 的说明后面带上缺的模块名（如「（缺少：hermes_cli）」），App 只放行这种格式。
+- **验证**：`HermesAdminTest.scriptsRunInsidePackagedLaunchers`（三代启动器各造一个假安装，系统 Python 里没有 `hermes_cli`，带 `set -eu`，参数和 stdin 原样到达，临时脚本删掉）、
+  `brokenPackagedInterpreterIsReportedNotReplaced`（自带 Python 不见了如实报错，不退回系统 Python）、`ModelSettingsTest`、`tools/runtime-tests/test_providers.py`。
+  **没在真机 Termux 上跑过**，等用户装新包后确认模型设置页能读出提供方。
+
 ## 0.14.4：自建 bot 的 Bot Chat 发不出去——真正原因（有用户数据）
 
 - **用户数据**（只读检查脚本的输出，用户 Hermes `v0.22.5+2582 eaf03cb`，10-28）：自建 bot `u5c0f-u84dd`（小蓝）的 Bot Chat 是
@@ -312,7 +324,8 @@
 ### 经 SSH 跑 Hermes 自己的 Python（重要）
 
 `HermesAdmin.hermesPython(dir, script, args)` 生成一条 shell 命令：把脚本写进临时文件，用 `hermes --print-runtime-command` 拿到
-新式安装启动自己的那条命令，把最后的 `runpy.run_module(...)` 换成运行我们的脚本；旧式安装（venv / pip）退回去找 Python。
+新式安装启动自己的那条命令，把最后的 `runpy.run_module(...)` 换成运行我们的脚本；打包安装（Termux 软件包）执行它的 sh 启动器、只换最后一行 exec；
+旧式安装（venv / pip）退回去找 Python。细节见 protocol.md。
 所有要 import Hermes 代码的功能都用它。写新脚本时注意：
 
 - 脚本放在 Kotlin 的 `"""` 原始字符串里：**不能出现 `$` 和 `"""`**。
