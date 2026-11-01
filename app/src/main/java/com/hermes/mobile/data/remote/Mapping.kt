@@ -244,7 +244,7 @@ internal fun deliverLabel(deliver: String): String = deliver.split(',').joinToSt
 /** 列表预览去掉 Hermes 给模型的提示（定时任务的 [IMPORTANT: …] 很长，预览里常常只有半截）。 */
 internal fun cleanPreview(preview: String?): String {
     val text = SystemNotes.strip(preview.orEmpty()).replace('\n', ' ').trim()
-    return if (text.startsWith("[IMPORTANT") || text.startsWith("[System")) "" else text
+    return if (listOf("[IMPORTANT", "[System", "[INTERNAL NOTIFICATION", "[Background process").any(text::startsWith)) "" else text
 }
 
 /**

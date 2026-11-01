@@ -130,6 +130,50 @@ class GatewayFlowTest {
         assertTrue(methods().any { it == "session.events.since" || it == "prompt.receipt" }, "补发或查结果：${methods()}")
     }
 
+    private fun List<ChatItem>.lostNotices() =
+        filterIsInstance<ChatItem.Activity>().flatMap { it.steps }.filter { it.kind == WorkStep.Kind.Notice && it.title == "部分过程无法恢复" }
+
+    /**
+     * 用户反馈：没断线也老提示“断线时间过长，服务器已清理部分事件”。gateway 每个会话只留最近的事件，
+     * 以前每一轮都从 seq 0 要补发，对话长了以后每一轮都被回 truncated。新的一轮要从提交前的位置补发。
+     */
+    @Test fun aLongConversationWithoutDisconnectingShowsNoLostEventsNotice() {
+        gateway.replayKept = 10 // 一轮默认 7 个事件：第二轮开始，seq 0 之后的事件就已经挤出去了
+        val repo = connected(sshd())
+        repo.updateSettings { it.copy(showWorkProcess = true) }
+        for (text in listOf("第一轮", "第二轮", "第三轮")) {
+            repo.sendMessage("s1", text, emptyList())
+            val done = repo.chatItems("s1").await("$text 的回复") { list ->
+                list.replies().any { it == "最终回复：$text" } && list.filterIsInstance<ChatItem.Activity>().none { it.status == ActivityStatus.Working }
+            }
+            assertEquals(emptyList(), done.lostNotices(), "$text：没有断线，不该提示部分过程无法恢复")
+        }
+        val since = gateway.requests.filter { it["method"]?.jsonPrimitive?.content == "session.events.since" }
+            .map { it["params"]!!.jsonObject["last_sequence"]!!.jsonPrimitive.content.toLong() }
+        assertTrue(since.drop(1).all { it > 0 }, "第二轮起从提交前的位置补发，不再从 0：$since")
+    }
+
+    /** 真的断线、续接时 gateway 说中间的事件已经清掉了：照样提示，回复照样出来。 */
+    @Test fun eventsLostWhileReallyDisconnectedAreStillReported() {
+        var ssh = sshd()
+        val repo = connected(ssh)
+        repo.updateSettings { it.copy(showWorkProcess = true) }
+        repo.sendMessage("s1", "慢慢来", emptyList())
+        repo.chatItems("s1").await("收到开头") { list -> list.filterIsInstance<ChatItem.Activity>().isNotEmpty() }
+        val s1 = gateway.sessions.getValue("s1")
+        runBlocking { withTimeout(10_000) { while (!s1.busy) kotlinx.coroutines.delay(20) } }
+        Thread.sleep(300) // 等开头的事件都送到手机
+
+        val port = ssh.port
+        ssh.stop()
+        gateway.replayKept = -1 // 当作断线期间缓存被挤满：手机收到过的位置之后的事件都补不回来了
+        ssh = sshd(TestSshServer(authorizedKey = keys.publicKey, hostKeyFile = ssh.hostKeyFile, port = port))
+        repo.onNetworkAvailable()
+        repo.chatItems("s1").await("续接时提示部分过程无法恢复", timeoutMillis = 30_000) { it.lostNotices().isNotEmpty() }
+        s1.released = true
+        repo.chatItems("s1").await("回复照样出来", timeoutMillis = 30_000) { list -> list.replies().any { it == "最终回复：慢慢来" } }
+    }
+
     @Test fun steerAndStopUseTheCurrentGeneration() {
         val repo = connected(sshd())
         repo.updateSettings { it.copy(showWorkProcess = true) }

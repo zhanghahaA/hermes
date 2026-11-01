@@ -57,6 +57,14 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
      */
     private val owners = ConcurrentHashMap<String, String>()
     private val epochs = ConcurrentHashMap<String, String>()
+    /**
+     * 会话 → 已知的最新事件 seq（快照的 `last_sequence`、收到过的事件）。新的一轮从这里开始补发：
+     * gateway 每个会话只留最近 512 个事件（tui_gateway/event_replay.py，流式回复一小段就是一个），
+     * 从 0 补发在长对话里几乎总是回 truncated，手机明明没断线也会提示“部分过程无法恢复”。
+     */
+    private val cursors = ConcurrentHashMap<String, Long>()
+    /** runId → 提交这一轮之前的 [cursors]（之后订阅时拿到的快照可能已经包含这一轮开头的事件）。 */
+    private val startCursors = ConcurrentHashMap<String, Long>()
     /** 会话 → 最新快照里还没处理的审批 / 追问（API Server 形状）。 */
     private val pendingPrompts = ConcurrentHashMap<String, List<JsonObject>>()
     /** 会话 → 已经告诉 gateway 的推理强度（变了才再改）。 */
@@ -68,7 +76,15 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
         val f = fence(sessionId)
         obj.long("revision")?.let { f.revision = it }
         obj.long("execution_generation")?.let { f.generation = maxOf(f.generation, it) }
-        obj.str("replay_epoch")?.let { epochs[sessionId] = it }
+        val epoch = obj.str("replay_epoch")
+        val sequence = obj.long("last_sequence")
+        if (epoch != null && epoch != epochs[sessionId]) {
+            // 换了 epoch，seq 重新编号：旧游标作废
+            epochs[sessionId] = epoch
+            if (sequence != null) cursors[sessionId] = sequence else cursors.remove(sessionId)
+        } else if (sequence != null) {
+            cursors.merge(sessionId, sequence, ::maxOf)
+        }
         (obj["prompts"] as? JsonArray)?.let { prompts ->
             pendingPrompts[sessionId] = prompts.mapNotNull { (it as? JsonObject)?.let(::promptToApi) }
         }
@@ -336,6 +352,7 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
             mutate(sessionId, "reasoning", buildJsonObject { put("effort", reasoningEffort) }, needsGeneration = true)
             appliedEffort[owner] = reasoningEffort
         }
+        val cursor = cursors[owner]
         val result = obj("prompt.submit", buildJsonObject {
             put("session_id", owner)
             put("text", text)
@@ -350,6 +367,7 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
         }, timeoutMillis = 120_000)
         remember(owner, result)
         val admission = result.str("admission_id") ?: throw HermesError.NotHermes()
+        cursor?.let { startCursors[runIdOf(owner, admission)] = it }
         return RunAcceptedDto(run_id = runIdOf(owner, admission), status = result.str("status"))
     }
 
@@ -492,30 +510,37 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
             if (seq != null) {
                 if (seq <= last) return
                 last = seq
+                if (event.str("replay_epoch").let { it == null || it == epochs[sessionId] }) cursors.merge(sessionId, seq, ::maxOf)
             }
             event.long("execution_generation")?.let { g -> fence(sessionId).let { it.generation = maxOf(it.generation, g) } }
             val translated = translate(event, admission) ?: return
             send(SseEvent(seq, null, translated.toString()))
             if (translated.str("event") in TerminalEvents) done = true
         }
+        // 还没收到过这一轮的事件：从提交前的位置补发（不知道时从 0）
+        val fresh = afterSeq < 0
+        val from = if (fresh) startCursors[runId] ?: 0L else afterSeq
         val replay = try {
             obj("session.events.since", buildJsonObject {
                 put("session_id", sessionId)
-                put("last_sequence", maxOf(0L, afterSeq))
+                put("last_sequence", from)
                 epochs[sessionId]?.let { put("replay_epoch", it) }
             })
         } catch (e: HermesError) {
             JsonObject(emptyMap())
         }
-        if ((replay["snapshot_required"] as? JsonPrimitive)?.booleanOrNull == true || (replay["truncated"] as? JsonPrimitive)?.booleanOrNull == true) {
+        val missing = (replay["snapshot_required"] as? JsonPrimitive)?.booleanOrNull == true || (replay["truncated"] as? JsonPrimitive)?.booleanOrNull == true
+        // 只有收过事件、断线后续接时缺了才提示；第一次接上时缺的是这一轮之前的事件，和用户无关
+        if (missing && !fresh) {
             send(SseEvent(null, null, buildJsonObject { put("event", "replay.truncated") }.toString()))
         }
-        replay.str("replay_epoch")?.let { epochs[sessionId] = it }
+        remember(sessionId, replay)
         for (e in (replay["events"] as? JsonArray).orEmpty()) {
             (e as? JsonObject)?.let { handle(it) }
             if (done) break
         }
         while (!done) handle(live.receive())
+        startCursors.remove(runId)
         close()
     }
 

@@ -30,6 +30,8 @@ class FakeGateway {
     @Volatile var running = true
     /** 每次 session.mutate 进来先调它：用来模拟“Hermes 正好在自己起标题”，把 revision 改掉。 */
     @Volatile var beforeMutate: ((Session) -> Unit)? = null
+    /** 每个会话能补发的最近事件数（真 gateway 是 512 个，tui_gateway/event_replay.py `_REPLAY_BUFFER_MAX`）。 */
+    @Volatile var replayKept = 512L
     /** 暂存图片放在这里（相当于 Hermes 的 cache/images）。 */
     val stagingDir: java.nio.file.Path = java.nio.file.Files.createTempDirectory("gateway-images")
 
@@ -154,13 +156,18 @@ class FakeGateway {
                 }
                 "session.events.since" -> {
                     val s = session(p)
-                    val epoch = p.str("replay_epoch")
-                    if (epoch != null && epoch != s.epoch) return buildJsonObject { put("events", JsonArray(emptyList())); put("snapshot_required", true) }
                     val after = p["last_sequence"]?.jsonPrimitive?.long ?: 0
+                    val latest = s.events.size.toLong()
+                    // 照 gateway/session_events.py 的 since：epoch 不对（没带也算）、游标比最新的还大、
+                    // 游标之后的事件已经挤出了缓存（event_replay.is_truncated），都回空的 events 和 truncated
+                    val missing = p.str("replay_epoch") != s.epoch || after > latest || after < latest - replayKept
                     buildJsonObject {
-                        put("events", JsonArray(s.events.filter { it["seq"]!!.jsonPrimitive.long > after }))
+                        put("events", if (missing) JsonArray(emptyList()) else JsonArray(s.events.filter { it["seq"]!!.jsonPrimitive.long > after }))
                         put("replay_epoch", s.epoch)
-                        put("last_sequence", s.events.size.toLong())
+                        put("latest_seq", latest)
+                        put("last_sequence", latest)
+                        put("truncated", missing)
+                        put("snapshot_required", missing)
                     }
                 }
                 "session.mutate" -> mutate(p)
