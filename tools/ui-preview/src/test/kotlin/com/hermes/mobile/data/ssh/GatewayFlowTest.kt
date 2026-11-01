@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -236,6 +238,44 @@ class GatewayFlowTest {
         assertTrue(runBlocking { repo.session("old").first() }!!.storedHistory, "刷新后不能忘了")
         // 其它会话不受影响
         assertTrue(!runBlocking { repo.session("s1").first() }!!.readOnly)
+    }
+
+    /**
+     * 用户手机上真正出的问题：电脑上能接着聊的长对话（压缩过），手机上发消息回 `session_read_only`。
+     * 列表里是压缩后那一段的 id，gateway 打开时换成会话本身的 id；App 以前还拿列表里的 id 去发。
+     * 现在发消息、改会话、停止都用换过的 id，对话照常接着聊，也不会被标成只读。
+     */
+    @Test fun aCompressedConversationIsContinuedUnderTheIdTheGatewayResumesItAs() {
+        val bot = gateway.Session("local-botchat", "Bot Chat", "local").apply {
+            listedAs = "20261031_233700_tip"
+            messages += gateway.message("user", "要不要装上")
+            messages += gateway.message("assistant", "说一声就动手。", finish = "stop")
+        }
+        gateway.sessions[bot.id] = bot
+        val repo = connected(sshd())
+        repo.refreshSessionsBlocking()
+        val listed = "20261031_233700_tip"
+        assertTrue(repo.sessions.value.any { it.id == listed }, "列表里是压缩后那一段的 id")
+        repo.chatItems(listed).await("能看记录") { list -> list.replies().any { it == "说一声就动手。" } }
+
+        repo.sendMessage(listed, "装上吧", emptyList())
+        repo.chatItems(listed).await("接着聊，收到回复") { list -> list.replies().any { it == "最终回复：装上吧" } }
+        assertTrue(!runBlocking { repo.session(listed).first() }!!.readOnly, "不能被标成只读")
+        val submit = gateway.requests.last { it["method"]?.toString() == "\"prompt.submit\"" }["params"]!!.jsonObject
+        assertEquals("local-botchat", submit["session_id"]!!.jsonPrimitive.content, "发到 gateway 换出来的那个 id")
+
+        repo.togglePin(listed)
+        runBlocking { withTimeout(10_000) { while (!bot.pinned) kotlinx.coroutines.delay(20) } }
+
+        repo.updateSettings { it.copy(showWorkProcess = true) }
+        repo.sendMessage(listed, "慢慢说", emptyList())
+        repo.streamingText(listed).await("开始出字") { it == "正在" }
+        repo.stop(listed)
+        repo.runPhase(listed).await("停下") { it == RunPhase.Idle }
+        runBlocking { withTimeout(10_000) { while (methods().none { it == "session.interrupt" }) kotlinx.coroutines.delay(20) } }
+        val interrupt = gateway.requests.last { it["method"]?.toString() == "\"session.interrupt\"" }["params"]!!.jsonObject
+        assertEquals("local-botchat", interrupt["session_id"]!!.jsonPrimitive.content, "停止也发到换过的 id")
+        assertTrue(runBlocking { repo.chatItems(listed).first() }.filterIsInstance<ChatItem.Message>().none { it.status == com.hermes.mobile.data.model.DeliveryStatus.Failed }, "没有发送失败的消息")
     }
 
     private fun RemoteHermesRepository.refreshSessionsBlocking() = runBlocking { refreshSessions() }

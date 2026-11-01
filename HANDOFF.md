@@ -12,6 +12,19 @@
 - **自动发布**：`.github/workflows/release.yml`，推 `v*` 标签时用 Secret 里的签名打包，核对证书指纹（不对就不发），用 `docs/releases/<标签>.md` 加 SHA-256 建 Release、附 APK。
   之前的会话没有建 Release 的权限，现在推标签就行。发版步骤：改版本号 → 写 `docs/releases/v<版本>.md` → 推 main → 推标签。
 
+## 0.14.2：压缩过的长对话在手机上发不出去（`session_read_only`）——真正原因
+
+- **现象**：同一个对话（用户的 bot 对话）电脑上能接着聊，手机上发消息回 `session_read_only`。
+- **原因（App 的 bug）**：桥读会话列表用的 `list_sessions_rich` 默认 `project_compression_tips=True`，压缩过的长对话列出来的 id 是**压缩后最后一段**。
+  gateway 的 `session.resume` 会把它换成这段对话真正的归属（`gateway/session_controls.py`：电脑 / TUI 的换成 `local-…` 主 id，
+  聊天平台的换成压缩链最早那一段），回包的 `session_id` 就是换过的；电脑版之后都用这个 id。App 以前只订阅了换过的 id，
+  发消息、改会话还用列表里那段 id，gateway 授权时这一段既不是本地会话也挂不上聊天平台的路由，就按“没有归属的存档”只读挂上（`session_history_mount.py`），回 `session_read_only`。
+- **修复**：`GatewayHermesApi.owners` 记住列表 id → resume 换出来的 id，`prompt.submit`、`image.attach_bytes`、`session.mutate`、停止 / 插话、回答审批 / 追问、查结果、补发事件都用换过的 id；
+  run id 里也是换过的 id，事件按两个 id 都认。
+- **验证**：`GatewayFlowTest.aCompressedConversationIsContinuedUnderTheIdTheGatewayResumesItAs`（`FakeGateway.Session.listedAs` 模拟压缩后列表 id；修之前失败：消息发送失败；修之后接着聊、置顶、停止都发到换过的 id），连跑 3 次通过；
+  全量 310 项 0 失败。**没在真实 Hermes 上造压缩对话验证**（集成环境的 Hermes 太旧、要搭环境），也没在用户手机上验证。
+- 下面那条“存档的旧对话”的处理仍然保留（真正没有归属的存档还是只读），但用户这次遇到的不是那种。
+
 ## 0.14.2：Hermes 存档的旧对话（`session_read_only`）
 
 - **现象**（用户截图，SSH 连接、默认 bot）：打开一个旧对话发消息，弹“发送失败：Hermes gateway：session_read_only”，点重试也一样。

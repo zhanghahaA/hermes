@@ -49,6 +49,13 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
     private val fences = ConcurrentHashMap<String, Fence>()
     /** 会话 → 在第几条连接上订阅过。 */
     private val attached = ConcurrentHashMap<String, Int>()
+    /**
+     * 列表里的会话 id → `session.resume` 换成的那个（之后发消息、改会话都要用它）。
+     * 列表（state.db）给的是压缩后最新那一段的 id；gateway 打开时换成这段对话真正的归属：
+     * 电脑 / TUI 的对话换成它的 `local-…` 主 id，聊天平台（Telegram、微信……）的换成最早那一段。
+     * 拿原来那段 id 去发，gateway 会把它当成没有归属的存档、回 `session_read_only`（电脑版用的是换过的 id，所以能聊）。
+     */
+    private val owners = ConcurrentHashMap<String, String>()
     private val epochs = ConcurrentHashMap<String, String>()
     /** 会话 → 最新快照里还没处理的审批 / 追问（API Server 形状）。 */
     private val pendingPrompts = ConcurrentHashMap<String, List<JsonObject>>()
@@ -117,16 +124,26 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
         }, timeoutMillis = 90_000)
         remember(sessionId, snapshot)
         attached[sessionId] = link.generation.value
-        snapshot.str("session_id")?.takeIf { it != sessionId }?.let { attached[it] = link.generation.value; remember(it, snapshot) }
+        snapshot.str("session_id")?.takeIf { it != sessionId }?.let {
+            owners[sessionId] = it
+            attached[it] = link.generation.value
+            remember(it, snapshot)
+        }
         return snapshot
+    }
+
+    /** 发给 gateway 的会话 id：先订阅，用 `session.resume` 换出来的那个（见 [owners]）。 */
+    private suspend fun target(sessionId: String): String {
+        attach(sessionId)
+        return owners[sessionId] ?: sessionId
     }
 
     /**
      * 改会话：带上最新的 revision（[needsGeneration] 时还有 generation）。gateway 说值旧了会把新的带回来，照着重试
      * （Hermes 刚回完一轮时会自己起标题，也会让 revision 变，所以多试几次）。
      */
-    private suspend fun mutate(sessionId: String, operation: String, payload: JsonObject, needsGeneration: Boolean = false): JsonObject {
-        attach(sessionId)
+    private suspend fun mutate(listedId: String, operation: String, payload: JsonObject, needsGeneration: Boolean = false): JsonObject {
+        val sessionId = target(listedId)
         val f = fence(sessionId)
         return f.edits.withLock { mutateInOrder(sessionId, f, operation, payload, needsGeneration) }
     }
@@ -228,6 +245,7 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
 
     override suspend fun deleteSession(id: String) {
         mutate(id, "delete", JsonObject(emptyMap()), needsGeneration = true)
+        owners.remove(id)?.let { attached.remove(it); fences.remove(it) }
         attached.remove(id)
         fences.remove(id)
     }
@@ -270,12 +288,12 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
         workspace: String?,
         reasoningEffort: String?,
     ): RunAcceptedDto {
-        attach(sessionId)
+        val owner = target(sessionId)
         val (text, images) = splitInput(input)
         // 图片先交给 gateway 放进它自己的暂存目录，再按路径附上（gateway 只认那里的文件）
         val attachments = images.map { (mime, bytes) ->
             val staged = obj("image.attach_bytes", buildJsonObject {
-                put("session_id", sessionId)
+                put("session_id", owner)
                 put("content_base64", Base64.getEncoder().encodeToString(bytes))
                 put("filename", "image." + (mime.substringAfter('/').replace("jpeg", "jpg")))
             }, timeoutMillis = 120_000)
@@ -284,12 +302,12 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
                 put("mime", staged.str("mime") ?: mime)
             }
         }
-        if (reasoningEffort != null && appliedEffort[sessionId] != reasoningEffort) {
+        if (reasoningEffort != null && appliedEffort[owner] != reasoningEffort) {
             mutate(sessionId, "reasoning", buildJsonObject { put("effort", reasoningEffort) }, needsGeneration = true)
-            appliedEffort[sessionId] = reasoningEffort
+            appliedEffort[owner] = reasoningEffort
         }
         val result = obj("prompt.submit", buildJsonObject {
-            put("session_id", sessionId)
+            put("session_id", owner)
             put("text", text)
             put("submission_id", idempotencyKey)
             // 给模型看的补充说明（App 的格式要求、项目文件夹……）只放进这一轮给模型的文字，聊天记录里还是用户原话
@@ -300,9 +318,9 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
             })
             if (attachments.isNotEmpty()) put("attachments", JsonArray(attachments))
         }, timeoutMillis = 120_000)
-        remember(sessionId, result)
+        remember(owner, result)
         val admission = result.str("admission_id") ?: throw HermesError.NotHermes()
-        return RunAcceptedDto(run_id = runIdOf(sessionId, admission), status = result.str("status"))
+        return RunAcceptedDto(run_id = runIdOf(owner, admission), status = result.str("status"))
     }
 
     /** API Server 形状的输入（文字，或带图片的多段内容）→ 文字 + 图片（mime, 字节）。 */
@@ -333,8 +351,8 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
     }
 
     override suspend fun runStatus(runId: String): RunStatusDto {
-        val (sessionId, admission) = splitRun(runId)
-        attach(sessionId)
+        val (listed, admission) = splitRun(runId)
+        val sessionId = target(listed)
         val receipt = obj("prompt.receipt", buildJsonObject {
             put("session_id", sessionId)
             put("admission_id", admission)
@@ -369,8 +387,7 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
         (body["execution_generation"] as? JsonPrimitive)?.longOrNull ?: fence(sessionId).generation
 
     override suspend fun respondApproval(runId: String, body: JsonObject) {
-        val (sessionId, _) = splitRun(runId)
-        attach(sessionId)
+        val sessionId = target(splitRun(runId).first)
         obj("approval.respond", buildJsonObject {
             put("session_id", sessionId)
             put("execution_generation", generationOf(body, sessionId))
@@ -380,8 +397,7 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
     }
 
     override suspend fun respondClarify(runId: String, body: JsonObject) {
-        val (sessionId, _) = splitRun(runId)
-        attach(sessionId)
+        val sessionId = target(splitRun(runId).first)
         obj("clarify.respond", buildJsonObject {
             put("session_id", sessionId)
             put("execution_generation", generationOf(body, sessionId))
@@ -391,8 +407,8 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
     }
 
     /** 停止 / 插话要带当前这一轮的 generation；旧了 gateway 会带回新的，照着重试一次。 */
-    private suspend fun control(method: String, sessionId: String, extra: JsonObject = JsonObject(emptyMap())): JsonObject {
-        attach(sessionId)
+    private suspend fun control(method: String, listedId: String, extra: JsonObject = JsonObject(emptyMap())): JsonObject {
+        val sessionId = target(listedId)
         repeat(2) { attempt ->
             try {
                 return link.call(method, JsonObject(extra + mapOf(
@@ -420,14 +436,17 @@ class GatewayHermesApi(private val link: GatewayChannel) : HermesApi {
     }
 
     override fun runEvents(runId: String, afterSeq: Long): Flow<SseEvent> = channelFlow {
-        val (sessionId, admission) = splitRun(runId)
+        val (listed, admission) = splitRun(runId)
         val live = Channel<JsonObject>(Channel.UNLIMITED)
-        // 先开始收，再补发：中间来的事件不会漏（按 seq 去重）
+        // 先开始收，再补发：中间来的事件不会漏（按 seq 去重）。事件带的是换过的会话 id（见 owners），订阅前可能还不知道
         launch(start = CoroutineStart.UNDISPATCHED) {
-            link.events.collect { if (it.str("session_id") == sessionId) live.send(it) }
+            link.events.collect { e ->
+                val id = e.str("session_id")
+                if (id == listed || id == owners[listed]) live.send(e)
+            }
         }
-        try {
-            attach(sessionId)
+        val sessionId = try {
+            target(listed)
         } catch (e: HermesError) {
             close(e)
             return@channelFlow

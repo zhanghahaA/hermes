@@ -55,6 +55,12 @@ class FakeGateway {
          * 只有删除、归档、置顶可以（gateway/session_history_mount.py、session_mutations.py）。
          */
         @Volatile var storedHistory = false
+        /**
+         * 压缩过的长对话：state.db 的列表给的是最新那一段的 id（list_sessions_rich 投影到压缩末端），不是这个会话本身的 id。
+         * `session.resume` 拿这个 id 时换成会话本身的 id（回包的 session_id）；直接拿它发消息、改会话，
+         * 真 gateway 会把这一段当成没有归属的存档只读挂上，回 `session_read_only`（gateway/session_controls.py、session_history_mount.py）。
+         */
+        @Volatile var listedAs: String? = null
     }
 
     val sessions = ConcurrentHashMap<String, Session>()
@@ -101,7 +107,8 @@ class FakeGateway {
                     snapshot(s, withMessages = false)
                 }
                 "session.resume" -> {
-                    val s = session(p)
+                    val asked = p.str("session_id")
+                    val s = sessions[asked] ?: sessions.values.firstOrNull { it.listedAs == asked } ?: throw Refusal("not_found")
                     subscriptions += s.id
                     snapshot(s, withMessages = p["omit_messages"]?.jsonPrimitive?.booleanOrNull != true)
                 }
@@ -223,7 +230,12 @@ class FakeGateway {
 
     private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull
 
-    private fun session(p: JsonObject) = sessions[p.str("session_id")] ?: throw Refusal("not_found")
+    private fun session(p: JsonObject): Session {
+        val id = p.str("session_id")
+        sessions[id]?.let { return it }
+        if (sessions.values.any { it.listedAs == id }) throw Refusal("session_read_only")
+        throw Refusal("not_found")
+    }
 
     private fun checkGeneration(s: Session, p: JsonObject) {
         val given = p["execution_generation"]?.jsonPrimitive?.longOrNull
@@ -340,7 +352,10 @@ class FakeGateway {
         "sessions" -> buildJsonObject {
             put("data", JsonArray(sessions.values.filter { !it.archived }.sortedByDescending { it.started }.map { row(it) }))
         }
-        "session" -> buildJsonObject { put("session", sessions[p.str("session_id")]?.let(::row) ?: JsonNull) }
+        "session" -> buildJsonObject {
+            val id = p.str("session_id")
+            put("session", (sessions[id] ?: sessions.values.firstOrNull { it.listedAs == id })?.let(::row) ?: JsonNull)
+        }
         "skills" -> HermesJson.parseToJsonElement("""{"data":[{"name":"github-pr-review","description":"审 PR","category":"开发"}]}""")
         "toolsets" -> HermesJson.parseToJsonElement("""{"data":[{"name":"web","label":"Web","description":"web_search","enabled":true,"configured":true,"tools":["web_search"]}]}""")
         "jobs" -> HermesJson.parseToJsonElement("""{"jobs":[]}""")
@@ -348,7 +363,7 @@ class FakeGateway {
     }
 
     private fun row(s: Session) = buildJsonObject {
-        put("id", s.id); put("source", s.source); put("title", s.title)
+        put("id", s.listedAs ?: s.id); put("source", s.source); put("title", s.title)
         put("started_at", s.started); put("last_active", s.started); put("message_count", s.messages.size)
         put("preview", s.messages.firstOrNull { it.str("role") == "user" }?.str("content")?.take(60))
         put("pinned", s.pinned); put("archived", s.archived); put("hidden", false)

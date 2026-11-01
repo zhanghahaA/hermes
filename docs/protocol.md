@@ -290,6 +290,9 @@ API Server 只允许继续来源是 `api_server` / `bot_room` 的会话，这是
 
 坑：
 - **标题不能重复**：改成已有的标题时 gateway 只回一个笼统的 `request_failed`，App 提示“可能已经有对话叫「…」了（Hermes 要求标题不重复）”。
+- **压缩过的对话要用 `session.resume` 换出来的 id**：会话列表（`list_sessions_rich`）把压缩过的对话投影成最后一段的 id；
+  `session.resume` 回包的 `session_id` 是它真正的归属（本地会话的 `local-…`、聊天平台的压缩链最早那段）。之后发消息、改会话都要用这个 id，
+  拿列表里那段去发会被当成存档只读（`session_read_only`）。`GatewayHermesApi.owners` 记着这个对应关系。
 - **存档的旧对话只读**（上游 2026-10-23 起，`gateway/session_history_mount.py`）：没有归属的已存会话（没有 API 绑定的旧 API 会话、网页版 / 导入的、子代理、旧定时任务记录）
   `session.resume` 能读，`prompt.submit`、`session.mutate` 的 branch / model 等回 `session_read_only`，只有 delete / archive / sidebar 可以。会话列表里看不出来，只能发了才知道；
   App 把它标成只读（`Session.storedHistory`），提供“新建对话”而不是分叉。电脑版也是让用户新开对话。
