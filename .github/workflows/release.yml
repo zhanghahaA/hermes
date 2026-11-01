@@ -1,0 +1,74 @@
+name: Release
+
+# 推 v* 标签时：用仓库 Secret 里的签名打包，核对证书指纹，建 GitHub Release 并附上 APK。
+# 说明文字取自 docs/releases/<标签>.md，没有这个文件就不发布。
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 签名打包并发布
+    runs-on: ubuntu-latest
+    env:
+      # 0.14.2 起的发布签名（证书 SHA-256，不是秘密）。换签名时同时改这里和 HANDOFF.md。
+      EXPECTED_CERT_SHA256: 83f0e60956a14bbe8d227f880899965bea1330c0f3fd382ce4439e16a63fa799
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 检查版本号和发布说明
+        run: |
+          version="${TAG#v}"
+          grep -q "versionName = \"$version\"" app/build.gradle.kts || { echo "app/build.gradle.kts 的 versionName 不是 $version"; exit 1; }
+          test -s "docs/releases/$TAG.md" || { echo "缺少 docs/releases/$TAG.md"; exit 1; }
+
+      - name: 取出签名
+        env:
+          KEYSTORE_B64: ${{ secrets.HERMES_SIGNING_KEYSTORE_B64 }}
+        run: |
+          test -n "$KEYSTORE_B64" || { echo "仓库 Secret HERMES_SIGNING_KEYSTORE_B64 没有设置"; exit 1; }
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/signing.keystore"
+
+      - name: 打包
+        run: ./gradlew --no-configuration-cache assembleDebug -PhermesDebugKeystore="$RUNNER_TEMP/signing.keystore"
+
+      - name: 核对签名并整理附件
+        run: |
+          apksigner="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
+          apk="hermes-mobile-${TAG#v}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          actual="$("$apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)"
+          echo "证书 SHA-256：$actual"
+          test "$actual" = "$EXPECTED_CERT_SHA256" || { echo "签名证书和预期的不一致，不发布"; exit 1; }
+          sha256sum "$apk" | tee "$apk.sha256"
+          {
+            cat "docs/releases/$TAG.md"
+            echo
+            echo "## SHA-256"
+            echo
+            echo '```text'
+            cat "$apk.sha256"
+            echo '```'
+            echo
+            echo "Certificate SHA-256: \`$actual\`"
+          } > "$RUNNER_TEMP/notes.md"
+
+      - name: 建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk="hermes-mobile-${TAG#v}.apk"
+          gh release create "$TAG" "$apk" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag
+
+      - name: 清理签名
+        if: always()
+        run: rm -f "$RUNNER_TEMP/signing.keystore"

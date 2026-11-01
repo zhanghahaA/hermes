@@ -3,7 +3,16 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
-## 未发版：Hermes 存档的旧对话（`session_read_only`）
+## 0.14.2：换签名、自动发布
+
+- **签名换了**：用户找不到 `d985fcaf…` 那把私钥（APK 里只有证书，私钥推不出来）。0.14.2 起用新签名，证书 SHA-256
+  `83f0e60956a14bbe8d227f880899965bea1330c0f3fd382ce4439e16a63fa799`（PKCS12，别名 `androiddebugkey`，口令 `android`，和调试签名的约定一样，
+  所以 `-PhermesDebugKeystore=<文件>` 就能用）。签名文件交给了用户保管，并存进仓库 Secret `HERMES_SIGNING_KEYSTORE_B64`（base64）；**不进仓库**。
+  从旧版升到 0.14.2 必须先卸载（App 本地数据会丢，Hermes 上的对话不受影响），说明写在发布说明里。
+- **自动发布**：`.github/workflows/release.yml`，推 `v*` 标签时用 Secret 里的签名打包，核对证书指纹（不对就不发），用 `docs/releases/<标签>.md` 加 SHA-256 建 Release、附 APK。
+  之前的会话没有建 Release 的权限，现在推标签就行。发版步骤：改版本号 → 写 `docs/releases/v<版本>.md` → 推 main → 推标签。
+
+## 0.14.2：Hermes 存档的旧对话（`session_read_only`）
 
 - **现象**（用户截图，SSH 连接、默认 bot）：打开一个旧对话发消息，弹“发送失败：Hermes gateway：session_read_only”，点重试也一样。
 - **原因不在 App**：上游 Hermes 2026-10-23 起（`gateway/session_history_mount.py`，7525ed7cce / 690440524b）把“没有归属”的已存会话只读挂载：
@@ -319,7 +328,8 @@ gradle test                        # 单元 + 界面 + 集成测试（没设 HER
 3. 全部测试通过后提交、推 `main`。提交信息用英文。
 4. GitHub Release：tag `v<版本>`，附上 APK，说明照以前的格式（英文，「New since …」+「Install」+ SHA-256）。之前的会话没有权限推 tag / 建 Release，是用户手动建的；
    如果你有权限就直接 `gh release create`。
-5. APK 使用 debug 签名；覆盖升级必须沿用已安装版本的同一签名，不能仅凭“都是 debug”判断可覆盖。用户已允许后续版本继续使用本轮云环境签名，证书 SHA-256 为 `d985fcaf013e9f9b87f575c776b38af9c560984d07b2a27b17abbaf876db1dc7`，签名文件不进仓库。用户提供的原版 0.10.2 证书为 `7c55603a0c9ec7849a74d3168f3b1e2ec2164bfafd93ac7b7f53d08548c8a773`，与本轮不同，不能直接覆盖它；不要让用户为排查问题直接卸载而丢失数据。
+5. **0.14.2 起**：签名在仓库 Secret 里，推 `v<版本>` 标签由 `.github/workflows/release.yml` 自动打包、核对证书（`83f0e609…a799`）、建 Release，说明取自 `docs/releases/v<版本>.md`。下面是以前的记录。
+   APK 使用 debug 签名；覆盖升级必须沿用已安装版本的同一签名，不能仅凭“都是 debug”判断可覆盖。用户已允许后续版本继续使用本轮云环境签名，证书 SHA-256 为 `d985fcaf013e9f9b87f575c776b38af9c560984d07b2a27b17abbaf876db1dc7`，签名文件不进仓库。用户提供的原版 0.10.2 证书为 `7c55603a0c9ec7849a74d3168f3b1e2ec2164bfafd93ac7b7f53d08548c8a773`，与本轮不同，不能直接覆盖它；不要让用户为排查问题直接卸载而丢失数据。
 
 ## 闪退日志
 
