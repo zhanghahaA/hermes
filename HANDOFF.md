@@ -3,6 +3,19 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 未发版：本机 Hermes 的自定义端点读不出模型（用户反馈，11-01）
+
+- **现象**：在手机上安装本机 Hermes 后，模型设置选「自定义端点」，读不出模型。
+- **原因（App 的 bug）**：「读取可选模型列表」只发了 `{action: models, provider}`，没带页面上填的地址和密钥；`settings.py` 只从 Hermes 已保存的配置里找 `mobile-custom`，
+  新填的端点没保存过，永远是空列表。保存时还写了 `discover_models: false`，保存后也只有手填的那一个模型。另外局域网 http 地址（电脑上跑的 Ollama 等）会被拒。
+- **改法**：`models` 动作对 custom / local 带上地址、密钥、接口格式，桥里调 Hermes 的 `validate_custom_endpoint`（电脑版「测试」按钮，eaf03cb 里有），
+  旧版退回 `probe_api_models`；回包只有分类 + 模型名（`EndpointProbe`）。保存带上读到的清单、`discover_models: true`。http 放开到局域网私有地址（Kotlin `endpointAllowed` 和 Python `endpoint` 一致）。
+  读取结果显示在按钮下面。细节见 docs/model-settings.md「自定义端点」。
+- **验证**：`tools/runtime-tests/test_providers.py`（假 Hermes 模块：用填的地址和密钥、已存密钥只给同一地址、各失败分类、保存带清单）、
+  `ModelSettingsTest`（局域网地址规则、密钥只走 stdin、失败说明、回包地址不合规不采用）、`ModelSettingsUiTest.customEndpointModelListIsReadFromTheTypedAddressAndSavedWithIt`；截图 53f / 53g。
+  全量 `gradle test` 324 项 0 失败；`assembleDebug` 通过。**没对真实 Hermes 跑**（这个环境不允许安装运行 Hermes 源码，`test_providers_upstream.py` 跳过），**没在用户手机上验证**。
+- 没改版本号；给用户出包时按规矩换 0.14.6。
+
 ## 0.14.5（发布版）：后台通知显示成用户消息、没断线也提示“断线时间过长”（用户截图，11-01）
 
 - 0.14.4 打过测试包给用户，之后又改了代码，所以按规矩换成 0.14.5 / 58 发布，说明 `docs/releases/v0.14.5.md`（以已发布的 0.14.1 为基准，含 0.14.2–0.14.5 的全部修复）。

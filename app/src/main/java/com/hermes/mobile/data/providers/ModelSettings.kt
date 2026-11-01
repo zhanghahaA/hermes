@@ -37,6 +37,8 @@ data class AccountLogin(
 data class ModelSettingsRequest(
     val action: String, val provider: String = "", val model: String = "", val apiKey: String? = null,
     val baseUrl: String = "", val sessionId: String = "", val apiMode: String = "chat_completions",
+    /** 自定义 / 本地端点：保存时带上读到的模型清单。 */
+    val models: List<String> = emptyList(),
 ) {
     override fun toString() = "ModelSettingsRequest(action=$action, contents=[已隐藏])"
 
@@ -45,30 +47,61 @@ data class ModelSettingsRequest(
         if (action in setOf("save", "login", "models")) require(Regex("[a-zA-Z0-9][a-zA-Z0-9:_-]{0,79}").matches(provider)) { "请选择提供方" }
         if (action == "save") {
             require(model.isNotBlank() && model.length <= 200 && model.none { it.isISOControl() }) { "请填写模型名称" }
+        }
+        if (action == "save" || action == "models" && provider in setOf("custom", "local")) {
             require(apiKey == null || apiKey.length <= 4096 && apiKey.none { it.isISOControl() }) { "模型密钥格式无效" }
             require(apiMode in setOf("chat_completions", "codex_responses", "anthropic_messages")) { "接口格式无效" }
-            if (baseUrl.isNotBlank()) {
-                val uri = runCatching { URI(baseUrl) }.getOrNull()
-                require(uri != null && uri.host != null && uri.userInfo == null && uri.fragment == null && uri.query == null &&
-                    (uri.scheme == "https" || uri.scheme == "http" && uri.host in setOf("localhost", "127.0.0.1", "::1", "[::1]"))) {
-                    "云端端点使用 HTTPS；Hermes 所在机器的本地模型可使用本机 HTTP 地址"
-                }
-            }
+            if (baseUrl.isNotBlank()) require(endpointAllowed(baseUrl)) { EndpointRule }
             if (provider in setOf("custom", "local")) require(baseUrl.isNotBlank()) { "请填写模型端点" }
+            require(models.size <= 500 && models.all { it.length <= 200 && it.none(Char::isISOControl) }) { "模型清单无效" }
         }
         if (action in setOf("poll", "cancel")) require(Regex("[a-f0-9]{32}").matches(sessionId)) { "授权会话无效" }
     }
+
+    companion object {
+        const val EndpointRule = "云端端点使用 HTTPS；本机和局域网地址（如 192.168.x.x）可以用 HTTP"
+
+        /** 和 settings.py 的 endpoint() 一致：https 都行；http 只给回环、私有网段、链路本地、Tailscale 和 .local。 */
+        fun endpointAllowed(value: String): Boolean {
+            val uri = runCatching { URI(value.trim()) }.getOrNull() ?: return false
+            val host = uri.host?.removePrefix("[")?.removeSuffix("]") ?: return false
+            if (uri.userInfo != null || uri.fragment != null || uri.query != null) return false
+            return uri.scheme == "https" || uri.scheme == "http" && privateHost(host)
+        }
+
+        fun privateHost(host: String): Boolean {
+            val name = host.lowercase()
+            if (name == "localhost" || name.endsWith(".local")) return true
+            val v4 = name.split(".").takeIf { it.size == 4 }?.map { it.toIntOrNull() ?: return false }
+            if (v4 != null) {
+                if (v4.any { it !in 0..255 }) return false
+                val (a, b) = v4
+                return a == 127 || a == 10 || a == 172 && b in 16..31 || a == 192 && b == 168 || a == 169 && b == 254 || a == 100 && b in 64..127
+            }
+            if (!name.contains(":") || !name.all { it.isDigit() || it in 'a'..'f' || it == ':' }) return false
+            return name == "::1" || name.startsWith("fc") || name.startsWith("fd") || name.startsWith("fe8") || name.startsWith("fe9") ||
+                name.startsWith("fea") || name.startsWith("feb")
+        }
+    }
 }
+
+/** 实时读取自定义 / 本地端点模型清单的结果（只有分类，不含服务商原始错误）。 */
+@Serializable
+data class EndpointProbe(val status: String = "", val models: List<String> = emptyList(), val baseUrl: String = "", val code: Int = 0)
 
 @Serializable
 data class ModelSettingsResponse(
     val ok: Boolean = true, val error: String = "", val snapshot: ModelSettingsSnapshot? = null,
-    val login: AccountLogin? = null,
+    val login: AccountLogin? = null, val probe: EndpointProbe? = null,
 )
 
 data class ModelSettingsState(
     val snapshot: ModelSettingsSnapshot? = null, val login: AccountLogin? = null,
     val busy: Boolean = false, val message: String = "正在读取当前连接的模型设置…", val failed: Boolean = false,
+    /** 最近一次实时读取端点的结果；地址探测出带 /v1 的版本时界面用它更新地址。 */
+    val probe: EndpointProbe? = null,
+    /** 读取端点时给出的说明；界面据此把它显示在读取按钮旁边。 */
+    val probeMessage: String = "",
 )
 
 /** 一个页面绑定一个连接，凭据仅通过受保护的命令输入发送；界面状态不保留提交的密钥。 */
@@ -104,7 +137,13 @@ class ModelSettingsManager(
                     require(uri.scheme == "https" && uri.host != null && uri.userInfo == null) { "授权页面必须使用 HTTPS" }
                 }
             }
+            val probe = response.probe?.takeIf { request.action == "models" }?.let { found ->
+                require(found.status in ProbeStatuses && found.models.size <= 500 && found.models.all { m -> m.length <= 200 && m.none(Char::isISOControl) }) { "模型配置回包不完整" }
+                // 回来的地址也要满足同样的规则，否则不采用。
+                found.copy(baseUrl = found.baseUrl.takeIf { url -> url.isNotBlank() && ModelSettingsRequest.endpointAllowed(url) } ?: request.baseUrl)
+            }
             mutable.update { it.copy(snapshot = response.snapshot ?: it.snapshot, login = response.login ?: it.login,
+                probe = if (request.action == "models") probe else it.probe,
                 message = when (request.action) {
                     "enable_clarify" -> "已启用手机互动选项。请新建会话尝试；若旧进程尚未读取配置，请在空闲时重启 Hermes。"
                     "save" -> "模型设置已保存。新会话将使用此配置；已锁定模型的旧会话需单独切换。"
@@ -116,10 +155,12 @@ class ModelSettingsManager(
                         else -> "请在浏览器完成授权，返回后检查登录结果。"
                     }
                     "cancel" -> "已请求取消授权。"
-                    "models" -> if (response.snapshot?.providers?.any { row -> row.id == request.provider && row.models.isNotEmpty() } == true)
+                    "models" -> if (probe != null) probeMessage(probe, request.baseUrl, request.apiKey != null)
+                        else if (response.snapshot?.providers?.any { row -> row.id == request.provider && row.models.isNotEmpty() } == true)
                         "已读取模型列表，可以选择或手动填写。" else "未返回可选模型清单，可直接填写模型名称。"
                     else -> "已读取当前连接的模型设置。"
-                }, failed = response.login?.status in setOf("error", "expired")) }
+                }, failed = response.login?.status in setOf("error", "expired") || probe != null && probe.models.isEmpty()).let { next ->
+                    next.copy(probeMessage = if (probe != null) next.message else "") } }
             onSuccess()
         } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
             mutable.update { it.copy(failed = true, message = "等待模型配置结果超时，请刷新确认，不要重复提交。") }
@@ -133,8 +174,21 @@ class ModelSettingsManager(
 
     companion object {
         const val Receipt = "HMMODELS"
+        private val ProbeStatuses = setOf("ok", "unreachable", "rejected", "http", "empty", "transport")
+
+        internal fun probeMessage(probe: EndpointProbe, typed: String, keyTyped: Boolean): String {
+            val moved = probe.baseUrl.trimEnd('/') != typed.trim().trimEnd('/')
+            return when (probe.status) {
+                "ok" -> "读到 ${probe.models.size} 个模型，点「从模型列表选择」。" + if (moved) "地址已改成实际能用的 ${probe.baseUrl}。" else ""
+                "transport" -> "读到 ${probe.models.size} 个模型，但这个地址不支持所选的接口格式，请换一个接口格式再保存。"
+                "unreachable" -> "连不上这个地址：请确认地址和端口，模型服务在运行，并且运行 Hermes 的设备能访问它（本机安装时就是这台手机）。"
+                "rejected" -> if (keyTyped) "端点拒绝了这个 API 密钥，请检查密钥。" else "端点要求 API 密钥，请先填写密钥再读取。"
+                "http" -> "端点返回 HTTP ${probe.code.takeIf { it in 100..599 } ?: "错误"}，没有给出模型清单。请检查地址（一般以 /v1 结尾），或直接填写模型名称。"
+                else -> "连上了，但这个地址没有返回模型清单。请检查地址（一般以 /v1 结尾），或直接填写模型名称。"
+            }
+        }
         private val SafeErrors = setOf("请选择提供方", "请填写模型名称", "模型密钥格式无效", "请填写模型端点", "接口格式无效",
-            "云端端点使用 HTTPS；Hermes 所在机器的本地模型可使用本机 HTTP 地址", "没有收到模型配置结果，请检查 Hermes 是否安装完整",
+            ModelSettingsRequest.EndpointRule, "模型清单无效", "没有收到模型配置结果，请检查 Hermes 是否安装完整",
             "当前 Hermes 不支持浏览器授权，请升级 Hermes 或使用下方登录命令。",
             "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。", "请先在设置中为该连接配置 SSH，并连接成功后重试。",
             "模型设置未完成：请检查模型、密钥和端点，修改前的配置备份已保留。", "请先安装 Hermes，再配置模型提供方。",

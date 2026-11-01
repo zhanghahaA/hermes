@@ -98,7 +98,19 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
         snapshot?.let { if (provider.isBlank()) { provider = it.provider; model = it.model; url = it.baseUrl; apiMode = it.apiMode } }
     }
     val selection = snapshot?.providers?.firstOrNull { it.id == provider }
+    val endpoint = provider in setOf("custom", "local")
+    // 读到模型时，如果实际能用的是补上 /v1 的地址，就把输入框改成那个地址（保存时 Hermes 会照它拼请求路径）。
+    LaunchedEffect(state.probe) {
+        state.probe?.takeIf { it.models.isNotEmpty() && it.baseUrl.isNotBlank() }?.let {
+            url = it.baseUrl
+            if (model.isBlank()) model = it.models.first()
+        }
+    }
     val login = state.login
+    val probeNote = endpoint && state.probe != null && !state.busy && state.message == state.probeMessage
+    // 只带上对这个地址读到的模型清单；改了地址没重新读取就只存填写的模型。
+    fun saveRequest() = ModelSettingsRequest("save", provider, model.trim(), key.trim().takeIf(String::isNotEmpty), url.trim(), apiMode = apiMode,
+        models = if (endpoint && state.probe?.baseUrl?.trimEnd('/') == url.trim().trimEnd('/')) selection?.models.orEmpty() else emptyList())
     LaunchedEffect(manager, login?.id, login?.status) {
         if (login != null && login.status in setOf("starting", "pending")) {
             while (true) {
@@ -177,7 +189,9 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                                 FilterChip(url.contains(":8080"), { url = "http://127.0.0.1:8080/v1" }, label = { Text("llama.cpp") })
                             }
                         }
-                        OutlinedTextField(url, { url = it }, label = { Text("模型接口地址") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(url, { url = it }, label = { Text("模型接口地址") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                            placeholder = { Text("例如 https://api.example.com/v1") })
+                        Text("云端服务用 https；局域网里的电脑（如 http://192.168.1.10:11434/v1）可以用 http，密钥会在局域网里明文传输。", style = MaterialTheme.typography.bodySmall)
                         if (provider == "custom") {
                             Text("接口格式")
                             listOf("chat_completions" to "OpenAI 兼容", "codex_responses" to "Responses", "anthropic_messages" to "Anthropic Messages").forEach { (value, label) ->
@@ -187,11 +201,18 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                     }
                     OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                     if (selection.models.isNotEmpty()) TextButton(onClick = { chooseModel = true }) { Text("从模型列表选择") }
-                    TextButton(enabled = !busy, onClick = { manager.submit(ModelSettingsRequest("models", provider)) }) { Text("读取可选模型列表") }
+                    // 自定义 / 本地端点用页面上填的地址和密钥实时读取；密钥留空时 Hermes 只对同一个地址沿用已保存的密钥。
+                    TextButton(enabled = !busy && (!endpoint || url.isNotBlank()), onClick = {
+                        manager.submit(if (endpoint) ModelSettingsRequest("models", provider, model.trim(), key.trim().takeIf(String::isNotEmpty), url.trim(), apiMode = apiMode)
+                            else ModelSettingsRequest("models", provider))
+                    }) { Text("读取可选模型列表") }
+                    // 读取结果就显示在按钮下面，不用翻到页面底部找。
+                    if (probeNote) Text(state.message, style = MaterialTheme.typography.bodySmall,
+                        color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                     if (saveAndConnect) Text("保存到 App 使用的独立配置，保留备份，然后重启本机 Hermes 并验证连接。终端默认配置不会自动同步。", style = MaterialTheme.typography.bodySmall)
                     Button(enabled = !busy && model.isNotBlank(), onClick = {
                         if (saveAndConnect) {
-                            manager.submit(ModelSettingsRequest("save", provider, model.trim(), key.trim().takeIf(String::isNotEmpty), url.trim(), apiMode = apiMode)) { key = ""; onModelSaved() }
+                            manager.submit(saveRequest()) { key = ""; onModelSaved() }
                         } else confirmSave = true
                     }) { Text(if (saveAndConnect) "保存并开始聊天" else "保存模型配置") }
                 } }
@@ -206,7 +227,7 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                 Text(externalMessage)
                 if (!externalBusy && onRetryConnect != null) TextButton(onClick = onRetryConnect) { Text("重新启动并连接") }
             }
-            Text(state.message, color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+            if (!probeNote) Text(state.message, color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
             Text("模型服务 API 密钥和手机连接密钥用途不同。保存只更新模型配置，不删除会话，也不自动重启正在工作的远程 Hermes。", style = MaterialTheme.typography.bodySmall)
         }
     }
@@ -232,7 +253,7 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
     if (confirmSave) AlertDialog(onDismissRequest = { confirmSave = false }, title = { Text("保存到 $connectionName？") },
         text = { Text("将更新这个 Hermes 的模型提供方、模型名称和你填写的密钥／端点，首次修改前备份配置。已有会话和其它连接不会删除。${if (saveAndConnect) " 保存后会启动本机 Hermes，检查连接并进入聊天。" else ""}") },
         confirmButton = { TextButton(onClick = {
-            manager.submit(ModelSettingsRequest("save", provider, model.trim(), key.trim().takeIf(String::isNotEmpty), url.trim(), apiMode = apiMode)) { key = ""; onModelSaved() }
+            manager.submit(saveRequest()) { key = ""; onModelSaved() }
             confirmSave = false
         }) { Text("保存") } }, dismissButton = { TextButton(onClick = { confirmSave = false }) { Text("取消") } })
     if (confirmLogin) AlertDialog(onDismissRequest = { confirmLogin = false }, title = { Text("连接 ${selection?.name.orEmpty()}？") },

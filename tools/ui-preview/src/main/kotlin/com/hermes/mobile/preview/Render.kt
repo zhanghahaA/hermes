@@ -121,6 +121,8 @@ private val scenes = listOf(
     Scene("53-model-providers", frames = 16) { _, _ -> ModelSettingsPreview("openrouter") },
     Scene("53b-model-local-dark", dark = true, frames = 16) { _, _ -> ModelSettingsPreview("local") },
     Scene("53c-model-account", frames = 16) { _, _ -> ModelSettingsPreview("openai-codex") },
+    Scene("53f-model-custom-probed", frames = 16) { _, _ -> ModelSettingsPreview("custom", probed = true) },
+    Scene("53g-model-custom-unreachable-dark", dark = true, frames = 16) { _, _ -> ModelSettingsPreview("custom", probed = false) },
     Scene("53d-termux-permission") { _, _ -> RuntimePreview(true, permission = false) },
     Scene("52-quick-ssh") { repo, _ -> ConnectionEditorScreen(repo, null, "Ssh", onClose = {}) },
     Scene("52b-quick-ssh-dark", dark = true) { repo, _ -> ConnectionEditorScreen(repo, null, "Ssh", onClose = {}) },
@@ -534,7 +536,7 @@ private fun RuntimePreview(ready: Boolean, permission: Boolean = ready, initiali
 
 /** 配置界面的固定演示数据，不连接真实模型或账号。 */
 @Composable
-private fun ModelSettingsPreview(provider: String) {
+private fun ModelSettingsPreview(provider: String, probed: Boolean? = null) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val manager = remember(provider) {
         val snapshot = com.hermes.mobile.data.providers.ModelSettingsSnapshot(
@@ -544,16 +546,30 @@ private fun ModelSettingsPreview(provider: String) {
                 com.hermes.mobile.data.providers.ModelProvider("custom", "自定义端点", apiKey = true),
                 com.hermes.mobile.data.providers.ModelProvider("local", "本地模型")), provider = provider,
             model = if (provider == "openrouter") "按服务商提供的名称填写" else "",
-            baseUrl = if (provider == "local") "http://127.0.0.1:11434/v1" else "")
+            baseUrl = if (provider == "local") "http://127.0.0.1:11434/v1" else if (provider == "custom") "http://192.168.1.10:8000" else "")
+        val models = listOf("qwen3-32b", "llama-4-scout", "deepseek-v4")
         val login = if (provider == "openai-codex") com.hermes.mobile.data.providers.AccountLogin("a".repeat(32), provider,
             "pending", "DEMO-ONLY", "https://example.invalid/authorize", 9_999_999_999) else null
-        com.hermes.mobile.data.providers.ModelSettingsManager(scope, "fixture") { _, _ ->
+        com.hermes.mobile.data.providers.ModelSettingsManager(scope, "fixture") { _, body ->
+            val probe = if (probed != null && body.contains("\"models\"")) com.hermes.mobile.data.providers.EndpointProbe(
+                if (probed) "ok" else "unreachable", if (probed) models else emptyList(), "http://192.168.1.10:8000/v1") else null
+            val shown = if (probe != null) snapshot.copy(providers = snapshot.providers.map { if (it.id == provider) it.copy(models = probe.models) else it }) else snapshot
             com.hermes.mobile.data.providers.ModelSettingsManager.Receipt + kotlinx.serialization.json.Json.encodeToString(
                 com.hermes.mobile.data.providers.ModelSettingsResponse.serializer(),
-                com.hermes.mobile.data.providers.ModelSettingsResponse(snapshot = snapshot, login = login))
+                com.hermes.mobile.data.providers.ModelSettingsResponse(snapshot = shown, login = login, probe = probe))
         }
     }
-    com.hermes.mobile.ui.settings.ModelSettingsContent(manager, "这台手机 · 演示", {})
+    // 演示读取端点模型清单后的样子：等 inspect 回来再发一次读取。
+    if (probed != null) androidx.compose.runtime.LaunchedEffect(manager) {
+        while (manager.state.value.snapshot == null || manager.state.value.busy) kotlinx.coroutines.delay(10)
+        manager.submit(com.hermes.mobile.data.providers.ModelSettingsRequest("models", provider, baseUrl = "http://192.168.1.10:8000")).join()
+    }
+    // 读取结果的提示在页面底部：这两个场景缩小显示，整页放进一屏。
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+        if (probed != null) androidx.compose.ui.unit.Density(density.density * 0.62f, density.fontScale) else density) {
+        com.hermes.mobile.ui.settings.ModelSettingsContent(manager, "这台手机 · 演示", {})
+    }
 }
 
 /** 液态玻璃对比用：彩色内容上放 Tab 栏和输入栏，看通透程度。 */

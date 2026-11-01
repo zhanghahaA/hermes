@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import fcntl
 import importlib.util
+import ipaddress
 import json
 import os
 import re
@@ -67,15 +68,103 @@ def read_login(sid):
     return result
 
 
+def private_host(host):
+    """本机回环和局域网（私有网段、链路本地、Tailscale 100.64/10、.local）可以用 http。"""
+    if host in ("localhost",) or host.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_private or addr.is_link_local or (
+        addr.version == 4 and addr in ipaddress.ip_network("100.64.0.0/10"))
+
+
 def endpoint(value):
     if not isinstance(value, str) or len(value) > 2048:
         raise ValueError("模型端点无效")
-    uri = urlsplit(value)
+    uri = urlsplit(value.strip())
     if not uri.hostname or uri.username or uri.password or uri.query or uri.fragment or not (
-        uri.scheme == "https" or uri.scheme == "http" and uri.hostname in ("127.0.0.1", "localhost", "::1")
+        uri.scheme == "https" or uri.scheme == "http" and private_host(uri.hostname)
     ):
         raise ValueError("模型端点无效")
-    return value.rstrip("/")
+    return value.strip().rstrip("/")
+
+
+def clean_models(values):
+    result = []
+    for value in values or ():
+        if isinstance(value, str) and 0 < len(value) <= 200 and not any(ord(c) < 32 for c in value) and value not in result:
+            result.append(value)
+    return result[:500]
+
+
+def endpoint_id(slug):
+    return "mobile-local" if slug == "local" else "mobile-custom"
+
+
+def stored_key(cfg, slug, url):
+    """留空密钥时沿用已保存的那把，但只发给保存时的同一个地址，不把旧密钥发到新填的主机。"""
+    entry = (cfg.get("providers") or {}).get(endpoint_id(slug))
+    if not isinstance(entry, dict) or str(entry.get("base_url") or "").rstrip("/") != url:
+        return None
+    if entry.get("key_env"):
+        from hermes_cli.config import get_env_value
+        return get_env_value(str(entry["key_env"])) or None
+    key = entry.get("api_key")
+    return key if isinstance(key, str) and key and not key.startswith("${") else None
+
+
+def probe(request):
+    """用填写的地址和密钥实时读取端点的 /models（电脑版设置页「测试」按钮的同一个函数），不写配置。"""
+    slug = request.get("provider", "")
+    url = endpoint(request.get("baseUrl", ""))
+    mode = request.get("apiMode") or "chat_completions"
+    if mode not in ("chat_completions", "codex_responses", "anthropic_messages"):
+        raise ValueError("接口格式无效")
+    key = request.get("apiKey")
+    if key is not None and (not isinstance(key, str) or len(key) > 4096 or any(ord(c) < 32 for c in key)):
+        raise ValueError("模型密钥无效")
+    key = key or stored_key(config_read(), slug, url)
+    try:
+        from hermes_cli.web_models import CustomEndpointUpdate
+        from hermes_cli.web_routers.config_env import validate_custom_endpoint
+    except ImportError:
+        validate_custom_endpoint = None
+    if validate_custom_endpoint is not None:
+        body = CustomEndpointUpdate(name="mobile-probe", base_url=url, model=str(request.get("model") or "")[:200],
+                                    api_key=key or None, api_mode=mode)
+        result = asyncio.run(validate_custom_endpoint(body))
+        models = clean_models(result.get("models"))
+        resolved = result.get("resolved_base_url") or url
+        message = str(result.get("message") or "")
+        if result.get("ok"):
+            status = "ok"
+        elif not result.get("reachable", True):
+            status = "unreachable"
+        elif models:
+            status = "transport"
+        elif "rejected" in message:
+            status = "rejected"
+        elif re.search(r"HTTP \d{3}", message):
+            status = "http"
+        else:
+            status = "empty"
+        code = re.search(r"HTTP (\d{3})", message)
+    else:
+        # 旧版 Hermes 没有电脑版的测试接口时，用它读 /models 的函数。
+        from hermes_cli.models import probe_api_models
+        result = probe_api_models(key, url, timeout=8.0, api_mode=mode)
+        models = clean_models(result.get("models"))
+        resolved = result.get("resolved_base_url") or url
+        status = "ok" if models else ("unreachable" if result.get("models") is None else "empty")
+        code = None
+    try:
+        resolved = endpoint(resolved)
+    except ValueError:
+        resolved = url
+    # 只回分类、状态码和模型名；服务商的原始错误可能带地址以外的信息，不回给手机。
+    return {"status": status, "models": models, "baseUrl": resolved, "code": int(code.group(1)) if code else 0}
 
 
 def scope():
@@ -203,11 +292,15 @@ def save(request):
         # 使用 Hermes 的命名端点入口，避免旧的 bare custom 形状丢失认证头。
         from hermes_cli.web_models import CustomEndpointUpdate
         from hermes_cli.web_routers.config_env import _write_custom_endpoint
-        body = CustomEndpointUpdate(id="mobile-local" if slug == "local" else "mobile-custom",
-                                    name="手机本地模型" if slug == "local" else "手机自定义端点",
-                                    base_url=url, model=model, api_key=key, api_mode=mode,
-                                    discover_models=False, make_default=True)
-        _write_custom_endpoint(cfg, body)
+        # 留空密钥表示保留已有的（Hermes 把空字符串当成删除，这里传 None）。
+        fields = dict(id=endpoint_id(slug), name="手机本地模型" if slug == "local" else "手机自定义端点",
+                      base_url=url, model=model, api_key=key or None, api_mode=mode,
+                      discover_models=True, make_default=True)
+        # 读到的模型清单一起存下（和电脑版「测试」后保存一样），聊天页的模型列表也能选到。
+        models = clean_models(request.get("models"))
+        if models and "models" in getattr(CustomEndpointUpdate, "model_fields", {}):
+            fields["models"] = models
+        _write_custom_endpoint(cfg, CustomEndpointUpdate(**fields))
     else:
         provider = PROVIDER_REGISTRY.get(slug)
         if provider is None and slug != "openrouter":
@@ -324,6 +417,13 @@ def enable_clarify():
 def dispatch(request):
     action = request.get("action")
     with scope():
+        if action == "models" and request.get("provider") in ("custom", "local") and request.get("baseUrl"):
+            found = probe(request)
+            result = snapshot(True)
+            for row in result["providers"]:
+                if row["id"] == request.get("provider"):
+                    row["models"] = found["models"]
+            return {"snapshot": result, "probe": found}
         if action in ("inspect", "models"):
             return {"snapshot": snapshot(action == "models")}
         if action == "save":

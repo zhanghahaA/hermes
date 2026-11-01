@@ -96,4 +96,44 @@ class ModelSettingsUiTest {
             onNodeWithText("保存").assertDoesNotExist()
         } finally { scope.cancel() }
     }
+
+    @Test fun customEndpointModelListIsReadFromTheTypedAddressAndSavedWithIt() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val requests = CopyOnWriteArrayList<ModelSettingsRequest>()
+        val providers = listOf(ModelProvider("openrouter", "OpenRouter", apiKey = true), ModelProvider("custom", "自定义端点", apiKey = true))
+        val manager = ModelSettingsManager(scope, "fixture") { _, body ->
+            val request = Json.decodeFromString(ModelSettingsRequest.serializer(), body)
+            requests += request
+            val response = if (request.action == "models") ModelSettingsResponse(
+                snapshot = ModelSettingsSnapshot(providers = providers.map { if (it.id == "custom") it.copy(models = listOf("remote-a", "remote-b")) else it },
+                    provider = "openrouter", model = "fake-default"),
+                probe = EndpointProbe("ok", listOf("remote-a", "remote-b"), "http://192.168.1.10:8000/v1"))
+                else ModelSettingsResponse(snapshot = ModelSettingsSnapshot(providers = providers, provider = "openrouter", model = "fake-default"))
+            "HMMODELS" + Json.encodeToString(ModelSettingsResponse.serializer(), response)
+        }
+        var saved = false
+        try {
+            setContent { HermesTheme { ModelSettingsContent(manager, "这台手机", {}, saveAndConnect = true, onModelSaved = { saved = true }) } }
+            waitUntil(timeoutMillis = 5000) { manager.state.value.snapshot != null }
+            onNodeWithText("OpenRouter").performClick()
+            onNodeWithText("自定义端点").performClick()
+            onNodeWithText("模型服务 API 密钥").performTextInput("fixture-credential")
+            onNodeWithText("模型接口地址").performScrollTo().performTextInput("http://192.168.1.10:8000")
+            onNodeWithText("读取可选模型列表").performScrollTo().performClick()
+            waitUntil(timeoutMillis = 5000) { manager.state.value.probe != null }
+            val probe = requests.single { it.action == "models" }
+            assertEquals("http://192.168.1.10:8000", probe.baseUrl)
+            assertEquals("fixture-credential", probe.apiKey)
+            // 地址换成实际能用的 /v1，模型名先填第一个，列表里能选另一个。
+            waitUntil(timeoutMillis = 5000) { onAllNodesWithText("http://192.168.1.10:8000/v1").fetchSemanticsNodes().isNotEmpty() }
+            onNodeWithText("从模型列表选择").performScrollTo().performClick()
+            onNodeWithText("remote-b").performClick()
+            onNodeWithText("保存并开始聊天").performScrollTo().performClick()
+            waitUntil(timeoutMillis = 5000) { saved }
+            val save = requests.single { it.action == "save" }
+            assertEquals("remote-b", save.model)
+            assertEquals("http://192.168.1.10:8000/v1", save.baseUrl)
+            assertEquals(listOf("remote-a", "remote-b"), save.models)
+        } finally { scope.cancel() }
+    }
 }
