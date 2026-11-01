@@ -618,9 +618,18 @@ class HermesAdmin(private val shell: RemoteShell, val profileName: String?) : Ad
                 "  '[\"'*)",
                 "    export HM_RC",
                 "    HM_PY=\$(printf '%s' \"\$HM_RC\" | sed -n 's/^\\[\"\\([^\"]*\\)\".*/\\1/p')",
-                "    if [ -x \"\$HM_PY\" ]; then \"\$HM_PY\" -I -c ${q(RuntimeShim)} $argv; HM_CODE=\$?; [ \$HM_CODE -ne 70 ] && exit \$HM_CODE; fi",
+                // Termux 的命令带 set -e：失败要用 || 接住，否则退出码 70 也会直接结束整个脚本，走不到后面的办法。
+                "    if [ -x \"\$HM_PY\" ]; then HM_CODE=0; \"\$HM_PY\" -I -c ${q(RuntimeShim)} $argv || HM_CODE=\$?; if [ \$HM_CODE -ne 70 ]; then exit \$HM_CODE; fi; fi",
                 "    ;;",
                 "esac",
+                "HM_LAUNCHER=\$(command -v hermes 2>/dev/null || true)",
+                "[ -z \"\$HM_LAUNCHER\" ] || HM_LAUNCHER=\$(readlink -f \"\$HM_LAUNCHER\" 2>/dev/null || printf '%s' \"\$HM_LAUNCHER\")",
+                "if [ -f \"\$HM_LAUNCHER\" ] && head -n 1 \"\$HM_LAUNCHER\" | grep -Eq '^#! *[^ ]*(/| )(ba|da)?sh *\$'; then",
+                "  HM_PAYLOAD_LOADER=${q(PayloadLoader)}",
+                "  export HM_PAYLOAD_LOADER",
+                "  HM_CODE=0; sh -c ${q(PayloadLauncher)} \"\$HM_LAUNCHER\" $argv || HM_CODE=\$?",
+                "  if [ \$HM_CODE -ne 70 ]; then rm -f \"\$HM_SCRIPT\"; exit \$HM_CODE; fi",
+                "fi",
                 FindHermesPython,
                 "exec \$PY -c \"\$HM_LOADER\" $argv",
             ).joinToString("\n")
@@ -1255,6 +1264,24 @@ if i < 0:
     sys.exit(70)
 os.execv(cmd[0], cmd[:3] + [code[:i] + "\n" + os.environ["HM_LOADER"]] + sys.argv[1:])
 """.trimIndent()
+
+        /**
+         * 打包安装（Termux 的 hermes-agent 软件包、桌面版自带的运行环境）的 hermes 是一个 sh 启动器：
+         * 设好自带 Python 需要的 LD_LIBRARY_PATH / PYTHONPATH，最后一行 `exec "<自带 Python>" [-P] (-c '…' | -m 模块) "$@"`。
+         * 它不认 --print-runtime-command，[FindHermesPython] 也找不到它的 Python，以前会退回系统 python3，导入 hermes_cli 失败。
+         * 这里照原样执行启动器，只把最后一行换成运行 [PayloadLoader]；认不出这一行时退出码 70，外面改用老办法。
+         * 用 `sh -c 脚本 启动器路径 参数…` 调用，所以 $0 是启动器自己的路径，它能照常找到安装目录。
+         */
+        val PayloadLauncher = """
+HM_TEXT=§(sed -E 's/^exec ("[^"]+")( -P)? (-c .+|-m [A-Za-z0-9_.]+) "\§@"§/exec \1\2 -c "§HM_PAYLOAD_LOADER" "§@"/' "§0") || exit 70
+case "§HM_TEXT" in
+  *'-c "§HM_PAYLOAD_LOADER" "§@"'*) eval "§HM_TEXT" ;;
+esac
+exit 70
+""".trimIndent().replace('§', '$')
+
+        /** 启动器原本的引导代码会把 HERMES_SITE 加成 site 目录（让 .pth 生效），这里照做，再跑 [PythonLoader]。 */
+        val PayloadLoader = "import os, site\nif os.environ.get(\"HERMES_SITE\"):\n    site.addsitedir(os.environ[\"HERMES_SITE\"])\n" + PythonLoader
 
         /** 删除 / 重命名项目：调 Hermes 自己的 projects_db。 */
         val ProjectScript = """

@@ -47,6 +47,19 @@ class ModelSettingsTest {
         ModelSettingsRequest("save", "local", "fake", null, "http://127.0.0.1:11434/v1").validate()
     }
 
+    @Test fun missingModuleNameIsShownButNothingElse() = runBlocking {
+        val known = "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。"
+        for ((error, shown) in listOf(known + "（缺少：hermes_cli）" to true, known + "（缺少：/home/u/x）" to false,
+                                       known + "（缺少：hermes_cli）sk-123" to false, "（缺少：hermes_cli）" to false)) {
+            val manager = ModelSettingsManager(this, "fixture") { _, _ ->
+                "HMMODELS" + Json.encodeToString(ModelSettingsResponse.serializer(), ModelSettingsResponse(ok = false, error = error))
+            }
+            manager.submit(ModelSettingsRequest("inspect")).join()
+            assertTrue(manager.state.value.failed)
+            assertEquals(shown, manager.state.value.message == error, error)
+        }
+    }
+
     @Test fun malformedAndFailedResponsesNeverLeakPrivateContent() = runBlocking {
         val secret = "private-" + java.util.UUID.randomUUID()
         val manager = ModelSettingsManager(this, "fixture") { _, _ -> "HMMODELS$secret" }

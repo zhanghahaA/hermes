@@ -364,10 +364,14 @@ def main():
             result = dispatch(request)
             fcntl.flock(lock, fcntl.LOCK_UN)
         result["ok"] = True
-    except ImportError:
+    except ImportError as exc:
         message = ("当前 Hermes 不支持浏览器授权，请升级 Hermes 或使用下方登录命令。"
                    if request.get("action") == "login" else
                    "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。")
+        # 只附上模块名（不含路径或服务商数据），用来区分是没在 Hermes 自带的 Python 里运行，还是缺了某个依赖。
+        missing = getattr(exc, "name", None) or ""
+        if re.fullmatch(r"[A-Za-z0-9_.]{1,100}", missing):
+            message += "（缺少：%s）" % missing
         result = {"ok": False, "error": message}
     except Exception as exc:
         message = str(exc)
