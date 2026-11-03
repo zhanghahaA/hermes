@@ -20,6 +20,8 @@ class LocalRuntimeUiTest {
         val requests = CopyOnWriteArrayList<RuntimeRequest>()
         var snapshot = RuntimeSnapshot()
         var failure: RuntimeCommandException? = null
+        /** 只让这一步失败（比如只有安装时官方源 404）；为空时每一步都失败。 */
+        var failureAction: RuntimeAction? = null
         var clearFailureOnRepair = false
         var hold: CompletableDeferred<Unit>? = null
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -33,7 +35,7 @@ class LocalRuntimeUiTest {
             requests += request
             hold?.await()
             if (clearFailureOnRepair && request.action == RuntimeAction.RepairEnvironment) failure = null
-            failure?.let { throw it }
+            failure?.takeIf { failureAction == null || failureAction == request.action }?.let { throw it }
             snapshot = when(request.action) {
                 RuntimeAction.Prepare -> snapshot.copy(toolsReady = true)
                 RuntimeAction.InstallHermes -> snapshot.copy(hermesInstalled = true)
@@ -194,13 +196,16 @@ class LocalRuntimeUiTest {
     @Test fun unavailableStableOffersPreviewOnlyWhenTheUserChoosesIt() = runComposeUiTest {
         val f = Fixture(environment)
         f.failure = RuntimeCommandException(RuntimeIssue.RepositoryUnavailable, 44)
+        f.failureAction = RuntimeAction.InstallHermes
         var models = false
         try {
             setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}, onConfigureModels = { models = true }) } }
-            waitUntil(timeoutMillis = 5000) { f.manager.state.value.failed && !f.manager.state.value.busy }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.checked && !f.manager.state.value.busy }
+            onNodeWithText("安装 Hermes").performClick()
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.issue == RuntimeIssue.RepositoryUnavailable && !f.manager.state.value.busy }
             onNodeWithText("重试安装").performClick()
-            waitUntil(timeoutMillis = 5000) { f.calls.contains(RuntimeAction.InstallHermes) && !f.manager.state.value.busy }
-            assertEquals(ReleaseChannel.Stable, f.requests.first { it.action == RuntimeAction.InstallHermes }.channel, "重试不能自己换通道")
+            waitUntil(timeoutMillis = 5000) { f.requests.count { it.action == RuntimeAction.InstallHermes } == 2 && !f.manager.state.value.busy }
+            assertTrue(f.requests.filter { it.action == RuntimeAction.InstallHermes }.all { it.channel == ReleaseChannel.Stable }, "重试不能自己换通道")
             f.failure = null
             onNodeWithText("改用预览版安装").assertIsDisplayed().performClick()
             waitUntil(timeoutMillis = 5000) { models }

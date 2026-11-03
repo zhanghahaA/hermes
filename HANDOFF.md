@@ -3,6 +3,25 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.14.6 之后：手机上一键部署本机 Hermes 总失败（在用户 vivo 真机上逐步复现，11-02 / 11-03）
+
+依次卡在三处，前一处绕过才会碰到下一处：
+
+- **稳定版 404（代码 44）**：`releases/termux/stable/key.asc` 和 `InRelease` 都是 404，canary 两项 200（11-02 实测，和 0.13.7-dev 记录一致）。
+  App 默认稳定版，「重试安装」永远失败，预览版藏在「高级功能」里。按原设计仍不自动换通道；「官方安装源暂不可用」卡片上加「改用预览版安装」按钮，用户点了才换。
+- **模型名称里是网址**：固定提供方（如「OpenAI API」）没有地址栏，用户把 `http://127.0.0.1:8788/` 填进了模型名称并保存成功。现在模型名称以 `xxx://` 开头时标红、
+  保存按钮灰掉、`validate()` 也拒绝，提示改用「自定义端点」（`ModelSettingsRequest.AddressAsModel`）。
+- **根本原因：缺 aiohttp，8642 永远不监听**。gateway 日志每次都是 `API Server: aiohttp not installed` → `No adapter available for api_server`。
+  canary 包 `hermes-agent 0.22.0~canary.20261014` 自带 Python 3.14 venv（`$PREFIX/lib/hermes-agent/venv`），没有 aiohttp、没有 pip；包的 Packages 条目没有 Depends。
+  aiohttp 在 Hermes pyproject 的 `messaging` / `sms` 等 extra 里（固定 `3.14.3`）。`hermes pm install --extra sms` 会重建整套依赖、从 GitHub 克隆 psutil，国内网络 SSL 中断失败（不会改动已装环境）。
+  改法：`TermuxRuntimeBackend.ApiServerDependencies`，装完 / 升级后和每次 Start/Restart 前，用包里自带的 `tools/uv/.../uv` 按 pyproject 的版本把 aiohttp 装进那个 venv（清华 PyPI）；
+  已有时只做一次本地 import。失败给 `HM_API_DEPENDENCY_MISSING` / 退出码 45 → `RuntimeIssue.ApiServerDependency`，归到「重启并重试」。
+- **真机验证（958 那台 vivo，Android 14）**：把生产脚本原样推到手机在 Termux 里跑，装上 aiohttp 3.14.3 + 7 个依赖（全是现成 wheel，无需编译）；
+  旧版 App 里「重启 Hermes」后 8642 开始监听，「开始聊天」通过验证进入聊天，消息经本机 Hermes 到达用户的 8788 代理，上游返回 403（上游账号被限制，和 App 无关）。
+  **新 App 本身还没装到真机**：手机上的 0.14.6 用发布签名（`83f0e609…a799`），本机 / 普通 CI 构建签名不同，不能覆盖安装。
+- 测试：`TermuxRepositoryTest`（补依赖脚本 4 种情况、启动前先检查并映射失败）、`ModelSettingsTest.addressTypedAsModelNameIsRejectedWithGuidance`、
+  `LocalRuntimeUiTest.unavailableStableOffersPreviewOnlyWhenTheUserChoosesIt`。
+
 ## 0.14.6：本机 Hermes 的自定义端点读不出模型（用户反馈，11-01）
 
 - **现象**：在手机上安装本机 Hermes 后，模型设置选「自定义端点」，读不出模型。
