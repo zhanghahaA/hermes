@@ -16,6 +16,7 @@ enum class RuntimeIssue(val explanation: String) {
     LocalApiUnsupported("当前本机服务没有提供 App 所需的 Hermes 会话接口，请检查安装版本和启动日志。"),
     RepositoryUnavailable("官方当前通道的安装文件不存在或已撤下，请稍后重试。"),
     PackageMismatch("Termux 的 curl 与加密库版本不匹配，需要先更新运行环境，再继续安装。"),
+    ApiServerDependency("Hermes 缺少聊天接口需要的 aiohttp，自动补装没有成功。请检查网络后点「重启并重试」，会再补装一次。"),
 }
 
 class RuntimeCommandException(val issue: RuntimeIssue, val resultCode: Int? = null, detail: String? = null) :

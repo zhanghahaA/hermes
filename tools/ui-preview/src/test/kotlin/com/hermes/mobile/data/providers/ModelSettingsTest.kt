@@ -47,6 +47,19 @@ class ModelSettingsTest {
         ModelSettingsRequest("save", "local", "fake", null, "http://127.0.0.1:11434/v1").validate()
     }
 
+    @Test fun addressTypedAsModelNameIsRejectedWithGuidance() = runBlocking {
+        var calls = 0
+        val manager = ModelSettingsManager(this, "fixture") { _, _ -> calls++; error("不应执行") }
+        manager.submit(ModelSettingsRequest("save", "openai", "http://127.0.0.1:8788/", "secret")).join()
+        assertEquals(0, calls)
+        assertEquals(ModelSettingsRequest.AddressAsModel, manager.state.value.message)
+        assertTrue(ModelSettingsRequest.looksLikeAddress(" HTTPS://example.invalid/v1"))
+        for (name in listOf("glm-5.3-flash", "openai/gpt-5.5", "qwen3:8b", "models/gemini-3.5-flash")) {
+            assertFalse(ModelSettingsRequest.looksLikeAddress(name), name)
+            ModelSettingsRequest("save", "openai", name, "secret").validate()
+        }
+    }
+
     @Test fun missingModuleNameIsShownButNothingElse() = runBlocking {
         val known = "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。"
         for ((error, shown) in listOf(known + "（缺少：hermes_cli）" to true, known + "（缺少：/home/u/x）" to false,

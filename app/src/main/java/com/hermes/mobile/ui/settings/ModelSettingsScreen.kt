@@ -199,7 +199,10 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                             }
                         }
                     }
-                    OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    val addressAsModel = ModelSettingsRequest.looksLikeAddress(model)
+                    OutlinedTextField(model, { model = it }, label = { Text("模型名称") }, singleLine = true, isError = addressAsModel,
+                        supportingText = if (addressAsModel) { { Text(ModelSettingsRequest.AddressAsModel) } } else null,
+                        modifier = Modifier.fillMaxWidth())
                     if (selection.models.isNotEmpty()) TextButton(onClick = { chooseModel = true }) { Text("从模型列表选择") }
                     // 自定义 / 本地端点用页面上填的地址和密钥实时读取；密钥留空时 Hermes 只对同一个地址沿用已保存的密钥。
                     TextButton(enabled = !busy && (!endpoint || url.isNotBlank()), onClick = {
@@ -210,7 +213,7 @@ fun ModelSettingsContent(manager: ModelSettingsManager, connectionName: String, 
                     if (probeNote) Text(state.message, style = MaterialTheme.typography.bodySmall,
                         color = if (state.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                     if (saveAndConnect) Text("保存到 App 使用的独立配置，保留备份，然后重启本机 Hermes 并验证连接。终端默认配置不会自动同步。", style = MaterialTheme.typography.bodySmall)
-                    Button(enabled = !busy && model.isNotBlank(), onClick = {
+                    Button(enabled = !busy && model.isNotBlank() && !addressAsModel, onClick = {
                         if (saveAndConnect) {
                             manager.submit(saveRequest()) { key = ""; onModelSaved() }
                         } else confirmSave = true

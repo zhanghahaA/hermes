@@ -47,6 +47,7 @@ data class ModelSettingsRequest(
         if (action in setOf("save", "login", "models")) require(Regex("[a-zA-Z0-9][a-zA-Z0-9:_-]{0,79}").matches(provider)) { "请选择提供方" }
         if (action == "save") {
             require(model.isNotBlank() && model.length <= 200 && model.none { it.isISOControl() }) { "请填写模型名称" }
+            require(!looksLikeAddress(model)) { AddressAsModel }
         }
         if (action == "save" || action == "models" && provider in setOf("custom", "local")) {
             require(apiKey == null || apiKey.length <= 4096 && apiKey.none { it.isISOControl() }) { "模型密钥格式无效" }
@@ -60,6 +61,10 @@ data class ModelSettingsRequest(
 
     companion object {
         const val EndpointRule = "云端端点使用 HTTPS；本机和局域网地址（如 192.168.x.x）可以用 HTTP"
+        const val AddressAsModel = "模型名称不能是网址。要用自己的服务地址，请把提供方换成「自定义端点」，在「模型接口地址」里填写。"
+
+        /** 模型名称里填了服务地址（固定提供方没有地址栏时常见），保存后 Hermes 会拿它当模型名去请求。 */
+        fun looksLikeAddress(model: String): Boolean = Regex("(?i)^\\s*[a-z][a-z0-9+.-]*://").containsMatchIn(model)
 
         /** 和 settings.py 的 endpoint() 一致：https 都行；http 只给回环、私有网段、链路本地、Tailscale 和 .local。 */
         fun endpointAllowed(value: String): Boolean {
@@ -187,7 +192,7 @@ class ModelSettingsManager(
                 else -> "连上了，但这个地址没有返回模型清单。请检查地址（一般以 /v1 结尾），或直接填写模型名称。"
             }
         }
-        private val SafeErrors = setOf("请选择提供方", "请填写模型名称", "模型密钥格式无效", "请填写模型端点", "接口格式无效",
+        private val SafeErrors = setOf("请选择提供方", "请填写模型名称", ModelSettingsRequest.AddressAsModel, "模型密钥格式无效","请填写模型端点", "接口格式无效",
             ModelSettingsRequest.EndpointRule, "模型清单无效", "没有收到模型配置结果，请检查 Hermes 是否安装完整",
             "当前 Hermes 不支持浏览器授权，请升级 Hermes 或使用下方登录命令。",
             "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。", "请先在设置中为该连接配置 SSH，并连接成功后重试。",

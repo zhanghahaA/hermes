@@ -28,6 +28,12 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
                 val existing = checkedRun(Header + "\nif command -v hermes >/dev/null 2>&1 && hermes --version >/dev/null 2>&1; then echo HM_HERMES_READY; fi")
                 if ("HM_HERMES_READY" !in existing.stdout.lines()) checkedRun(installScript(request.channel, false))
             } else checkedRun(installScript(request.channel, true))
+            progress("正在补齐 Hermes 聊天接口依赖")
+            checkedRun(Header + "\n" + ApiServerDependencies)
+        } else if (request.action in setOf(RuntimeAction.StartHermes, RuntimeAction.RestartHermes)) {
+            // 已装好的旧版本也要补：每次启动前确认一次，已具备时只多一次本地 import 检查，不联网。
+            progress("正在检查 Hermes 聊天接口依赖")
+            checkedRun(Header + "\n" + ApiServerDependencies)
         } else if (request.action == RuntimeAction.RepairEnvironment) {
             progress("正在更新 Termux 软件包以修复版本冲突，可能需要几分钟")
             checkedRun(Header + "\n" + RepairPackages)
@@ -111,6 +117,10 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
                 result.stderr.lineSequence().any { it == "HM_REPOSITORY_UNAVAILABLE" }) {
                 throw RuntimeCommandException(RuntimeIssue.RepositoryUnavailable, result.exitCode)
             }
+            if (input.isEmpty() && result.exitCode == 45 &&
+                result.stderr.lineSequence().any { it == "HM_API_DEPENDENCY_MISSING" }) {
+                throw RuntimeCommandException(RuntimeIssue.ApiServerDependency, result.exitCode)
+            }
             val raw = result.stderr + "\n" + result.stdout
             if (input.isEmpty() && raw.contains("CANNOT LINK EXECUTABLE", ignoreCase = true) &&
                 raw.contains("curl", ignoreCase = true) && raw.contains("cannot locate symbol", ignoreCase = true)) {
@@ -152,6 +162,26 @@ class TermuxRuntimeBackend(private val transport: TermuxTransport, private val p
             hm_apt -y --no-remove -o Dpkg::Options::=--force-confold dist-upgrade
             curl --version >/dev/null
         """.trimIndent()
+
+        // Termux 的 hermes-agent 包自带 venv，但不含 API Server 用的 aiohttp：gateway 日志只有一行
+        // 「API Server: aiohttp not installed」，8642 永远不监听。用包里自带的 uv，按 Hermes 自己 pyproject 固定的版本
+        // 补进它的 venv（清华 PyPI）。`hermes pm install` 会重建整套依赖并从 GitHub 拉源码，国内网络下不可用，所以不用它。
+        // 只处理打包安装；源码 / pip 安装的 Python 环境由用户自己管理。
+        internal val ApiServerDependencies = """
+            hm_hermes=§(command -v hermes 2>/dev/null) || exit 0
+            hm_root=§(cd "§(dirname "§(readlink -f "§hm_hermes")")/.." && pwd)
+            hm_python="§hm_root/venv/bin/python"
+            [ -x "§hm_python" ] || exit 0
+            export LD_LIBRARY_PATH="§hm_root/tools/python/data/data/com.termux/files/usr/lib:§hm_root/runtime-libs/lib:§PREFIX/lib"
+            "§hm_python" -c 'import aiohttp' >/dev/null 2>&1 && exit 0
+            hm_uv="§hm_root/tools/uv/data/data/com.termux/files/usr/bin/uv"
+            hm_pin=§(grep -o 'aiohttp==[0-9][0-9.]*' "§hm_root/app/pyproject.toml" 2>/dev/null | head -n 1 || true)
+            [ -n "§hm_pin" ] || hm_pin='aiohttp==3.14.3'
+            [ -x "§hm_uv" ] || { echo HM_API_DEPENDENCY_MISSING >&2; exit 45; }
+            "§hm_uv" pip install --no-config --default-index https://pypi.tuna.tsinghua.edu.cn/simple --python "§hm_python" "§hm_pin" >&2 ||
+                { echo HM_API_DEPENDENCY_MISSING >&2; exit 45; }
+            "§hm_python" -c 'import aiohttp' >/dev/null 2>&1 || { echo HM_API_DEPENDENCY_MISSING >&2; exit 45; }
+        """.trimIndent().replace('§', '$')
 
         internal fun installScript(channel: ReleaseChannel, upgrade: Boolean): String = Header + "\n" +
             (if (upgrade) """

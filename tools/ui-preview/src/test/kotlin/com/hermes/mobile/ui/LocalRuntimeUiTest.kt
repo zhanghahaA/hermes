@@ -17,6 +17,7 @@ class LocalRuntimeUiTest {
         override val externalApps = true
         override val initializationCommand = "test initialization"
         val calls = CopyOnWriteArrayList<RuntimeAction>()
+        val requests = CopyOnWriteArrayList<RuntimeRequest>()
         var snapshot = RuntimeSnapshot()
         var failure: RuntimeCommandException? = null
         var clearFailureOnRepair = false
@@ -29,6 +30,7 @@ class LocalRuntimeUiTest {
         override fun environment() = env
         override suspend fun execute(request: RuntimeRequest, progress: (String) -> Unit): RuntimeResponse {
             calls += request.action
+            requests += request
             hold?.await()
             if (clearFailureOnRepair && request.action == RuntimeAction.RepairEnvironment) failure = null
             failure?.let { throw it }
@@ -186,6 +188,24 @@ class LocalRuntimeUiTest {
             waitUntil(timeoutMillis = 5000) { models }
             assertTrue(f.calls.contains(RuntimeAction.InstallHermes))
             assertTrue(f.calls.indexOf(RuntimeAction.InstallHermes) < f.calls.indexOf(RuntimeAction.Prepare))
+        } finally { f.scope.cancel() }
+    }
+
+    @Test fun unavailableStableOffersPreviewOnlyWhenTheUserChoosesIt() = runComposeUiTest {
+        val f = Fixture(environment)
+        f.failure = RuntimeCommandException(RuntimeIssue.RepositoryUnavailable, 44)
+        var models = false
+        try {
+            setContent { HermesTheme { LocalRuntimeScreen(f.manager, {}, onConfigureModels = { models = true }) } }
+            waitUntil(timeoutMillis = 5000) { f.manager.state.value.failed && !f.manager.state.value.busy }
+            onNodeWithText("重试安装").performClick()
+            waitUntil(timeoutMillis = 5000) { f.calls.contains(RuntimeAction.InstallHermes) && !f.manager.state.value.busy }
+            assertEquals(ReleaseChannel.Stable, f.requests.first { it.action == RuntimeAction.InstallHermes }.channel, "重试不能自己换通道")
+            f.failure = null
+            onNodeWithText("改用预览版安装").assertIsDisplayed().performClick()
+            waitUntil(timeoutMillis = 5000) { models }
+            assertEquals(ReleaseChannel.Canary, f.requests.last { it.action == RuntimeAction.InstallHermes }.channel)
+            onNodeWithText("改用预览版安装").assertDoesNotExist()
         } finally { f.scope.cancel() }
     }
 

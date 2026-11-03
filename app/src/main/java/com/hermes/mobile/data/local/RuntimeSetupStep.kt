@@ -34,7 +34,8 @@ fun LocalRuntimeState.setupStep(): RuntimeSetupStep = when {
     issue == RuntimeIssue.PackageMismatch && !environment.enoughSpace -> RuntimeSetupStep.Storage
     issue == RuntimeIssue.PackageMismatch -> RuntimeSetupStep.Repair
     issue == RuntimeIssue.ModelSetupRequired -> RuntimeSetupStep.Model
-    issue in setOf(RuntimeIssue.LocalApiNotReady, RuntimeIssue.LocalApiUnauthorized, RuntimeIssue.LocalApiUnsupported) -> RuntimeSetupStep.Reconnect
+    issue in setOf(RuntimeIssue.LocalApiNotReady, RuntimeIssue.LocalApiUnauthorized, RuntimeIssue.LocalApiUnsupported,
+        RuntimeIssue.ApiServerDependency) -> RuntimeSetupStep.Reconnect
     !checked || probe != RuntimeProbe.Passed -> RuntimeSetupStep.Check
     (!snapshot.toolsReady || !snapshot.hermesInstalled) && !environment.enoughSpace -> RuntimeSetupStep.Storage
     !snapshot.hermesInstalled -> RuntimeSetupStep.Install

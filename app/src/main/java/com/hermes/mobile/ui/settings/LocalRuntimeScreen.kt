@@ -99,6 +99,12 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                             else -> Unit
                         }
                     }) { Text(if (openingChat) "正在连接…" else step.button) }
+                // 稳定版缺文件时不自动换通道；把预览版作为一个明确的选择放在这里，不用再去高级功能里找。
+                if (step == RuntimeSetupStep.SourceUnavailable && channel == ReleaseChannel.Stable) {
+                    Text("稳定版目前没有可下载的安装文件。预览版是 Hermes 官方的另一个通道，更新更快，可能不如稳定版稳定。", style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { channel = ReleaseChannel.Canary; install() }, enabled = ready,
+                        modifier = Modifier.fillMaxWidth()) { Text("改用预览版安装") }
+                }
                 if (step in setOf(RuntimeSetupStep.Install, RuntimeSetupStep.Configure)) {
                     Text("点击即开始安装和配置。需要联网，保留已有配置与会话；模型账号在安装后设置。", style = MaterialTheme.typography.bodySmall)
                 }
