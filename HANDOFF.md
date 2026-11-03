@@ -21,6 +21,13 @@
   **新 App 本身还没装到真机**：手机上的 0.14.6 用发布签名（`83f0e609…a799`），本机 / 普通 CI 构建签名不同，不能覆盖安装。
 - 测试：`TermuxRepositoryTest`（补依赖脚本 4 种情况、启动前先检查并映射失败）、`ModelSettingsTest.addressTypedAsModelNameIsRejectedWithGuidance`、
   `LocalRuntimeUiTest.unavailableStableOffersPreviewOnlyWhenTheUserChoosesIt`。
+- **清空后重装（11-03）**：卸掉 3 个 Hermes App、purge `hermes-agent`、删 `~/.hermes*` 和 uv 缓存、去掉 `allow-external-apps` 后装 CI 包（`fa189b5`）从头走：
+  预览版安装时 aiohttp 自动补上，「保存并开始聊天」约 80 秒进入聊天，`hy4-preview` 正常回复。
+  按「小白能一次走完」又改了两处：
+  - 稳定版 404 时主按钮直接是「改用预览版安装」（用户点了才换），「再试一次稳定版」降为文字按钮——原来的主按钮「重试安装」永远装不上。
+  - 聊天里模型调用失败只剩 Hermes 那句英文 “Your request was not processed”，真正原因（如 WorkBuddy 回的「这个 Key 只允许 hy4-preview」）只在几秒的弹出提示里。
+    现在原因存在 `ChatItem.Activity.error`，不管是否显示工作过程都在聊天里留一行红字（`StreamingProcessUiTest.failedRunKeepsItsReasonEvenWithProcessHidden`）。
+  - 没改：模型列表来自用户的端点（`/v1/models`），会列出 Key 不许用的模型，App 无从得知。
 
 ## 0.14.6：本机 Hermes 的自定义端点读不出模型（用户反馈，11-01）
 

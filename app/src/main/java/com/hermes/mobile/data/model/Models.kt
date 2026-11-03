@@ -175,6 +175,8 @@ sealed interface ChatItem {
         val status: ActivityStatus = ActivityStatus.Working,
         /** 这一轮结束的时间（本机时钟），用来显示“用时”。 */
         val finishedAt: Long? = null,
+        /** 失败原因（Hermes 给的原文）。弹出提示几秒就消失，Hermes 存下的只有一句英文“没处理”，所以留在聊天里。 */
+        val error: String = "",
     ) : ChatItem
 
     /**

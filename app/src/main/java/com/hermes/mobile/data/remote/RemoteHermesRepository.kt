@@ -1012,7 +1012,7 @@ class RemoteHermesRepository(
 
     private fun chatItemsOnly(sessionId: String): Flow<List<ChatItem>> =
         combine(chatOf(sessionId), settings) { st, prefs ->
-            st?.display().orEmpty().filter { it !is ChatItem.Activity || prefs.showWorkProcess || it.earlierReply.isNotBlank() }
+            st?.display().orEmpty().filter { it !is ChatItem.Activity || prefs.showWorkProcess || it.earlierReply.isNotBlank() || it.error.isNotBlank() }
         }.onStart {
             val key = resolve(sessionId).takeUnless { it.startsWith(DraftPrefix) } ?: return@onStart
             // 先显示本机存的记录，同时去服务器拉最新的
@@ -1766,6 +1766,7 @@ class RemoteHermesRepository(
                 earlierReply = if (_settings.value.streamReplies || _settings.value.showWorkProcess) MediaTags.parse(st.replyStream.text).first else "",
                 status = if (error != null) com.hermes.mobile.data.model.ActivityStatus.Failed else com.hermes.mobile.data.model.ActivityStatus.Stopped,
                 finishedAt = clock(),
+                error = error.orEmpty().take(600),
             ) }.copy(phase = RunPhase.Idle, streaming = null, replyStream = ReplyStream())
         }
         if (error != null) {

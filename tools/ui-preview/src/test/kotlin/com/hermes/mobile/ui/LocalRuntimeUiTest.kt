@@ -186,7 +186,7 @@ class LocalRuntimeUiTest {
             onNodeWithText("无需重新初始化", substring = true).assertIsDisplayed()
             onNodeWithText("复制命令并打开 Termux").assertDoesNotExist()
             f.failure = null
-            onNodeWithText("重试安装").performClick()
+            onNodeWithText("再试一次稳定版").performClick()
             waitUntil(timeoutMillis = 5000) { models }
             assertTrue(f.calls.contains(RuntimeAction.InstallHermes))
             assertTrue(f.calls.indexOf(RuntimeAction.InstallHermes) < f.calls.indexOf(RuntimeAction.Prepare))
@@ -203,11 +203,13 @@ class LocalRuntimeUiTest {
             waitUntil(timeoutMillis = 5000) { f.manager.state.value.checked && !f.manager.state.value.busy }
             onNodeWithText("安装 Hermes").performClick()
             waitUntil(timeoutMillis = 5000) { f.manager.state.value.issue == RuntimeIssue.RepositoryUnavailable && !f.manager.state.value.busy }
-            onNodeWithText("重试安装").performClick()
+            onNodeWithText("重试安装").assertDoesNotExist()
+            onNodeWithTag("runtime-primary").assertTextEquals("改用预览版安装")
+            onNodeWithText("再试一次稳定版").performClick()
             waitUntil(timeoutMillis = 5000) { f.requests.count { it.action == RuntimeAction.InstallHermes } == 2 && !f.manager.state.value.busy }
             assertTrue(f.requests.filter { it.action == RuntimeAction.InstallHermes }.all { it.channel == ReleaseChannel.Stable }, "重试不能自己换通道")
             f.failure = null
-            onNodeWithText("改用预览版安装").assertIsDisplayed().performClick()
+            onNodeWithTag("runtime-primary").performClick()
             waitUntil(timeoutMillis = 5000) { models }
             assertEquals(ReleaseChannel.Canary, f.requests.last { it.action == RuntimeAction.InstallHermes }.channel)
             onNodeWithText("改用预览版安装").assertDoesNotExist()
