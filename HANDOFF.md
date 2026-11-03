@@ -28,6 +28,12 @@
   - 聊天里模型调用失败只剩 Hermes 那句英文 “Your request was not processed”，真正原因（如 WorkBuddy 回的「这个 Key 只允许 hy4-preview」）只在几秒的弹出提示里。
     现在原因存在 `ChatItem.Activity.error`，不管是否显示工作过程都在聊天里留一行红字（`StreamingProcessUiTest.failedRunKeepsItsReasonEvenWithProcessHidden`）。
   - 没改：模型列表来自用户的端点（`/v1/models`），会列出 Key 不许用的模型，App 无从得知。
+- **再清空、装 CI 包 `7c75fca`，每一步都按新手操作（11-03 12:22–12:38）**：通知授权 →「直接在这台手机运行」→「授予权限」→「复制命令并打开 Termux」长按粘贴回车（自动跳回 App）
+  →「安装 Hermes」→ 稳定版 404，主按钮「改用预览版安装」→ 83 秒装完（含空缓存下从清华装 aiohttp 约 14 秒）自动进入模型设置 →
+  自定义端点 + 密钥 + 地址 →「读取可选模型列表」→ 选模型 →「保存并开始聊天」90 秒进入聊天 → 回复正常。
+  换成 Key 不许用的模型后，聊天里留下红字「这条没有完成：HTTP 400: API Key「测试」的模型限制不允許 …」。
+  新手仍会觉得难的：Termux 要自己先装；初始化要在 Termux 里长按粘贴（Termux 的安全设计，App 无法代做）；系统授权弹窗是 Termux 的半英文文案；
+  模型设置要知道选「自定义端点」并填地址和密钥。
 
 ## 0.14.6：本机 Hermes 的自定义端点读不出模型（用户反馈，11-01）
 
