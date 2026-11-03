@@ -3,6 +3,51 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
+## 0.14.6 之后：手机上一键部署本机 Hermes 总失败（在用户 vivo 真机上逐步复现，11-02 / 11-03）
+
+依次卡在三处，前一处绕过才会碰到下一处：
+
+- **稳定版 404（代码 44）**：`releases/termux/stable/key.asc` 和 `InRelease` 都是 404，canary 两项 200（11-02 实测，和 0.13.7-dev 记录一致）。
+  App 默认稳定版，「重试安装」永远失败，预览版藏在「高级功能」里。按原设计仍不自动换通道；「官方安装源暂不可用」卡片上加「改用预览版安装」按钮，用户点了才换。
+- **模型名称里是网址**：固定提供方（如「OpenAI API」）没有地址栏，用户把 `http://127.0.0.1:8788/` 填进了模型名称并保存成功。现在模型名称以 `xxx://` 开头时标红、
+  保存按钮灰掉、`validate()` 也拒绝，提示改用「自定义端点」（`ModelSettingsRequest.AddressAsModel`）。
+- **根本原因：缺 aiohttp，8642 永远不监听**。gateway 日志每次都是 `API Server: aiohttp not installed` → `No adapter available for api_server`。
+  canary 包 `hermes-agent 0.22.0~canary.20261014` 自带 Python 3.14 venv（`$PREFIX/lib/hermes-agent/venv`），没有 aiohttp、没有 pip；包的 Packages 条目没有 Depends。
+  aiohttp 在 Hermes pyproject 的 `messaging` / `sms` 等 extra 里（固定 `3.14.3`）。`hermes pm install --extra sms` 会重建整套依赖、从 GitHub 克隆 psutil，国内网络 SSL 中断失败（不会改动已装环境）。
+  改法：`TermuxRuntimeBackend.ApiServerDependencies`，装完 / 升级后和每次 Start/Restart 前，用包里自带的 `tools/uv/.../uv` 按 pyproject 的版本把 aiohttp 装进那个 venv（清华 PyPI）；
+  已有时只做一次本地 import。失败给 `HM_API_DEPENDENCY_MISSING` / 退出码 45 → `RuntimeIssue.ApiServerDependency`，归到「重启并重试」。
+- **真机验证（958 那台 vivo，Android 14）**：把生产脚本原样推到手机在 Termux 里跑，装上 aiohttp 3.14.3 + 7 个依赖（全是现成 wheel，无需编译）；
+  旧版 App 里「重启 Hermes」后 8642 开始监听，「开始聊天」通过验证进入聊天，消息经本机 Hermes 到达用户的 8788 代理，上游返回 403（上游账号被限制，和 App 无关）。
+  **新 App 本身还没装到真机**：手机上的 0.14.6 用发布签名（`83f0e609…a799`），本机 / 普通 CI 构建签名不同，不能覆盖安装。
+- 测试：`TermuxRepositoryTest`（补依赖脚本 4 种情况、启动前先检查并映射失败）、`ModelSettingsTest.addressTypedAsModelNameIsRejectedWithGuidance`、
+  `LocalRuntimeUiTest.unavailableStableOffersPreviewOnlyWhenTheUserChoosesIt`。
+- **清空后重装（11-03）**：卸掉 3 个 Hermes App、purge `hermes-agent`、删 `~/.hermes*` 和 uv 缓存、去掉 `allow-external-apps` 后装 CI 包（`fa189b5`）从头走：
+  预览版安装时 aiohttp 自动补上，「保存并开始聊天」约 80 秒进入聊天，`hy4-preview` 正常回复。
+  按「小白能一次走完」又改了两处：
+  - 稳定版 404 时主按钮直接是「改用预览版安装」（用户点了才换），「再试一次稳定版」降为文字按钮——原来的主按钮「重试安装」永远装不上。
+  - 聊天里模型调用失败只剩 Hermes 那句英文 “Your request was not processed”，真正原因（如 WorkBuddy 回的「这个 Key 只允许 hy4-preview」）只在几秒的弹出提示里。
+    现在原因存在 `ChatItem.Activity.error`，不管是否显示工作过程都在聊天里留一行红字（`StreamingProcessUiTest.failedRunKeepsItsReasonEvenWithProcessHidden`）。
+  - 没改：模型列表来自用户的端点（`/v1/models`），会列出 Key 不许用的模型，App 无从得知。
+- **再清空、装 CI 包 `7c75fca`，每一步都按新手操作（11-03 12:22–12:38）**：通知授权 →「直接在这台手机运行」→「授予权限」→「复制命令并打开 Termux」长按粘贴回车（自动跳回 App）
+  →「安装 Hermes」→ 稳定版 404，主按钮「改用预览版安装」→ 83 秒装完（含空缓存下从清华装 aiohttp 约 14 秒）自动进入模型设置 →
+  自定义端点 + 密钥 + 地址 →「读取可选模型列表」→ 选模型 →「保存并开始聊天」90 秒进入聊天 → 回复正常。
+  换成 Key 不许用的模型后，聊天里留下红字「这条没有完成：HTTP 400: API Key「测试」的模型限制不允許 …」。
+  新手仍会觉得难的：Termux 要自己先装；初始化要在 Termux 里长按粘贴（Termux 的安全设计，App 无法代做）；系统授权弹窗是 Termux 的半英文文案；
+  模型设置要知道选「自定义端点」并填地址和密钥。
+
+## 0.14.6：本机 Hermes 的自定义端点读不出模型（用户反馈，11-01）
+
+- **现象**：在手机上安装本机 Hermes 后，模型设置选「自定义端点」，读不出模型。
+- **原因（App 的 bug）**：「读取可选模型列表」只发了 `{action: models, provider}`，没带页面上填的地址和密钥；`settings.py` 只从 Hermes 已保存的配置里找 `mobile-custom`，
+  新填的端点没保存过，永远是空列表。保存时还写了 `discover_models: false`，保存后也只有手填的那一个模型。另外局域网 http 地址（电脑上跑的 Ollama 等）会被拒。
+- **改法**：`models` 动作对 custom / local 带上地址、密钥、接口格式，桥里调 Hermes 的 `validate_custom_endpoint`（电脑版「测试」按钮，eaf03cb 里有），
+  旧版退回 `probe_api_models`；回包只有分类 + 模型名（`EndpointProbe`）。保存带上读到的清单、`discover_models: true`。http 放开到局域网私有地址（Kotlin `endpointAllowed` 和 Python `endpoint` 一致）。
+  读取结果显示在按钮下面。细节见 docs/model-settings.md「自定义端点」。
+- **验证**：`tools/runtime-tests/test_providers.py`（假 Hermes 模块：用填的地址和密钥、已存密钥只给同一地址、各失败分类、保存带清单）、
+  `ModelSettingsTest`（局域网地址规则、密钥只走 stdin、失败说明、回包地址不合规不采用）、`ModelSettingsUiTest.customEndpointModelListIsReadFromTheTypedAddressAndSavedWithIt`；截图 53f / 53g。
+  全量 `gradle test` 324 项 0 失败；`assembleDebug` 通过。**没对真实 Hermes 跑**（这个环境不允许安装运行 Hermes 源码，`test_providers_upstream.py` 跳过），**没在用户手机上验证**。
+- 版本 0.14.6 / 59，说明 `docs/releases/v0.14.6.md`（以 0.14.5 为基准）。
+
 ## 0.14.5（发布版）：后台通知显示成用户消息、没断线也提示“断线时间过长”（用户截图，11-01）
 
 - 0.14.4 打过测试包给用户，之后又改了代码，所以按规矩换成 0.14.5 / 58 发布，说明 `docs/releases/v0.14.5.md`（以已发布的 0.14.1 为基准，含 0.14.2–0.14.5 的全部修复）。

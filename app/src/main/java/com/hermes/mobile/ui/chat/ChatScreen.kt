@@ -197,7 +197,7 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
 
     val rows = remember(items, phase, streaming, settings) {
-        val visible = items.filter { it !is ChatItem.Activity || settings.showWorkProcess || it.earlierReply.isNotBlank() }
+        val visible = items.filter { it !is ChatItem.Activity || settings.showWorkProcess || it.earlierReply.isNotBlank() || it.error.isNotBlank() }
         buildRows(visible, phase, streaming, settings.showTyping).asReversed()
     }
 

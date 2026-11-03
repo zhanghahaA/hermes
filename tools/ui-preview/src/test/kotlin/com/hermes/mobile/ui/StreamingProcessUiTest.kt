@@ -49,6 +49,31 @@ class StreamingProcessUiTest {
         } finally { scope.cancel() }
     }
 
+    /** 失败原因一直留在聊天里，不依赖「显示工作过程」；只剩 Hermes 那句英文时用户不知道该改什么。 */
+    @Test fun failedRunKeepsItsReasonEvenWithProcessHidden() = runComposeUiTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val base = FakeHermesRepository(scope)
+        base.updateSettings { it.copy(showWorkProcess = false) }
+        val reason = "HTTP 400: 这个 Key 只允许 hy4-preview"
+        val list = MutableStateFlow<List<ChatItem>>(listOf(
+            ChatItem.Message("u", 1, Role.User, "你好"),
+            ChatItem.Activity("f", 2, status = ActivityStatus.Failed, finishedAt = 3, error = reason),
+            ChatItem.Activity("ok", 4, status = ActivityStatus.Completed, finishedAt = 5),
+        ))
+        val repo = object : HermesRepository by base {
+            override fun chatItems(sessionId: String) = list
+            override fun streamingText(sessionId: String) = MutableStateFlow<String?>(null)
+            override fun runPhase(sessionId: String) = MutableStateFlow(RunPhase.Idle)
+        }
+        try {
+            setContent { HermesTheme { ChatScreen(repo, "s-1", {}, {}) } }
+            onNodeWithTag("work-error-f").assertIsDisplayed()
+            onNodeWithText(reason, substring = true).assertIsDisplayed()
+            onNodeWithTag("work-process-f").assertDoesNotExist()
+            onNodeWithTag("work-error-ok").assertDoesNotExist()
+        } finally { scope.cancel() }
+    }
+
     /** 收起后离开聊天页再进来，还是收起的；结束的过程默认收起，点开工具步骤能看到结果。 */
     @Test fun foldingSurvivesLeavingTheChatAndFinishedProcessStartsCollapsed() = runComposeUiTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)

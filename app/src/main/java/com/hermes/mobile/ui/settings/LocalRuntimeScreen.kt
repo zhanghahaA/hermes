@@ -38,6 +38,8 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
     val ready = env.blockers.isEmpty() && !state.busy && !openingChat
     val installReady = ready && env.enoughSpace
     val step = state.setupStep()
+    // 稳定版缺文件时只重试永远装不上；主按钮改成能装上的预览版，由用户点了才换，不自动切换。
+    val offerPreview = step == RuntimeSetupStep.SourceUnavailable && channel == ReleaseChannel.Stable
     fun install(repairEnvironment: Boolean = false) {
         scope.launch {
             manager.install(channel, repairEnvironment).join()
@@ -91,14 +93,19 @@ fun LocalRuntimeScreen(manager: LocalRuntimeManager, onBack: () -> Unit, onConfi
                             RuntimeSetupStep.Check -> manager.inspect()
                             RuntimeSetupStep.Recover, RuntimeSetupStep.Pending -> controls.openTermux()
                             RuntimeSetupStep.Storage -> controls.storageSettings()
-                            RuntimeSetupStep.Install, RuntimeSetupStep.Configure, RuntimeSetupStep.SourceUnavailable -> install()
+                            RuntimeSetupStep.SourceUnavailable -> { if (offerPreview) channel = ReleaseChannel.Canary; install() }
+                            RuntimeSetupStep.Install, RuntimeSetupStep.Configure -> install()
                             RuntimeSetupStep.Repair -> install(repairEnvironment = true)
                             RuntimeSetupStep.Model -> onConfigureModels()
                             RuntimeSetupStep.Reconnect -> connect(restart = true)
                             RuntimeSetupStep.Connect -> connect()
                             else -> Unit
                         }
-                    }) { Text(if (openingChat) "正在连接…" else step.button) }
+                    }) { Text(if (openingChat) "正在连接…" else if (offerPreview) "改用预览版安装" else step.button) }
+                if (offerPreview) {
+                    Text("稳定版目前没有可下载的安装文件。预览版是 Hermes 官方的另一个通道，更新更快，可能不如稳定版稳定。", style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { install() }, enabled = ready) { Text("再试一次稳定版") }
+                }
                 if (step in setOf(RuntimeSetupStep.Install, RuntimeSetupStep.Configure)) {
                     Text("点击即开始安装和配置。需要联网，保留已有配置与会话；模型账号在安装后设置。", style = MaterialTheme.typography.bodySmall)
                 }

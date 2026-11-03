@@ -69,6 +69,92 @@ class TermuxRepositoryTest {
         assertFalse(manager.state.value.diagnosticReport().contains("HM_REPOSITORY"))
     }
 
+    @Test fun missingAiohttpIsInstalledWithBundledUvAtHermesPinnedVersion() {
+        val result = runApiServerDependencies()
+        assertEquals(0, result.code, result.output)
+        val uv = result.calls.single { it.startsWith("uv ") }
+        assertTrue(uv.contains("pip install --no-config --default-index https://pypi.tuna.tsinghua.edu.cn/simple"), uv)
+        assertTrue(uv.contains("/venv/bin/python aiohttp==3.14.3"), uv)
+        assertTrue(result.calls.count { it == "python import aiohttp" } == 2, "装完要再确认一次能 import")
+    }
+
+    @Test fun presentAiohttpOrUnpackagedHermesNeedsNoDownload() {
+        val present = runApiServerDependencies(hasAiohttp = true)
+        assertEquals(0, present.code, present.output)
+        assertFalse(present.calls.any { it.startsWith("uv ") })
+        val unpackaged = runApiServerDependencies(packaged = false)
+        assertEquals(0, unpackaged.code, unpackaged.output)
+        assertTrue(unpackaged.calls.isEmpty())
+    }
+
+    @Test fun failedDependencyInstallHasItsOwnMarker() {
+        for (result in listOf(runApiServerDependencies(uvFails = true), runApiServerDependencies(uvPresent = false))) {
+            assertEquals(45, result.code, result.output)
+            assertTrue(result.output.lines().contains("HM_API_DEPENDENCY_MISSING"))
+        }
+    }
+
+    @Test fun backendChecksDependenciesBeforeStartAndMapsFailure() = runBlocking {
+        val scripts = mutableListOf<String>()
+        val backend = TermuxRuntimeBackend(object : TermuxTransport {
+            override fun environment() = environment
+            override fun openViewer() = Unit
+            override suspend fun run(script: String, input: String, readOnly: Boolean): TermuxCommandResult {
+                scripts += script
+                return if (script.contains("HM_API_DEPENDENCY_MISSING")) TermuxCommandResult(45, stderr = "HM_API_DEPENDENCY_MISSING\n")
+                else TermuxCommandResult(0)
+            }
+        }, "pass")
+        val failure = assertFailsWith<RuntimeCommandException> { backend.execute(RuntimeRequest(RuntimeAction.StartHermes)) {} }
+        assertEquals(RuntimeIssue.ApiServerDependency, failure.issue)
+        assertEquals(1, scripts.size, "依赖没补上时不能去启动 gateway")
+        val state = LocalRuntimeState(environment, issue = RuntimeIssue.ApiServerDependency, failed = true)
+        assertEquals(RuntimeSetupStep.Reconnect, state.setupStep())
+    }
+
+    /** 执行生产补依赖脚本：假的打包安装目录 + 记录调用的 python / uv 替代程序，不触网。 */
+    private fun runApiServerDependencies(hasAiohttp: Boolean = false, packaged: Boolean = true,
+                                         uvPresent: Boolean = true, uvFails: Boolean = false): Result {
+        val folder = Files.createTempDirectory("hermes-api-deps").toFile()
+        try {
+            val log = folder.resolve("calls")
+            val root = folder.resolve("lib/hermes-agent")
+            fun executable(file: java.io.File, body: String) {
+                file.parentFile.mkdirs()
+                file.writeText("#!/bin/sh\n" + body.replace('§', '$') + "\n")
+                check(file.setExecutable(true))
+            }
+            executable(root.resolve("bin/hermes"), "exit 0")
+            val bin = folder.resolve("bin").apply { mkdir() }
+            java.nio.file.Files.createSymbolicLink(bin.resolve("hermes").toPath(), root.resolve("bin/hermes").toPath())
+            root.resolve("app").mkdirs()
+            root.resolve("app/pyproject.toml").writeText("messaging = [\n  \"aiohttp==3.14.3\",\n]\nsms = [\"aiohttp==3.14.3\"]\n")
+            val marker = folder.resolve("installed")
+            if (hasAiohttp) marker.writeText("yes")
+            if (packaged) executable(root.resolve("venv/bin/python"), """
+                printf 'python %s\n' "§2" >> "§TEST_LOG"
+                [ -f "§MARKER" ]
+            """.trimIndent())
+            if (uvPresent) executable(root.resolve("tools/uv/data/data/com.termux/files/usr/bin/uv"), """
+                printf 'uv %s\n' "§*" >> "§TEST_LOG"
+                [ -z "§UV_FAILS" ] || exit 1
+                printf yes > "§MARKER"
+            """.trimIndent())
+            val builder = ProcessBuilder("/bin/bash", "-c", "set -eu\numask 077\n" + TermuxRuntimeBackend.ApiServerDependencies)
+            builder.environment().apply {
+                put("PREFIX", folder.resolve("prefix").absolutePath)
+                put("PATH", "${bin.absolutePath}:/usr/bin:/bin")
+                put("TEST_LOG", log.absolutePath)
+                put("MARKER", marker.absolutePath)
+                put("UV_FAILS", if (uvFails) "1" else "")
+            }
+            val process = builder.redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            val code = process.waitFor()
+            return Result(code, if (log.exists()) log.readLines() else emptyList(), output, false, "")
+        } finally { folder.deleteRecursively() }
+    }
+
     private data class Result(val code: Int, val calls: List<String>, val output: String,
                               val wroteRepository: Boolean, val source: String)
 

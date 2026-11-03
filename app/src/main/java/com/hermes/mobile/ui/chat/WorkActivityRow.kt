@@ -71,6 +71,13 @@ fun WorkActivityRow(activity: ChatItem.Activity, maxWidth: Dp, showProcess: Bool
                 }
             }
         }
+        // 不管是否显示工作过程都留着：这是用户知道该改什么（模型、密钥、额度）的唯一线索。
+        if (activity.status == ActivityStatus.Failed && activity.error.isNotBlank()) SelectionContainer {
+            Text(
+                "这条没有完成：${activity.error}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp).widthIn(max = maxWidth).testTag("work-error-${activity.id}"),
+            )
+        }
         if (activity.earlierReply.isNotBlank()) StreamingRow(activity.earlierReply, maxWidth, showProcess)
     }
 }

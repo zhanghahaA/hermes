@@ -47,6 +47,19 @@ class ModelSettingsTest {
         ModelSettingsRequest("save", "local", "fake", null, "http://127.0.0.1:11434/v1").validate()
     }
 
+    @Test fun addressTypedAsModelNameIsRejectedWithGuidance() = runBlocking {
+        var calls = 0
+        val manager = ModelSettingsManager(this, "fixture") { _, _ -> calls++; error("不应执行") }
+        manager.submit(ModelSettingsRequest("save", "openai", "http://127.0.0.1:8788/", "secret")).join()
+        assertEquals(0, calls)
+        assertEquals(ModelSettingsRequest.AddressAsModel, manager.state.value.message)
+        assertTrue(ModelSettingsRequest.looksLikeAddress(" HTTPS://example.invalid/v1"))
+        for (name in listOf("glm-5.3-flash", "openai/gpt-5.5", "qwen3:8b", "models/gemini-3.5-flash")) {
+            assertFalse(ModelSettingsRequest.looksLikeAddress(name), name)
+            ModelSettingsRequest("save", "openai", name, "secret").validate()
+        }
+    }
+
     @Test fun missingModuleNameIsShownButNothingElse() = runBlocking {
         val known = "当前 Hermes 缺少模型配置接口或其依赖，请检查 Hermes 安装与版本；这不是浏览器授权错误。"
         for ((error, shown) in listOf(known + "（缺少：hermes_cli）" to true, known + "（缺少：/home/u/x）" to false,
@@ -90,5 +103,57 @@ class ModelSettingsTest {
         cloud.submit(ModelSettingsRequest("inspect")).join()
         assertEquals("phone-model", phone.state.value.snapshot?.model)
         assertEquals("cloud-model", cloud.state.value.snapshot?.model)
+    }
+
+    @Test fun lanHttpEndpointsAreAllowedButPublicHttpIsNot() {
+        for (url in listOf("http://192.168.1.10:11434/v1", "http://10.0.0.2/v1", "http://172.20.1.1:8000/v1", "http://100.100.1.1/v1",
+                           "http://desktop.local:1234/v1", "http://[fd00::1]:8000/v1", "http://127.0.0.1:11434/v1", "https://api.example.invalid/v1"))
+            assertTrue(ModelSettingsRequest.endpointAllowed(url), url)
+        for (url in listOf("http://8.8.8.8/v1", "http://172.32.0.1/v1", "http://192.169.0.1/v1", "http://example.invalid/v1",
+                           "https://user:pw@example.invalid/v1", "https://example.invalid/v1?key=x", "ftp://192.168.1.10/v1"))
+            assertFalse(ModelSettingsRequest.endpointAllowed(url), url)
+    }
+
+    @Test fun endpointModelListSendsTheTypedAddressAndKeyThroughStdinOnly() = runBlocking {
+        var body = ""
+        val manager = ModelSettingsManager(this, "fixture") { _, input -> body = input
+            "HMMODELS{\"snapshot\":{\"providers\":[{\"id\":\"custom\",\"name\":\"c\",\"models\":[\"m-1\",\"m-2\"]}]}," +
+                "\"probe\":{\"status\":\"ok\",\"models\":[\"m-1\",\"m-2\"],\"baseUrl\":\"http://192.168.1.10:8000/v1\"}}"
+        }
+        manager.submit(ModelSettingsRequest("models", "custom", apiKey = "fixture-key", baseUrl = "http://192.168.1.10:8000")).join()
+        val sent = Json.decodeFromString(ModelSettingsRequest.serializer(), body)
+        assertEquals("http://192.168.1.10:8000", sent.baseUrl)
+        assertEquals("fixture-key", sent.apiKey)
+        assertFalse(manager.state.value.failed)
+        assertEquals("http://192.168.1.10:8000/v1", manager.state.value.probe?.baseUrl)
+        assertTrue(manager.state.value.message.startsWith("读到 2 个模型"), manager.state.value.message)
+        assertFalse(manager.state.value.toString().contains("fixture-key"))
+    }
+
+    @Test fun endpointProbeFailuresExplainWhatToCheck() = runBlocking {
+        for ((status, expected) in listOf("unreachable" to "连不上这个地址", "rejected" to "端点拒绝了这个 API 密钥", "http" to "端点返回 HTTP 404",
+                                         "empty" to "没有返回模型清单", "transport" to "不支持所选的接口格式")) {
+            val models = if (status == "transport") "[\"m\"]" else "[]"
+            val manager = ModelSettingsManager(this, "fixture") { _, _ ->
+                "HMMODELS{\"snapshot\":{},\"probe\":{\"status\":\"$status\",\"models\":$models,\"code\":404}}"
+            }
+            manager.submit(ModelSettingsRequest("models", "local", apiKey = "k", baseUrl = "http://127.0.0.1:11434/v1")).join()
+            assertTrue(manager.state.value.message.contains(expected), status + ": " + manager.state.value.message)
+            assertEquals(status != "transport", manager.state.value.failed, status)
+        }
+        // 回包里不合规则的地址不采用，退回用户填的。
+        val manager = ModelSettingsManager(this, "fixture") { _, _ ->
+            "HMMODELS{\"snapshot\":{},\"probe\":{\"status\":\"ok\",\"models\":[\"m\"],\"baseUrl\":\"http://8.8.8.8/v1\"}}"
+        }
+        manager.submit(ModelSettingsRequest("models", "custom", baseUrl = "https://x.example.invalid/v1")).join()
+        assertEquals("https://x.example.invalid/v1", manager.state.value.probe?.baseUrl)
+    }
+
+    @Test fun publicHttpEndpointIsRejectedBeforeProbing() = runBlocking {
+        var calls = 0
+        val manager = ModelSettingsManager(this, "fixture") { _, _ -> calls++; "" }
+        manager.submit(ModelSettingsRequest("models", "custom", baseUrl = "http://8.8.8.8/v1")).join()
+        assertEquals(0, calls)
+        assertEquals(ModelSettingsRequest.EndpointRule, manager.state.value.message)
     }
 }
