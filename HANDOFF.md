@@ -3,7 +3,9 @@
 给接手的开发者 / 编码助手看的。功能说明见 [README.zh-CN.md](README.zh-CN.md)，用户侧的设置步骤见 [docs/setup.md](docs/setup.md)，
 和 Hermes 打交道的每个接口、每个坑见 [docs/protocol.md](docs/protocol.md)。改东西之前先读 protocol.md 里相关的那一节。
 
-## 0.14.6 之后：手机上一键部署本机 Hermes 总失败（在用户 vivo 真机上逐步复现，11-02 / 11-03）
+## 0.14.7：手机上一键部署本机 Hermes 总失败（在用户 vivo 真机上逐步复现，11-02 / 11-03）
+
+- 版本 0.14.7 / 60，说明 `docs/releases/v0.14.7.md`（以已发布的 0.14.6 为基准）。PR #7 合入 main（`dad4b06`）。
 
 依次卡在三处，前一处绕过才会碰到下一处：
 
